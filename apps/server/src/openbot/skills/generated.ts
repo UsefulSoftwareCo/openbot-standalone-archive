@@ -52,7 +52,7 @@ Otherwise send a proposal with \`openbot_send_message\`: each project name with 
 
 ## Create the set
 
-- New project: \`openbot_create_project\` with a stable \`clientRequestId\` such as \`onboard:garden-planner\`, the name, a Phosphor icon name, and an \`instructions\` body carrying the standing preferences for that project.
+- New project: \`openbot_create_project\` with a stable \`clientRequestId\` such as \`onboard:garden-planner\`, the name, a Phosphor icon name, and an \`instructions\` body carrying the standing preferences for that project. Do not guess an icon name: call \`openbot_search_icons\` and use a name it returns; anything else is rejected.
 - Existing project: change it only when the person asked for that change. Read its current \`instructions\` first and merge the new preference in with \`openbot_update_project\` and the \`revision\` from \`openbot_list_projects\`; never replace instructions they wrote, and never rename or re-icon a project that already fits.
 - New knowledge: \`openbot_knowledge_write\` with a title, a Markdown body, and \`projectIds\` linking it to the projects it is relevant to.
 - Existing knowledge: read it, merge what is new into the body, and write it back with its \`knowledgeId\` and \`expectedRevision\`; keep facts the person added and drop nothing they wrote.
@@ -127,7 +127,9 @@ before writing anything, using what already exists (\`openbot_list_projects\`,
 | Transcript                | Skipped entirely                                                                                                                                                                         |
 
 Several bots can land in one project. A bot with no sensible home is reported
-under "needs a destination" rather than imported as a project of its own.
+under "needs a destination" rather than imported as a project of its own. When a
+new project needs an icon, do not guess a name: call \`openbot_search_icons\` and
+use a name it returns; anything else is rejected.
 
 Distil, do not paste. A Grok system prompt usually mixes real standing preferences with Grok-specific scaffolding; keep the preferences and drop the scaffolding.
 

@@ -138,6 +138,7 @@ calling thread from its MCP credential and calls the operation the RPC calls.
 | Project list                   | `listProjects`                        | `openbot_list_projects`                               |
 | New project                    | `createProject`                       | `openbot_create_project`                              |
 | Project settings               | `updateProject`                       | `openbot_update_project`                              |
+| Project icon picker            | -                                     | `openbot_search_icons`                                |
 | Knowledge list                 | `listKnowledge`                       | `openbot_knowledge_list`                              |
 | Knowledge editor (read)        | `getKnowledge`                        | `openbot_knowledge_read`                              |
 | Knowledge editor (save)        | `createKnowledge` / `updateKnowledge` | `openbot_knowledge_write`                             |
@@ -162,6 +163,17 @@ exists where a tool description can name the recovery. `*_not_found` collapses t
 because the agent must stop rather than retry, and everything else is an opaque
 `operation_failed`. Adding a domain code without deciding its agent-facing code
 silently makes it `operation_failed`.
+
+Project icon names are checked against
+[`OPENBOT_ICON_NAMES`](../../packages/contracts/src/openbotIcons.generated.ts), the
+list the picker offers, not just against the PascalCase shape. A name that merely
+looks like an icon (`Telescope`) used to pass, get stored, and then draw the
+fallback glyph with nothing telling the agent it was wrong. The list is generated
+from the `@phosphor-icons/react` copy installed for `apps/openbot`, because
+contracts must not take a runtime dependency on ~5 MB of icon components; the
+picker reads the same list, so an agent and a person cannot be offered different
+names. `openbot_search_icons` exists because a rejection is only useful with a way
+to find a real name.
 
 A tool with no parameters must omit `parameters` rather than pass
 `Schema.Struct({})`: the empty struct serialises to an `anyOf` instead of an

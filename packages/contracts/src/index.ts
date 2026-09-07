@@ -50,6 +50,7 @@ export * from "./usage.ts";
 export * from "./scheduledTask.ts";
 export * from "./worktreeMcp.ts";
 export * from "./openbot.ts";
+export * from "./openbotIcons.generated.ts";
 export * from "./openbotComputer.ts";
 export * from "./openbotQuestion.ts";
 export * from "./resourceTelemetry.ts";

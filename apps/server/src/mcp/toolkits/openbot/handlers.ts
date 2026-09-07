@@ -29,6 +29,7 @@ const handlers = {
   openbot_list_projects: () => call((service, scope) => service.listProjects(scope)),
   openbot_create_project: (input) => call((service, scope) => service.createProject(scope, input)),
   openbot_update_project: (input) => call((service, scope) => service.updateProject(scope, input)),
+  openbot_search_icons: (input) => call((service, scope) => service.searchIcons(scope, input)),
   openbot_knowledge_list: (input) => call((service, scope) => service.knowledgeList(scope, input)),
   openbot_knowledge_read: (input) => call((service, scope) => service.knowledgeRead(scope, input)),
   openbot_knowledge_write: (input) =>

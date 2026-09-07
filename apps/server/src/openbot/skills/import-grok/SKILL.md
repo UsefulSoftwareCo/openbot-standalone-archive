@@ -40,7 +40,9 @@ before writing anything, using what already exists (`openbot_list_projects`,
 | Transcript                | Skipped entirely                                                                                                                                                                         |
 
 Several bots can land in one project. A bot with no sensible home is reported
-under "needs a destination" rather than imported as a project of its own.
+under "needs a destination" rather than imported as a project of its own. When a
+new project needs an icon, do not guess a name: call `openbot_search_icons` and
+use a name it returns; anything else is rejected.
 
 Distil, do not paste. A Grok system prompt usually mixes real standing preferences with Grok-specific scaffolding; keep the preferences and drop the scaffolding.
 

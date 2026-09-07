@@ -33,6 +33,8 @@ import {
   OpenbotMcpUpdateKnowledgeInput,
   OpenbotMcpDeliveryResult,
   OpenbotMcpFailure,
+  OpenbotMcpSearchIconsInput,
+  OpenbotMcpSearchIconsResult,
   OpenbotMcpSendMessageInput,
   OpenbotMcpSkipReplyInput,
 } from "@t3tools/contracts";
@@ -184,6 +186,20 @@ export const OpenbotUpdateProjectTool = Tool.make("openbot_update_project", {
   .annotate(Tool.Title, "Update an OpenBot project")
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
+  .annotate(Tool.OpenWorld, false);
+
+export const OpenbotSearchIconsTool = Tool.make("openbot_search_icons", {
+  description:
+    "Find valid Phosphor icon names for openbot_create_project / openbot_update_project. Only names returned here are accepted.",
+  parameters: OpenbotMcpSearchIconsInput,
+  success: OpenbotMcpSearchIconsResult,
+  failure: OpenbotMcpFailure,
+  failureMode: "return",
+  dependencies,
+})
+  .annotate(Tool.Title, "Search project icon names")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
 // --- Shared project knowledge ------------------------------------------------
@@ -419,6 +435,7 @@ export const OpenbotToolkit = Toolkit.make(
   OpenbotListProjectsTool,
   OpenbotCreateProjectTool,
   OpenbotUpdateProjectTool,
+  OpenbotSearchIconsTool,
   OpenbotKnowledgeListTool,
   OpenbotKnowledgeReadTool,
   OpenbotKnowledgeWriteTool,

@@ -30,6 +30,8 @@ import {
   type OpenbotMcpThreadControlResult,
   type OpenbotMcpUpdateChatInput,
   type OpenbotMcpUpdateInstructionsInput,
+  type OpenbotMcpSearchIconsInput,
+  type OpenbotMcpSearchIconsResult,
   type OpenbotMcpUpdateProjectInput,
   type OpenbotProject,
   type OpenbotProjectListResult,
@@ -39,6 +41,7 @@ import {
   type OpenbotMcpSendMessageInput,
   type OpenbotMcpSkipReplyInput,
 } from "@t3tools/contracts";
+import { searchOpenbotIcons } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -101,6 +104,10 @@ export class OpenbotMcpService extends Context.Service<
       scope: McpInvocationScope,
       input: OpenbotMcpUpdateProjectInput,
     ) => Effect.Effect<OpenbotProject, OpenbotMcpFailure>;
+    readonly searchIcons: (
+      scope: McpInvocationScope,
+      input: OpenbotMcpSearchIconsInput,
+    ) => Effect.Effect<OpenbotMcpSearchIconsResult, OpenbotMcpFailure>;
     readonly knowledgeList: (
       scope: McpInvocationScope,
       input: OpenbotKnowledgeListInput,
@@ -437,6 +444,7 @@ const make = Effect.gen(function* () {
         .pipe(Effect.mapError(toFailure)),
     updateProject: (_scope, input) =>
       channels.updateProject(input).pipe(Effect.mapError(toFailure)),
+    searchIcons: (_scope, input) => Effect.succeed(searchOpenbotIcons(input.query, input.limit)),
     knowledgeList: (_scope, input) =>
       channels.listKnowledge(input).pipe(Effect.mapError(toFailure)),
     knowledgeRead: (_scope, input) =>

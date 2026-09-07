@@ -11,6 +11,7 @@ import {
 } from "./baseSchemas.ts";
 import { ChatAttachment, PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "./chatAttachment.ts";
 import { ModelSelection } from "./modelSelection.ts";
+import { OPENBOT_ICON_NAMES } from "./openbotIcons.generated.ts";
 import { OrchestrationV2RunStatus, OrchestrationV2UserInputQuestion } from "./orchestrationV2.ts";
 import {
   ProviderApprovalDecision,
@@ -82,10 +83,26 @@ export function openbotChannelKind(
   return projects.some((project) => project.mainChannelId === channelId) ? "main" : "standalone";
 }
 
-/** Phosphor icon name in PascalCase without the `Icon` suffix, e.g. `Basket`. Never a sparkle. */
+const OPENBOT_ICON_NAME_SET: ReadonlySet<string> = new Set(OPENBOT_ICON_NAMES);
+
+/**
+ * Phosphor icon name in PascalCase without the `Icon` suffix, e.g. `Basket`.
+ * Never a sparkle.
+ *
+ * Membership is checked, not just the shape: a plausible-looking name with no
+ * icon behind it (`Telescope`) would otherwise be stored happily and then draw
+ * the fallback glyph, with nothing telling the agent it picked a name that does
+ * not exist. Both the RPC payloads and the MCP tool inputs reuse this schema,
+ * so a client and an agent are refused on the same terms.
+ */
 export const OpenbotProjectIconName = TrimmedNonEmptyString.check(
   Schema.isMaxLength(64),
   Schema.isPattern(/^(?!Sparkle)[A-Z][A-Za-z0-9]*$/),
+  Schema.makeFilter((name: string) =>
+    OPENBOT_ICON_NAME_SET.has(name)
+      ? undefined
+      : `Unknown project icon "${name}". Search valid names with openbot_search_icons.`,
+  ),
 );
 export const OpenbotProjectIconColor = Schema.Literals([
   "default",
@@ -109,6 +126,11 @@ export const DEFAULT_OPENBOT_PROJECT_ICON: OpenbotProjectIcon = {
   name: "Folder",
   color: "default",
 };
+
+/** Human-readable icon name for search and a11y labels: `ArchiveBox` reads as `Archive Box`. */
+export function openbotIconLabel(name: string): string {
+  return name.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
+}
 
 /**
  * A product project is distinct from its execution working directory. A
@@ -684,6 +706,60 @@ export const OpenbotMcpCreateProjectInput = Schema.Struct({
 export type OpenbotMcpCreateProjectInput = typeof OpenbotMcpCreateProjectInput.Type;
 export const OpenbotMcpUpdateProjectInput = OpenbotProjectUpdateInput;
 export type OpenbotMcpUpdateProjectInput = typeof OpenbotMcpUpdateProjectInput.Type;
+
+export const OpenbotIconMatch = Schema.Struct({
+  name: OpenbotProjectIconName,
+  label: Schema.String,
+});
+export type OpenbotIconMatch = typeof OpenbotIconMatch.Type;
+export const OpenbotMcpSearchIconsInput = Schema.Struct({
+  query: TrimmedNonEmptyString.check(Schema.isMaxLength(64)).annotate({
+    description:
+      "Word or fragment to look for, matched case-insensitively against the icon name and its spaced label.",
+  }),
+  limit: Schema.optional(
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(1), Schema.isLessThanOrEqualTo(50)).annotate({
+      description: "How many matches to return. Defaults to 20.",
+    }),
+  ),
+});
+export type OpenbotMcpSearchIconsInput = typeof OpenbotMcpSearchIconsInput.Type;
+export const OpenbotMcpSearchIconsResult = Schema.Struct({
+  icons: Schema.Array(OpenbotIconMatch),
+  /** Matches found before `limit` was applied. */
+  total: Schema.Int,
+});
+export type OpenbotMcpSearchIconsResult = typeof OpenbotMcpSearchIconsResult.Type;
+
+export const OPENBOT_SEARCH_ICONS_DEFAULT_LIMIT = 20;
+
+function iconRank(name: string, label: string, needle: string): number {
+  const lowerName = name.toLowerCase();
+  if (lowerName === needle) return 0;
+  if (lowerName.startsWith(needle) || label.toLowerCase().startsWith(needle)) return 1;
+  return 2;
+}
+
+/**
+ * Ranked substring search over the icon catalog: an exact name first, then a
+ * prefix of the name or of its spaced label, then anything containing the
+ * query. `sort` is stable, so ties keep the catalog's alphabetical order.
+ */
+export function searchOpenbotIcons(
+  query: string,
+  limit: number = OPENBOT_SEARCH_ICONS_DEFAULT_LIMIT,
+): OpenbotMcpSearchIconsResult {
+  const needle = query.trim().toLowerCase();
+  const ranked: Array<{ readonly rank: number; readonly icon: OpenbotIconMatch }> = [];
+  for (const name of OPENBOT_ICON_NAMES) {
+    const label = openbotIconLabel(name);
+    if (!`${name}\n${label}`.toLowerCase().includes(needle)) continue;
+    ranked.push({ rank: iconRank(name, label, needle), icon: { name, label } });
+  }
+  ranked.sort((left, right) => left.rank - right.rank);
+  return { icons: ranked.slice(0, limit).map((entry) => entry.icon), total: ranked.length };
+}
+
 export const OpenbotMcpKnowledgeWriteInput = Schema.Struct({
   /** Omit to create. Provide with expectedRevision to update. */
   knowledgeId: Schema.optional(OpenbotKnowledgeId),

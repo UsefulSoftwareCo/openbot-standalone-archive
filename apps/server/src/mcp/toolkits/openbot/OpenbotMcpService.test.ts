@@ -452,6 +452,23 @@ it.effect("writes instructions without disturbing remembered knowledge", () =>
   }),
 );
 
+// An agent that guesses an icon name gets a rejection instead of the fallback
+// glyph, so it needs a way to find a real one without touching channel state.
+it.effect(
+  "answers an icon search from the shared catalog without calling the channel service",
+  () =>
+    Effect.gen(function* () {
+      const result = yield* useService({}, (service) =>
+        service.searchIcons(scope, { query: "plant", limit: 3 }),
+      );
+
+      assert.strictEqual(result.icons[0]?.name, "Plant");
+      assert.strictEqual(result.icons[0]?.label, "Plant");
+      assert.isAtMost(result.icons.length, 3);
+      assert.isAtLeast(result.total, result.icons.length);
+    }),
+);
+
 it.effect("maps service error codes onto the agent-facing failure codes", () =>
   Effect.gen(function* () {
     const cases = [

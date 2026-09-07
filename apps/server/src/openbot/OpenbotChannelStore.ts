@@ -220,6 +220,9 @@ const rowToDelivery = (row: DeliveryRow) =>
     })),
   );
 
+// A stored icon is decoded strictly. Names are validated against the catalog
+// on every write, so a read failure is real corruption and must surface
+// rather than be papered over with the default glyph.
 const rowToProject = (row: ProjectRow) =>
   Effect.all({
     icon: decodeProjectIcon(row.icon_json),

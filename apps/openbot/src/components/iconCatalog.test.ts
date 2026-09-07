@@ -1,13 +1,33 @@
+import { OPENBOT_ICON_NAMES } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { ICON_CATALOG } from "./iconCatalog";
+import { ALIAS_ICON_MODULES, BUNDLED_ICON_NAMES } from "./projectIconLoader";
+import { ICON_MODULE_LOADERS } from "./projectIconModules";
 
-// The catalog is built from an `import.meta.glob` over the icon package's
-// per-icon modules. A glob that stops matching (a package layout change, say)
-// would empty the picker silently, so assert the shape of what it produced.
 describe("ICON_CATALOG", () => {
-  it("covers the whole Phosphor set", () => {
-    expect(ICON_CATALOG.length).toBeGreaterThan(1500);
+  it("offers exactly the names the contract accepts", () => {
+    expect(ICON_CATALOG.length).toBe(OPENBOT_ICON_NAMES.length);
+    expect(ICON_CATALOG.map((entry) => entry.name)).toEqual([...OPENBOT_ICON_NAMES]);
+  });
+
+  // The generated list is committed, so a Phosphor bump or a new alias only
+  // reaches the contract when someone regenerates it. Until then the picker
+  // would quietly lose or gain names against what the server will store.
+  it("matches the icon modules the bundler actually globs", () => {
+    const installed = new Set([
+      ...ICON_MODULE_LOADERS.keys(),
+      ...BUNDLED_ICON_NAMES,
+      ...Object.keys(ALIAS_ICON_MODULES),
+    ]);
+    const expected = [...installed]
+      .filter((name) => !name.includes("Sparkle"))
+      .sort((a, b) => a.localeCompare(b));
+
+    expect(
+      [...OPENBOT_ICON_NAMES],
+      "openbotIcons.generated.ts has drifted. Run: node packages/contracts/scripts/generate-openbot-icons.ts",
+    ).toEqual(expected);
   });
 
   it("includes the icons that have no module of their own", () => {
