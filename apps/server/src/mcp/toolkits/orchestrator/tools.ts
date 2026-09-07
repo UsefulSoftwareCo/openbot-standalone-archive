@@ -6,6 +6,7 @@ import {
   OrchestratorMcpDelegateTaskInput,
   OrchestratorMcpDelegateTaskResult,
   OrchestratorMcpDeleteScheduledTaskInput,
+  OrchestratorMcpRunScheduledTaskInput,
   OrchestratorMcpDeleteScheduledTaskResult,
   OrchestratorMcpFailure,
   OrchestratorMcpListScheduledTasksResult,
@@ -143,6 +144,19 @@ export const DeleteScheduledTaskTool = Tool.make("delete_scheduled_task", {
   .annotate(Tool.Title, "Delete a scheduled task")
   .annotate(Tool.Destructive, true);
 
+export const RunScheduledTaskTool = Tool.make("run_scheduled_task", {
+  description:
+    "Run a scheduled task once right now by scheduledTaskId (from list_scheduled_tasks), the same as the Test run button in the routine editor. The task's schedule and enabled state are unchanged: a paused task stays paused after the run. Runs are dispatched through the scheduler with the task's stored settings, so the result appears in the task's bound thread (or a fresh thread if it is not bound). Do not use this to activate imported routines.",
+  parameters: OrchestratorMcpRunScheduledTaskInput,
+  success: OrchestratorMcpScheduleTaskResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+})
+  .annotate(Tool.Title, "Run a scheduled task now")
+  .annotate(Tool.Destructive, true)
+  .annotate(Tool.OpenWorld, true);
+
 export const CreateThreadsTool = Tool.make("create_threads", {
   description:
     "Create one or more ORDINARY TOP-LEVEL T3 conversations. This is not delegation and does not create child agents/subagents. If the user asks for agents, subagents, workers, delegation, or parallel help, call delegate_task once per child instead—even when selecting different providers. Use create_threads only when the user explicitly asks for separate/new/top-level threads or conversations. Each entry may override provider, model, options, runtime mode, and interaction mode; omitted settings inherit.",
@@ -258,6 +272,7 @@ export const OrchestratorToolkit = Toolkit.make(
   ListScheduledTasksTool,
   UpdateScheduledTaskTool,
   DeleteScheduledTaskTool,
+  RunScheduledTaskTool,
   CreateThreadsTool,
   ThreadStartTool,
   ThreadListTool,

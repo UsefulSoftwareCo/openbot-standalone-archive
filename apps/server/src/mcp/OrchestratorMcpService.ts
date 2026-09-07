@@ -18,6 +18,7 @@ import {
   type OrchestratorMcpDelegateTaskResult,
   type OrchestratorMcpInteractionMode,
   type OrchestratorMcpDeleteScheduledTaskInput,
+  type OrchestratorMcpRunScheduledTaskInput,
   type OrchestratorMcpDeleteScheduledTaskResult,
   type OrchestratorMcpListScheduledTasksResult,
   type OrchestratorMcpRuntimeMode,
@@ -126,6 +127,10 @@ export interface OrchestratorMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpDeleteScheduledTaskInput,
   ) => Effect.Effect<OrchestratorMcpDeleteScheduledTaskResult, OrchestratorMcpFailure>;
+  readonly runScheduledTask: (
+    scope: McpInvocationScope,
+    input: OrchestratorMcpRunScheduledTaskInput,
+  ) => Effect.Effect<OrchestratorMcpScheduleTaskResult, OrchestratorMcpFailure>;
   readonly listThreads: (
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadListInput,
@@ -1114,6 +1119,23 @@ const make = Effect.gen(function* () {
           .pipe(
             Effect.mapError((error) =>
               failure("orchestration_error", `Could not update scheduled task: ${error.message}`),
+            ),
+          );
+        return scheduledTaskSummary(task);
+      }),
+    runScheduledTask: (scope, input) =>
+      Effect.gen(function* () {
+        yield* requireCapability(scope);
+        const parent = yield* loadProjection(scope.threadId);
+        const existing = yield* loadScopedScheduledTask(
+          parent.thread.projectId,
+          input.scheduledTaskId,
+        );
+        const { task } = yield* scheduledTasks
+          .runNow({ id: existing.id })
+          .pipe(
+            Effect.mapError((error) =>
+              failure("orchestration_error", `Could not run scheduled task: ${error.message}`),
             ),
           );
         return scheduledTaskSummary(task);

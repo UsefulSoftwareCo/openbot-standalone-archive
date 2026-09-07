@@ -610,7 +610,18 @@ describe("orchestrator MCP toolkit", () => {
                 Ref.update(scheduledStore, (all) =>
                   all.filter((candidate) => candidate.id !== input.id),
                 ).pipe(Effect.as({ id: input.id })),
-              runNow: () => Effect.die("ScheduledTaskService.runNow is unused in this test"),
+              runNow: (input) =>
+                Effect.gen(function* () {
+                  const all = yield* Ref.get(scheduledStore);
+                  const task = all.find((candidate) => candidate.id === input.id);
+                  if (task === undefined) return yield* Effect.die("missing scheduled task");
+                  // Running once leaves the schedule and enabled state alone.
+                  const ran = { ...task, runCount: task.runCount + 1 };
+                  yield* Ref.update(scheduledStore, (tasks) =>
+                    tasks.map((candidate) => (candidate.id === ran.id ? ran : candidate)),
+                  );
+                  return { task: ran };
+                }),
             }),
           );
           const testLayer = McpHttpServer.OrchestratorToolkitRegistrationLive.pipe(
@@ -1307,6 +1318,16 @@ describe("orchestrator MCP toolkit", () => {
               scheduledTaskId,
               enabled: false,
             });
+
+            // run_scheduled_task starts one run through the scheduler and
+            // leaves the paused task paused.
+            const scheduledRunCall = yield* invoke("run_scheduled_task", { scheduledTaskId });
+            expect(scheduledRunCall.isError).toBe(false);
+            expect(scheduledRunCall.structuredContent).toMatchObject({
+              scheduledTaskId,
+              enabled: false,
+            });
+            expect((yield* Ref.get(scheduledStore))[0]?.runCount).toBe(1);
 
             // delete_scheduled_task removes it entirely.
             const scheduledDeleteCall = yield* invoke("delete_scheduled_task", { scheduledTaskId });

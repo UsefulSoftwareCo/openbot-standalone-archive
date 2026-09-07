@@ -552,6 +552,12 @@ export const OrchestratorMcpUpdateScheduledTaskInput = Schema.Struct({
 export type OrchestratorMcpUpdateScheduledTaskInput =
   typeof OrchestratorMcpUpdateScheduledTaskInput.Type;
 
+/** Start one run of a scheduled task now, the same operation as the UI's "Run now". */
+export const OrchestratorMcpRunScheduledTaskInput = Schema.Struct({
+  scheduledTaskId: ScheduledTaskId,
+});
+export type OrchestratorMcpRunScheduledTaskInput = typeof OrchestratorMcpRunScheduledTaskInput.Type;
+
 export const OrchestratorMcpDeleteScheduledTaskInput = Schema.Struct({
   scheduledTaskId: ScheduledTaskId,
 });
