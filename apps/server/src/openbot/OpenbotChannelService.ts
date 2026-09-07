@@ -1,4 +1,22 @@
 import {
+  type OpenbotKnowledge,
+  type OpenbotKnowledgeCreateInput,
+  type OpenbotKnowledgeDeleteInput,
+  type OpenbotKnowledgeId,
+  type OpenbotKnowledgeListInput,
+  type OpenbotKnowledgeListResult,
+  type OpenbotKnowledgeUpdateInput,
+  type OpenbotMcpListThreadsInput,
+  type OpenbotMcpListThreadsResult,
+  type OpenbotMcpSendToThreadInput,
+  type OpenbotProject,
+  type OpenbotProjectCreateInput,
+  type OpenbotProjectId,
+  type OpenbotProjectListResult,
+  type OpenbotProjectUpdateInput,
+  type OpenbotRespondInput,
+  type OpenbotThreadStartInput,
+  type OpenbotThreadStartResult,
   type OpenbotMcpPeerResult,
   type OpenbotChannelUpdateInput,
   type OpenbotMcpPrepareFileResult,
@@ -103,7 +121,72 @@ Files: use openbot_prepare_file with a workspace file path, then include its ret
 Keep messages short and direct, like chat.`;
 };
 
+/**
+ * Service contract shared by the RPC layer (ws.ts) and the MCP toolkit. Both
+ * surfaces call these same operations so UI and agent paths share validation
+ * and persistence. Implementations live below; keep the shape stable.
+ */
 export interface OpenbotChannelServiceShape {
+  // --- Projects -------------------------------------------------------------
+  readonly listProjects: Effect.Effect<OpenbotProjectListResult, OpenbotError>;
+  readonly subscribeProjects: Stream.Stream<OpenbotProjectListResult, OpenbotError>;
+  readonly getProject: (projectId: OpenbotProjectId) => Effect.Effect<OpenbotProject, OpenbotError>;
+  /** Creates the T3 project (managed dir or attached folder) and the main chat; idempotent on commandId. */
+  readonly createProject: (
+    input: OpenbotProjectCreateInput,
+  ) => Effect.Effect<OpenbotProject, OpenbotError>;
+  readonly updateProject: (
+    input: OpenbotProjectUpdateInput,
+  ) => Effect.Effect<OpenbotProject, OpenbotError>;
+  // --- Knowledge ------------------------------------------------------------
+  readonly listKnowledge: (
+    input: OpenbotKnowledgeListInput,
+  ) => Effect.Effect<OpenbotKnowledgeListResult, OpenbotError>;
+  readonly subscribeKnowledge: (
+    input: OpenbotKnowledgeListInput,
+  ) => Stream.Stream<OpenbotKnowledgeListResult, OpenbotError>;
+  readonly getKnowledge: (
+    knowledgeId: OpenbotKnowledgeId,
+  ) => Effect.Effect<OpenbotKnowledge, OpenbotError>;
+  readonly createKnowledge: (
+    input: OpenbotKnowledgeCreateInput,
+  ) => Effect.Effect<OpenbotKnowledge, OpenbotError>;
+  readonly updateKnowledge: (
+    input: OpenbotKnowledgeUpdateInput,
+  ) => Effect.Effect<OpenbotKnowledge, OpenbotError>;
+  readonly deleteKnowledge: (
+    input: OpenbotKnowledgeDeleteInput,
+  ) => Effect.Effect<void, OpenbotError>;
+  // --- Threads (child chats) and controls ------------------------------------
+  /** Create a child chat under a parent and dispatch its first work request; idempotent on clientRequestId. */
+  readonly startThread: (
+    input: OpenbotThreadStartInput & {
+      /** Set when an agent starts the thread; the result routes back to this chat's thread. */
+      readonly originThreadId?: ThreadId;
+    },
+  ) => Effect.Effect<OpenbotThreadStartResult, OpenbotError>;
+  /** Answer a pending question or approval on the chat's thread via runtime-request.respond. */
+  readonly respond: (input: OpenbotRespondInput) => Effect.Effect<void, OpenbotError>;
+  readonly snooze: (input: {
+    readonly channelId: OpenbotChannelId;
+    readonly until: string;
+  }) => Effect.Effect<OpenbotChannel, OpenbotError>;
+  readonly wake: (channelId: OpenbotChannelId) => Effect.Effect<OpenbotChannel, OpenbotError>;
+  /** Interrupt the active run and cancel queued runs. */
+  readonly cancel: (channelId: OpenbotChannelId) => Effect.Effect<OpenbotChannel, OpenbotError>;
+  readonly setModel: (input: {
+    readonly channelId: OpenbotChannelId;
+    readonly modelSelection: ModelSelection;
+  }) => Effect.Effect<OpenbotChannel, OpenbotError>;
+  /** Peer/child message from one chat's agent to another chat, with stored origin. */
+  readonly sendToThread: (
+    sourceThreadId: ThreadId,
+    input: OpenbotMcpSendToThreadInput,
+  ) => Effect.Effect<OpenbotMcpPeerResult, OpenbotError>;
+  readonly listThreads: (
+    input: OpenbotMcpListThreadsInput & { readonly callerThreadId?: ThreadId },
+  ) => Effect.Effect<OpenbotMcpListThreadsResult, OpenbotError>;
+  // --- Existing channel operations -------------------------------------------
   readonly update: (
     input: OpenbotChannelUpdateInput,
   ) => Effect.Effect<OpenbotChannel, OpenbotError>;
