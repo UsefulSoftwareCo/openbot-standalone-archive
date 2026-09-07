@@ -18,6 +18,9 @@ import {
   type OpenbotChannel,
   type OpenbotChannelId,
   type OpenbotChannelView,
+  type OpenbotKnowledge,
+  type OpenbotProject,
+  type OpenbotProjectId,
   ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
 } from "@t3tools/contracts";
@@ -184,14 +187,129 @@ export const createAttachmentUpload = createEnvironmentRpcCommand(connectionAtom
 });
 /** Resolve signed asset URLs for image previews and downloads. */
 export const assetEnvironment = createAssetEnvironmentAtoms(connectionAtomRuntime);
-/** Configured providers and their advertised models. */
-export const getBotProviders = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "openbot:providers",
+/** Server config: configured providers, their advertised models, and the environment label. */
+export const getServerConfig = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:server-config",
   tag: WS_METHODS.serverGetConfig,
 });
 
-/** Save the bot profile with a revision precondition. */
-export const updateBotProfile = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "openbot:profile-update",
+/** Save a chat's profile and model with a revision precondition. */
+export const updateChannel = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:channel-update",
   tag: WS_METHODS.openbotChannelUpdate,
+});
+
+// --- Projects -------------------------------------------------------------
+
+const projectsSubscription = createEnvironmentRpcSubscriptionAtomFamily(connectionAtomRuntime, {
+  label: "openbot:projects",
+  tag: WS_METHODS.openbotProjectsSubscribe,
+});
+
+const EMPTY_PROJECTS: ReadonlyArray<OpenbotProject> = Object.freeze([]);
+const EMPTY_PROJECTS_ATOM = Atom.make(EMPTY_PROJECTS).pipe(
+  Atom.withLabel("openbot-projects:empty"),
+);
+
+const projectsValueAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make(
+    (get) =>
+      Option.getOrElse(
+        AsyncResult.value(get(projectsSubscription({ environmentId, input: {} }))),
+        () => ({ projects: EMPTY_PROJECTS }),
+      ).projects,
+  ).pipe(Atom.withLabel(`openbot-projects:${environmentId}`)),
+);
+
+export function useProjects(environmentId: EnvironmentId | null): ReadonlyArray<OpenbotProject> {
+  return useAtomValue(
+    environmentId === null ? EMPTY_PROJECTS_ATOM : projectsValueAtom(environmentId),
+  );
+}
+
+export const createProject = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:project-create",
+  tag: WS_METHODS.openbotProjectsCreate,
+});
+/** Compare-and-swap; a stale revision fails so a concurrent edit is never lost. */
+export const updateProject = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:project-update",
+  tag: WS_METHODS.openbotProjectUpdate,
+});
+export const getProject = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:project-get",
+  tag: WS_METHODS.openbotProjectGet,
+});
+
+// --- Knowledge ------------------------------------------------------------
+
+const knowledgeSubscription = createEnvironmentRpcSubscriptionAtomFamily(connectionAtomRuntime, {
+  label: "openbot:knowledge",
+  tag: WS_METHODS.openbotKnowledgeSubscribe,
+});
+
+const EMPTY_KNOWLEDGE: ReadonlyArray<OpenbotKnowledge> = Object.freeze([]);
+const EMPTY_KNOWLEDGE_ATOM = Atom.make(EMPTY_KNOWLEDGE).pipe(
+  Atom.withLabel("openbot-knowledge:empty"),
+);
+
+const knowledgeValueAtom = Atom.family((key: string) => {
+  const [environmentId, projectId] = JSON.parse(key) as [EnvironmentId, OpenbotProjectId | null];
+  const input = projectId === null ? {} : { projectId };
+  return Atom.make(
+    (get) =>
+      Option.getOrElse(
+        AsyncResult.value(get(knowledgeSubscription({ environmentId, input }))),
+        () => ({ entries: EMPTY_KNOWLEDGE }),
+      ).entries,
+  ).pipe(Atom.withLabel(`openbot-knowledge:${key}`));
+});
+
+/** Live knowledge entries; pass a project id to see only the entries linked to it. */
+export function useKnowledge(
+  environmentId: EnvironmentId | null,
+  projectId: OpenbotProjectId | null = null,
+): ReadonlyArray<OpenbotKnowledge> {
+  return useAtomValue(
+    environmentId === null
+      ? EMPTY_KNOWLEDGE_ATOM
+      : knowledgeValueAtom(JSON.stringify([environmentId, projectId])),
+  );
+}
+
+export const createKnowledge = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:knowledge-create",
+  tag: WS_METHODS.openbotKnowledgeCreate,
+});
+export const updateKnowledge = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:knowledge-update",
+  tag: WS_METHODS.openbotKnowledgeUpdate,
+});
+export const deleteKnowledge = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:knowledge-delete",
+  tag: WS_METHODS.openbotKnowledgeDelete,
+});
+
+// --- Threads --------------------------------------------------------------
+
+/** Create a child chat and dispatch its first work request in one durable step. */
+export const startThread = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:thread-start",
+  tag: WS_METHODS.openbotThreadStart,
+});
+
+// --- Chat controls --------------------------------------------------------
+
+export const snoozeChannel = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:channel-snooze",
+  tag: WS_METHODS.openbotChannelSnooze,
+});
+export const wakeChannel = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:channel-wake",
+  tag: WS_METHODS.openbotChannelWake,
+});
+/** Interrupts the active run and drops what is queued behind it. */
+export const cancelChannel = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:channel-cancel",
+  tag: WS_METHODS.openbotChannelCancel,
 });

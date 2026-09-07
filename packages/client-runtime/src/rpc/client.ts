@@ -50,6 +50,8 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.scheduledTasksSubscribe
   | typeof WS_METHODS.openbotChannelsSubscribe
   | typeof WS_METHODS.openbotChannelSubscribe
+  | typeof WS_METHODS.openbotProjectsSubscribe
+  | typeof WS_METHODS.openbotKnowledgeSubscribe
   | typeof WS_METHODS.subscribeTerminalEvents
   | typeof WS_METHODS.subscribeTerminalMetadata
   | typeof WS_METHODS.subscribePreviewEvents

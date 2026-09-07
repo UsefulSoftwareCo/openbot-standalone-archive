@@ -1,25 +1,35 @@
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type { OpenbotChannelId } from "@t3tools/contracts";
+import type { EnvironmentId, OpenbotChannelId, OpenbotProjectId } from "@t3tools/contracts";
 import { Button } from "@t3tools/ui/button";
-import { Dialog, DialogPopup, DialogTitle, DialogTrigger } from "@t3tools/ui/dialog";
-import { Menu } from "lucide-react";
+import { Dialog, DialogPopup, DialogTitle } from "@t3tools/ui/dialog";
 import { Spinner } from "@t3tools/ui/spinner";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 
-import { ChannelSidebar } from "./components/ChannelSidebar";
 import { ChannelView } from "./components/ChannelView";
-import { ConversationDetails } from "./components/ConversationDetails";
+import { ChatHeader } from "./components/ChatHeader";
 import { Composer } from "./components/Composer";
-import { NewChannelDialog } from "./components/NewChannelDialog";
+import { ConversationDetails } from "./components/ConversationDetails";
+import { KnowledgeEditorPage } from "./components/KnowledgeEditorPage";
+import { NewChatDialog } from "./components/NewChatDialog";
+import { NewProjectDialog } from "./components/NewProjectDialog";
+import { PendingRequests } from "./components/PendingRequests";
+import { ProjectSettingsPage } from "./components/ProjectSettingsPage";
+import { Sidebar } from "./components/Sidebar";
 import {
   createChannel,
+  createProject,
   sendChannelMessage,
+  updateProject,
   useAtomCommand,
   useChannelView,
   useChannels,
   useConnectionPhase,
   usePrimaryEnvironmentId,
+  useProjects,
 } from "./state/channels";
+import { commandErrorText } from "./state/errors";
+import type { OpenbotPage } from "./state/route";
+
+const ProjectIconPicker = lazy(() => import("./components/ProjectIconPicker"));
 
 const SELECTED_CHANNEL_KEY = "openbot:selected-channel";
 
@@ -28,27 +38,29 @@ function readSelectedChannel(): OpenbotChannelId | null {
   return value === null || value === "" ? null : (value as OpenbotChannelId);
 }
 
-function errorText(error: unknown): string {
-  if (typeof error === "object" && error !== null && "message" in error) {
-    return String((error as { message: unknown }).message);
-  }
-  return String(error);
-}
-
 export function App() {
   const environmentId = usePrimaryEnvironmentId();
   const phase = useConnectionPhase(environmentId);
   const channels = useChannels(environmentId);
+  const projects = useProjects(environmentId);
+
   const [selectedChannelId, setSelectedChannelId] = useState<OpenbotChannelId | null>(
     readSelectedChannel,
   );
+  const [page, setPage] = useState<OpenbotPage | null>(null);
+  const [search, setSearch] = useState("");
   const [detailsOpen, setDetailsOpen] = useState(true);
   const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
-  const [channelsOpen, setChannelsOpen] = useState(false);
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [chatDialogOpen, setChatDialogOpen] = useState(false);
+  const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
+  const [createChatError, setCreateChatError] = useState<string | null>(null);
+  const [createProjectError, setCreateProjectError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [iconProjectId, setIconProjectId] = useState<OpenbotProjectId | null>(null);
+  const [iconBusy, setIconBusy] = useState(false);
+  const [iconError, setIconError] = useState<string | null>(null);
 
   // iOS resizes the visual viewport when the keyboard opens, not the layout viewport.
   useEffect(() => {
@@ -70,10 +82,12 @@ export function App() {
     };
   }, []);
 
-  const runCreate = useAtomCommand(createChannel, { reportFailure: false });
+  const runCreateChannel = useAtomCommand(createChannel, { reportFailure: false });
+  const runCreateProject = useAtomCommand(createProject, { reportFailure: false });
+  const runUpdateProject = useAtomCommand(updateProject, { reportFailure: false });
   const runSend = useAtomCommand(sendChannelMessage, { reportFailure: false });
 
-  // Fall back to the first channel when the stored selection no longer exists.
+  // Fall back to the first chat when the stored selection no longer exists.
   const activeChannelId =
     selectedChannelId !== null && channels.some((channel) => channel.id === selectedChannelId)
       ? selectedChannelId
@@ -84,8 +98,31 @@ export function App() {
     }
   }, [activeChannelId]);
 
-  const view = useChannelView(environmentId, activeChannelId);
+  const view = useChannelView(environmentId, page === null ? activeChannelId : null);
   const activeChannel = channels.find((channel) => channel.id === activeChannelId) ?? null;
+  const activeProject = useMemo(
+    () =>
+      activeChannel === null
+        ? null
+        : (projects.find((project) => project.id === activeChannel.openbotProjectId) ?? null),
+    [activeChannel, projects],
+  );
+  const parentChannel =
+    activeChannel?.parentChannelId === undefined || activeChannel.parentChannelId === null
+      ? null
+      : (channels.find((channel) => channel.id === activeChannel.parentChannelId) ?? null);
+  const iconProject = projects.find((project) => project.id === iconProjectId) ?? null;
+  const settingsProject =
+    page?.type === "project-settings"
+      ? (projects.find((project) => project.id === page.projectId) ?? null)
+      : null;
+
+  const openChannel = (channelId: OpenbotChannelId) => {
+    setSelectedChannelId(channelId);
+    setPage(null);
+    setSendError(null);
+    setSidebarOpen(false);
+  };
 
   const connectionLabel =
     environmentId === null
@@ -97,54 +134,58 @@ export function App() {
           : "Disconnected";
 
   const sidebar = (
-    <ChannelSidebar
+    <Sidebar
+      projects={projects}
       channels={channels}
-      selectedChannelId={activeChannelId}
-      onSelect={(channelId) => {
-        setSelectedChannelId(channelId);
-        setSendError(null);
-        setChannelsOpen(false);
+      activeChannelId={page === null ? activeChannelId : null}
+      search={search}
+      onSearchChange={setSearch}
+      onSelectChannel={openChannel}
+      onOpenProjectIcon={(projectId) => {
+        setIconError(null);
+        setIconProjectId(projectId);
       }}
-      onCreate={() => {
-        setCreateError(null);
-        setChannelsOpen(false);
-        setDialogOpen(true);
+      onOpenProjectSettings={(projectId) => {
+        setPage({ type: "project-settings", projectId, tab: "knowledge" });
+        setSidebarOpen(false);
+      }}
+      onNewProject={() => {
+        setCreateProjectError(null);
+        setSidebarOpen(false);
+        setProjectDialogOpen(true);
+      }}
+      onNewChat={() => {
+        setCreateChatError(null);
+        setSidebarOpen(false);
+        setChatDialogOpen(true);
       }}
       connectionLabel={connectionLabel}
     />
   );
 
+  const sendMessage = async (
+    environment: EnvironmentId,
+    input: Parameters<typeof runSend>[0]["input"],
+  ) => {
+    setSendError(null);
+    const result = await runSend({ environmentId: environment, input });
+    if (result._tag === "Failure") {
+      setSendError(commandErrorText(result));
+      return false;
+    }
+    return true;
+  };
+
   return (
     <div className="openbot-shell flex w-full bg-background text-foreground">
       <div className="hidden h-full shrink-0 md:block">{sidebar}</div>
+      <Dialog open={sidebarOpen} onOpenChange={setSidebarOpen}>
+        <DialogPopup className="h-[70dvh] max-h-[85dvh] overflow-hidden p-0 [&_aside]:w-full [&_aside]:border-0 [&_aside]:pb-[env(safe-area-inset-bottom)]">
+          <DialogTitle className="sr-only">Projects and chats</DialogTitle>
+          {sidebar}
+        </DialogPopup>
+      </Dialog>
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <Dialog open={channelsOpen} onOpenChange={setChannelsOpen}>
-          <header className="flex shrink-0 items-center gap-2 border-b border-border bg-background px-2 pt-[env(safe-area-inset-top)] md:hidden">
-            <DialogTrigger
-              render={<Button variant="ghost" size="icon" className="size-11 shrink-0" />}
-              aria-label="Open channels"
-            >
-              <Menu className="size-5" />
-            </DialogTrigger>
-            <div className="min-w-0 flex-1 py-2.5">
-              <h1 className="truncate text-base font-semibold">
-                <button
-                  onClick={() => setMobileDetailsOpen(true)}
-                  aria-label="View conversation details"
-                >
-                  {activeChannel?.name ?? "OpenBot"}
-                </button>
-              </h1>
-              <p className="text-xs text-muted-foreground">
-                {connectionLabel === "Connected" ? "OpenBot" : connectionLabel}
-              </p>
-            </div>
-          </header>
-          <DialogPopup className="h-[70dvh] max-h-[85dvh] overflow-hidden p-0 [&_aside]:w-full [&_aside]:border-0 [&_aside]:pb-[env(safe-area-inset-bottom)]">
-            <DialogTitle className="sr-only">Channels</DialogTitle>
-            {sidebar}
-          </DialogPopup>
-        </Dialog>
         {environmentId === null ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground text-sm">
             <Spinner className="size-5" />
@@ -154,44 +195,106 @@ export function App() {
               Code pairing link on this host.
             </p>
           </div>
+        ) : page?.type === "project-settings" ? (
+          settingsProject === null ? (
+            <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm">
+              This project no longer exists.
+            </div>
+          ) : (
+            <ProjectSettingsPage
+              key={settingsProject.id}
+              environmentId={environmentId}
+              project={settingsProject}
+              tab={page.tab}
+              onTabChange={(tab) => setPage({ ...page, tab })}
+              onBack={() => openChannel(settingsProject.mainChannelId)}
+              onOpenKnowledge={(knowledgeId) =>
+                setPage({ type: "knowledge", knowledgeId, projectId: settingsProject.id })
+              }
+              onNewKnowledge={() =>
+                setPage({ type: "knowledge", knowledgeId: null, projectId: settingsProject.id })
+              }
+            />
+          )
+        ) : page?.type === "knowledge" ? (
+          <KnowledgeEditorPage
+            key={page.knowledgeId ?? "new"}
+            environmentId={environmentId}
+            knowledgeId={page.knowledgeId}
+            projectId={page.projectId}
+            onClose={() => {
+              if (page.projectId === null) setPage(null);
+              else
+                setPage({ type: "project-settings", projectId: page.projectId, tab: "knowledge" });
+            }}
+          />
+        ) : channels.length === 0 ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground text-sm">
+            <p>Nothing here yet.</p>
+            <p className="max-w-sm text-xs">
+              Create a project for ongoing work, or a chat for a one-off. In a chat you can also ask
+              OpenBot to “use the onboard skill and onboard me”.
+            </p>
+            <div className="flex gap-2">
+              <Button onClick={() => setProjectDialogOpen(true)}>New project</Button>
+              <Button variant="outline" onClick={() => setChatDialogOpen(true)}>
+                New chat
+              </Button>
+            </div>
+          </div>
         ) : view === null || activeChannel === null ? (
           <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm">
-            {channels.length === 0 ? "Create a channel to get started." : "Loading channel…"}
+            <Spinner className="size-4" />
           </div>
         ) : (
           <>
-            <ChannelView
-              view={view}
+            <ChatHeader
               environmentId={environmentId}
-              onShowDetails={() => {
+              view={view}
+              project={activeProject}
+              parent={parentChannel}
+              detailsOpen={detailsOpen}
+              onToggleDetails={() => {
                 if (window.matchMedia("(min-width: 1024px)").matches)
                   setDetailsOpen((open) => !open);
                 else setMobileDetailsOpen(true);
               }}
+              onOpenSidebar={() => setSidebarOpen(true)}
+              onOpenProjectIcon={(projectId) => {
+                setIconError(null);
+                setIconProjectId(projectId);
+              }}
+              onSelectChannel={openChannel}
+            />
+            <ChannelView
+              view={view}
+              environmentId={environmentId}
+              onContinue={(message) =>
+                void sendMessage(environmentId, {
+                  channelId: activeChannel.id,
+                  text: message.text,
+                  attachments: [],
+                })
+              }
             />
             {sendError !== null && (
               <p className="px-4 py-1 text-error-foreground text-xs">{sendError}</p>
             )}
+            <PendingRequests
+              environmentId={environmentId}
+              view={view}
+              onSendMessage={(text) =>
+                sendMessage(environmentId, { channelId: activeChannel.id, text })
+              }
+            />
             <Composer
               key={activeChannel.id}
               channelName={activeChannel.name}
               environmentId={environmentId}
               disabled={phase !== "ready"}
-              onSend={async (message) => {
-                setSendError(null);
-                const result = await runSend({
-                  environmentId,
-                  input: {
-                    channelId: activeChannel.id,
-                    ...message,
-                  },
-                });
-                if (result._tag === "Failure") {
-                  setSendError(errorText(squashAtomCommandFailure(result)));
-                  return false;
-                }
-                return true;
-              }}
+              onSend={(message) =>
+                sendMessage(environmentId, { channelId: activeChannel.id, ...message })
+              }
             />
           </>
         )}
@@ -210,7 +313,7 @@ export function App() {
           )}
           <Dialog open={mobileDetailsOpen} onOpenChange={setMobileDetailsOpen}>
             <DialogPopup className="h-[85dvh] overflow-hidden p-0" bottomStickOnMobile>
-              <DialogTitle className="sr-only">Conversation details</DialogTitle>
+              <DialogTitle className="sr-only">Computer and routines</DialogTitle>
               <ConversationDetails
                 key={view.channel.id}
                 environmentId={environmentId}
@@ -221,27 +324,71 @@ export function App() {
           </Dialog>
         </>
       )}
-      {environmentId !== null && dialogOpen && (
-        <NewChannelDialog
+      {environmentId !== null && chatDialogOpen && (
+        <NewChatDialog
           environmentId={environmentId}
-          open={dialogOpen}
-          onOpenChange={setDialogOpen}
+          open={chatDialogOpen}
+          onOpenChange={setChatDialogOpen}
           busy={creating}
-          error={createError}
+          error={createChatError}
           onCreate={async (input) => {
-            if (environmentId === null) return;
             setCreating(true);
-            setCreateError(null);
-            const result = await runCreate({ environmentId, input });
+            setCreateChatError(null);
+            const result = await runCreateChannel({ environmentId, input });
             setCreating(false);
             if (result._tag === "Failure") {
-              setCreateError(errorText(squashAtomCommandFailure(result)));
+              setCreateChatError(commandErrorText(result));
               return;
             }
-            setSelectedChannelId(result.value.id);
-            setDialogOpen(false);
+            setChatDialogOpen(false);
+            openChannel(result.value.id);
           }}
         />
+      )}
+      {environmentId !== null && projectDialogOpen && (
+        <NewProjectDialog
+          open={projectDialogOpen}
+          onOpenChange={setProjectDialogOpen}
+          busy={creating}
+          error={createProjectError}
+          onCreate={async (input) => {
+            setCreating(true);
+            setCreateProjectError(null);
+            const result = await runCreateProject({ environmentId, input });
+            setCreating(false);
+            if (result._tag === "Failure") {
+              setCreateProjectError(commandErrorText(result));
+              return;
+            }
+            setProjectDialogOpen(false);
+            openChannel(result.value.mainChannelId);
+          }}
+        />
+      )}
+      {environmentId !== null && iconProject !== null && (
+        <Suspense fallback={null}>
+          <ProjectIconPicker
+            projectName={iconProject.name}
+            value={iconProject.icon}
+            busy={iconBusy}
+            error={iconError}
+            onSelect={async (icon) => {
+              setIconBusy(true);
+              setIconError(null);
+              const result = await runUpdateProject({
+                environmentId,
+                input: {
+                  projectId: iconProject.id,
+                  expectedRevision: iconProject.revision,
+                  icon,
+                },
+              });
+              setIconBusy(false);
+              if (result._tag === "Failure") setIconError(commandErrorText(result));
+            }}
+            onClose={() => setIconProjectId(null)}
+          />
+        </Suspense>
       )}
     </div>
   );

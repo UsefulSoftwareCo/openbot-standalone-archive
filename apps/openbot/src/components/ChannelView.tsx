@@ -12,7 +12,7 @@ import { Spinner } from "@t3tools/ui/spinner";
 import { AlertCircle, CornerUpLeft, MessageSquare } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { BotAvatar } from "./BotProfileFields";
+import { ChatAvatar } from "./ChatProfileFields";
 import { Attachment } from "./Attachment";
 import { Markdown } from "./Markdown";
 
@@ -105,17 +105,53 @@ function ReplyReference({
   );
 }
 
-/** Only genuine failures get a badge; queue and scheduling state stay invisible. */
-function MessageFailure({ message }: { readonly message: OpenbotIncomingMessage }) {
-  if (message.state !== "failed") return null;
-  return (
-    <span className="inline-flex items-center gap-1 text-error-foreground">
-      <AlertCircle className="size-3" /> Failed
-      {message.error !== null && (
-        <span className="max-w-xs truncate text-muted-foreground">· {message.error}</span>
-      )}
-    </span>
-  );
+/**
+ * Failures and unanswered requests get a badge; queue and scheduling state stay
+ * invisible. A run that ended without a reply, a skip, or a pending question is
+ * shown as unanswered with a way to nudge the agent through an ordinary send.
+ * An explicit skip (outcome `silent`) is not a failure and shows nothing.
+ */
+function MessageFailure({
+  message,
+  hasPendingQuestion,
+  onContinue,
+}: {
+  readonly message: OpenbotIncomingMessage;
+  readonly hasPendingQuestion: boolean;
+  readonly onContinue: (message: OpenbotIncomingMessage) => void;
+}) {
+  if (message.state === "failed") {
+    return (
+      <span className="inline-flex items-center gap-1 text-error-foreground">
+        <AlertCircle className="size-3" /> Failed
+        {message.error !== null && (
+          <span className="max-w-xs truncate text-muted-foreground">· {message.error}</span>
+        )}
+        <button
+          type="button"
+          className="ml-1 underline underline-offset-2 hover:text-foreground"
+          onClick={() => onContinue(message)}
+        >
+          Retry
+        </button>
+      </span>
+    );
+  }
+  if (message.state === "handled" && message.outcome === "no_reply" && !hasPendingQuestion) {
+    return (
+      <span className="inline-flex items-center gap-1 text-muted-foreground">
+        <AlertCircle className="size-3" /> No reply
+        <button
+          type="button"
+          className="ml-1 underline underline-offset-2 hover:text-foreground"
+          onClick={() => onContinue(message)}
+        >
+          Ask again
+        </button>
+      </span>
+    );
+  }
+  return null;
 }
 
 /** Subtle channel-level activity line, like a typing indicator. */
@@ -141,13 +177,15 @@ function ChannelActivity({ view }: { readonly view: ChannelViewData }) {
 
 export function ChannelView({
   view,
-  onShowDetails,
   environmentId,
+  onContinue,
 }: {
   readonly view: ChannelViewData;
   readonly environmentId: EnvironmentId;
-  readonly onShowDetails: () => void;
+  /** Re-send a message's text through the ordinary send path (retry / ask again). */
+  readonly onContinue: (message: OpenbotIncomingMessage) => void;
 }) {
+  const hasPendingQuestion = view.pendingRequests.length > 0;
   const timeline = buildTimeline(view);
   const viewportRef = useRef<HTMLDivElement>(null);
   const lastCount = useRef(0);
@@ -181,17 +219,6 @@ export function ChannelView({
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col">
-      <header className="hidden h-12 shrink-0 items-center md:flex gap-2 border-b border-border px-4">
-        <BotAvatar avatar={view.channel.avatar} name={view.channel.name} />
-        <h1 className="min-w-0 truncate font-semibold text-sm">
-          <button onClick={onShowDetails} aria-label="View conversation details">
-            {view.channel.name}
-          </button>
-        </h1>
-        <span className="text-muted-foreground text-xs">
-          {view.channel.modelSelection.instanceId} · {view.channel.modelSelection.model}
-        </span>
-      </header>
       <ScrollArea className="min-h-0 flex-1">
         <div
           ref={viewportRef}
@@ -227,7 +254,11 @@ export function ChannelView({
                       ))}
                     </UserMessageBubble>
                     <div className="flex items-center gap-2 pr-1 text-[11px] text-muted-foreground">
-                      <MessageFailure message={entry.message} />
+                      <MessageFailure
+                        message={entry.message}
+                        hasPendingQuestion={hasPendingQuestion}
+                        onContinue={onContinue}
+                      />
                       <time dateTime={entry.message.createdAt}>
                         {formatTime(entry.message.createdAt)}
                       </time>
@@ -246,7 +277,7 @@ export function ChannelView({
                   )}
                 >
                   <div className="flex items-center gap-2 pl-1 text-[11px] text-muted-foreground">
-                    <BotAvatar
+                    <ChatAvatar
                       avatar={view.channel.avatar}
                       name={view.channel.name}
                       className="size-5"

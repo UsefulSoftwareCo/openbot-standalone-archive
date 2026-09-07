@@ -7,11 +7,11 @@ import {
 import { Input } from "@t3tools/ui/input";
 import { Button } from "@t3tools/ui/button";
 import { useEffect, useId, useState } from "react";
-import { getBotProviders, useAtomCommand } from "../state/channels";
+import { getServerConfig, useAtomCommand } from "../state/channels";
 import { TerminalAvatar } from "./TerminalAvatar";
 
-/** Editable bot identity and next-message model selection. */
-export interface BotProfileDraft {
+/** Editable chat identity and next-message model selection. */
+export interface ChatProfileDraft {
   readonly name: string;
   readonly avatar: string;
   readonly description: string;
@@ -19,7 +19,7 @@ export interface BotProfileDraft {
 }
 
 /** A local avatar never fetches an external image URL. */
-export function BotAvatar({
+export function ChatAvatar({
   avatar,
   name,
   className = "size-7",
@@ -42,7 +42,7 @@ export function BotAvatar({
 }
 
 /** Shared creation/settings fields; provider choices come from the connected server. */
-export function BotProfileFields({
+export function ChatProfileFields({
   environmentId,
   value,
   onChange,
@@ -51,13 +51,13 @@ export function BotProfileFields({
   onBusyChange,
 }: {
   readonly environmentId: EnvironmentId;
-  readonly value: BotProfileDraft;
-  readonly onChange: (draft: BotProfileDraft) => void;
+  readonly value: ChatProfileDraft;
+  readonly onChange: (draft: ChatProfileDraft) => void;
   readonly disabled: boolean;
   readonly allowAutomatic?: boolean;
   readonly onBusyChange: (busy: boolean) => void;
 }) {
-  const readProviders = useAtomCommand(getBotProviders, { reportFailure: false });
+  const readProviders = useAtomCommand(getServerConfig, { reportFailure: false });
   const [providers, setProviders] = useState<ReadonlyArray<ServerProvider>>([]);
   const [providerError, setProviderError] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
@@ -138,7 +138,7 @@ export function BotProfileFields({
         />
       </label>
       <div className="flex items-center gap-3">
-        <BotAvatar avatar={value.avatar} name={value.name} className="size-12" />
+        <ChatAvatar avatar={value.avatar} name={value.name} className="size-12" />
         <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
           Avatar emoji
           <Input
@@ -176,7 +176,7 @@ export function BotProfileFields({
           className="min-h-20 rounded-md border border-border bg-background p-2"
           value={value.description}
           maxLength={2000}
-          placeholder="What this bot helps with"
+          placeholder="What this chat is for"
           onChange={(event) => onChange({ ...value, description: event.target.value })}
         />
       </label>

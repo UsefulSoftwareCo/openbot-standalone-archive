@@ -13,10 +13,10 @@ import {
 import * as Effect from "effect/Effect";
 import * as Random from "effect/Random";
 import { useState } from "react";
-import { BotProfileFields, type BotProfileDraft } from "./BotProfileFields";
+import { ChatProfileFields, type ChatProfileDraft } from "./ChatProfileFields";
 
-/** Create a bot with a stable command id for retries after a dropped connection. */
-export function NewChannelDialog({
+/** Create a chat with a stable command id for retries after a dropped connection. */
+export function NewChatDialog({
   open,
   environmentId,
   onOpenChange,
@@ -32,7 +32,7 @@ export function NewChannelDialog({
   readonly error: string | null;
 }) {
   const [avatarBusy, setAvatarBusy] = useState(false);
-  const [draft, setDraft] = useState<BotProfileDraft>({
+  const [draft, setDraft] = useState<ChatProfileDraft>({
     name: "",
     avatar: "",
     description: "",
@@ -65,11 +65,13 @@ export function NewChannelDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>New bot</DialogTitle>
-            <DialogDescription>Create a bot for an ongoing conversation.</DialogDescription>
+            <DialogTitle>New chat</DialogTitle>
+            <DialogDescription>
+              A standalone chat. Threads can branch off it later.
+            </DialogDescription>
           </DialogHeader>
           <DialogPanel className="max-h-[65dvh] space-y-4 overflow-y-auto">
-            <BotProfileFields
+            <ChatProfileFields
               environmentId={environmentId}
               value={draft}
               onChange={setDraft}
@@ -100,7 +102,7 @@ export function NewChannelDialog({
                 draft.modelSelection?.model.trim() === ""
               }
             >
-              Create bot
+              Create chat
             </Button>
           </DialogFooter>
         </form>

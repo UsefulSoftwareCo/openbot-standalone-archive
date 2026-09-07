@@ -27,7 +27,7 @@ import {
   useAtomCommand,
   useRoutines,
 } from "../state/channels";
-import { BotSettingsDialog } from "./BotSettingsDialog";
+import ComputerPanel from "./ComputerPanel";
 
 const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const fieldClass = "w-full rounded-md border border-border bg-background px-3 py-2 text-sm";
@@ -36,6 +36,9 @@ function failureText(error: unknown): string {
 }
 function scheduleLabel(schedule: ScheduledTask["schedule"]): string {
   if (schedule.type === "interval") return `Every ${schedule.everyMs / 60000} minutes`;
+  // A cron schedule is only meaningful with its zone: the same expression in
+  // UTC and in a local zone are different routines.
+  if (schedule.type === "cron") return `${schedule.expression} (${schedule.timeZone})`;
   const selected = schedule.weekdays;
   const label =
     selected === undefined || selected.length === 0 || selected.length === 7
@@ -73,14 +76,16 @@ export function ConversationDetails({
     >
       <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-3">
         {page.type === "list" ? (
-          <BotSettingsDialog environmentId={environmentId} channel={view.channel} />
+          <span className="px-1 font-medium text-sm">Details</span>
         ) : (
-          <Button variant="ghost" size="sm" onClick={() => setPage({ type: "list" })}>
-            <ArrowLeft className="size-4" />
-            Routines
-          </Button>
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setPage({ type: "list" })}>
+              <ArrowLeft className="size-4" />
+              Routines
+            </Button>
+            <span className="font-medium text-sm">Routine</span>
+          </>
         )}
-        {page.type !== "list" && <span className="text-sm font-medium">Routine</span>}
         <Button variant="ghost" size="icon" aria-label="Close details" onClick={onClose}>
           <X className="size-4" />
         </Button>
@@ -94,6 +99,7 @@ export function ConversationDetails({
           </p>
         ) : page.type === "list" ? (
           <>
+            <ComputerPanel environmentId={environmentId} />
             <div className="mb-3 flex items-center justify-between">
               <h2 className="font-medium text-sm">Routines</h2>
               <Button
@@ -162,7 +168,19 @@ function RoutineEditor({
 }) {
   const [title, setTitle] = useState(task?.title ?? "");
   const [prompt, setPrompt] = useState(task?.prompt ?? "");
-  const [mode, setMode] = useState(task?.schedule.type ?? "fixed_time");
+  // The mode follows the stored schedule type only, so saving never silently
+  // switches a routine between variants.
+  const [mode, setMode] = useState<"interval" | "fixed_time" | "cron">(
+    task?.schedule.type ?? "fixed_time",
+  );
+  const [cronExpression, setCronExpression] = useState(
+    task?.schedule.type === "cron" ? task.schedule.expression : "0 9 * * 1-5",
+  );
+  const [cronTimeZone, setCronTimeZone] = useState(
+    task?.schedule.type === "cron"
+      ? task.schedule.timeZone
+      : Intl.DateTimeFormat().resolvedOptions().timeZone,
+  );
   const [time, setTime] = useState(
     task?.schedule.type === "fixed_time" ? task.schedule.timeOfDay : "08:00",
   );
@@ -226,12 +244,15 @@ function RoutineEditor({
       disposed = true;
     };
   }, [environmentId, readHistory, task?.id, task?.runCount, view.channel.threadId, view.status]);
-  const valid =
-    title.trim().length > 0 &&
-    prompt.trim().length > 0 &&
-    (mode === "interval"
-      ? Number.isFinite(Number(minutes)) && Number(minutes) >= 1
-      : /^([01]\d|2[0-3]):[0-5]\d$/.test(time) && weekdays.length > 0);
+  // The server owns real cron syntax and zone validation; this only keeps
+  // obviously incomplete input from being sent.
+  const scheduleValid =
+    mode === "cron"
+      ? cronExpression.trim().split(/\s+/).length === 5 && cronTimeZone.trim().length > 0
+      : mode === "interval"
+        ? Number.isFinite(Number(minutes)) && Number(minutes) >= 1
+        : /^([01]\d|2[0-3]):[0-5]\d$/.test(time) && weekdays.length > 0;
+  const valid = title.trim().length > 0 && prompt.trim().length > 0 && scheduleValid;
   const persist = async () => {
     if (!valid) return undefined;
     const input: ScheduledTaskUpsertInput = {
@@ -241,9 +262,11 @@ function RoutineEditor({
       prompt: prompt.trim(),
       enabled: task?.enabled ?? false,
       schedule:
-        mode === "interval"
-          ? { type: "interval", everyMs: Math.round(Number(minutes) * 60000) }
-          : { type: "fixed_time", timeOfDay: time, weekdays },
+        mode === "cron"
+          ? { type: "cron", expression: cronExpression.trim(), timeZone: cronTimeZone.trim() }
+          : mode === "interval"
+            ? { type: "interval", everyMs: Math.round(Number(minutes) * 60000) }
+            : { type: "fixed_time", timeOfDay: time, weekdays },
       projectId: view.channel.projectId,
       threadId: view.channel.threadId,
       workspaceStrategy: task?.workspaceStrategy ?? { type: "root" },
@@ -375,65 +398,91 @@ function RoutineEditor({
           onChange={(event) => setPrompt(event.target.value)}
         />
       </label>
-      <fieldset disabled={busy} className="space-y-3">
-        <legend className="mb-2 text-sm">When to run</legend>
-        <select
-          aria-label="Schedule type"
-          className={fieldClass}
-          value={mode}
-          onChange={(event) => {
-            if (event.target.value === "interval" || event.target.value === "fixed_time")
-              setMode(event.target.value);
-          }}
-        >
-          <option value="fixed_time">At a set time</option>
-          <option value="interval">At an interval</option>
-        </select>
-        {mode === "fixed_time" ? (
-          <>
-            <input
-              aria-label="Time"
-              type="time"
-              className={fieldClass}
-              value={time}
-              onChange={(event) => setTime(event.target.value)}
-            />
-            <div className="flex flex-wrap gap-1">
-              {days.map((day, index) => (
-                <button
-                  key={day}
-                  type="button"
-                  aria-pressed={weekdays.includes(index)}
-                  className={`rounded-md border px-2 py-1.5 text-xs ${weekdays.includes(index) ? "border-primary bg-primary text-primary-foreground" : "border-border text-muted-foreground"}`}
-                  onClick={() =>
-                    setWeekdays((current) =>
-                      current.includes(index)
-                        ? current.filter((item) => item !== index)
-                        : [...current, index].sort(),
-                    )
-                  }
-                >
-                  {day}
-                </button>
-              ))}
-            </div>
-          </>
-        ) : (
-          <label className="flex items-center gap-2 text-sm">
-            Every
-            <Input
-              type="number"
-              min="1"
-              step="1"
-              aria-label="Interval minutes"
-              value={minutes}
-              onChange={(event) => setMinutes(event.target.value)}
-            />
-            minutes
-          </label>
-        )}
-        <p className="text-xs text-muted-foreground">Times use the server’s local time zone.</p>
-      </fieldset>
+      {
+        <fieldset disabled={busy} className="space-y-3">
+          <legend className="mb-2 text-sm">When to run</legend>
+          <select
+            aria-label="Schedule type"
+            className={fieldClass}
+            value={mode}
+            onChange={(event) => {
+              const next = event.target.value;
+              if (next === "interval" || next === "fixed_time" || next === "cron") setMode(next);
+            }}
+          >
+            <option value="fixed_time">At a set time</option>
+            <option value="interval">At an interval</option>
+            <option value="cron">Cron expression</option>
+          </select>
+          {mode === "cron" ? (
+            <>
+              <input
+                aria-label="Cron expression"
+                className={`${fieldClass} font-mono`}
+                placeholder="0 9 * * 1-5"
+                value={cronExpression}
+                onChange={(event) => setCronExpression(event.target.value)}
+              />
+              <input
+                aria-label="Time zone"
+                className={fieldClass}
+                placeholder="UTC"
+                value={cronTimeZone}
+                onChange={(event) => setCronTimeZone(event.target.value)}
+              />
+              <p className="text-muted-foreground text-xs">
+                Five fields: minute, hour, day of month, month, weekday. Evaluated in the time zone
+                above.
+              </p>
+            </>
+          ) : mode === "fixed_time" ? (
+            <>
+              <input
+                aria-label="Time"
+                type="time"
+                className={fieldClass}
+                value={time}
+                onChange={(event) => setTime(event.target.value)}
+              />
+              <div className="flex flex-wrap gap-1">
+                {days.map((day, index) => (
+                  <button
+                    key={day}
+                    type="button"
+                    aria-pressed={weekdays.includes(index)}
+                    className={`rounded-md border px-2 py-1.5 text-xs ${weekdays.includes(index) ? "border-primary bg-primary text-primary-foreground" : "border-border text-muted-foreground"}`}
+                    onClick={() =>
+                      setWeekdays((current) =>
+                        current.includes(index)
+                          ? current.filter((item) => item !== index)
+                          : [...current, index].sort(),
+                      )
+                    }
+                  >
+                    {day}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <label className="flex items-center gap-2 text-sm">
+              Every
+              <Input
+                type="number"
+                min="1"
+                step="1"
+                aria-label="Interval minutes"
+                value={minutes}
+                onChange={(event) => setMinutes(event.target.value)}
+              />
+              minutes
+            </label>
+          )}
+          {mode !== "cron" && (
+            <p className="text-xs text-muted-foreground">Times use the server’s local time zone.</p>
+          )}
+        </fieldset>
+      }
       {error !== null && (
         <p role="alert" className="text-sm text-error-foreground">
           {error}

@@ -122,3 +122,95 @@
   height: auto;
   border-radius: var(--radius-md);
 }
+
+/*
+ * Sidebar rows. The project icon and the settings gear are absolutely
+ * positioned so the row's name stays vertically centred whether or not the
+ * gear is showing, and the gear only appears on hover or keyboard focus —
+ * except on touch, where there is no hover to reveal it.
+ */
+.openbot-row {
+  position: relative;
+}
+.openbot-row-icon {
+  position: absolute;
+  z-index: 1;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 30px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+}
+.openbot-header-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 5px;
+}
+.openbot-row-icon:hover,
+.openbot-header-icon:hover {
+  background: var(--muted);
+}
+.openbot-row-icon:focus-visible,
+.openbot-header-icon:focus-visible {
+  outline: 2px solid var(--ring);
+}
+.openbot-row-settings {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0;
+  pointer-events: none;
+}
+.openbot-row:hover .openbot-row-settings,
+.openbot-row:focus-within .openbot-row-settings {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (hover: none) {
+  .openbot-row-settings {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* Threads hang off their parent chat on a connector line. */
+.openbot-thread-list {
+  margin: 0 0 10px 20px;
+  padding-left: 12px;
+}
+.openbot-thread-row {
+  position: relative;
+  display: flex;
+  width: 100%;
+  padding: 7px 8px 7px 15px;
+  text-align: left;
+  font-size: 12px;
+  border-radius: 5px;
+}
+.openbot-thread-row::before {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: 0;
+  width: 12px;
+  height: 50%;
+  border-left: 2px solid var(--contrast-sidebar-border);
+  border-bottom: 2px solid var(--contrast-sidebar-border);
+  border-bottom-left-radius: 8px;
+  pointer-events: none;
+}
+.openbot-thread-row:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: 0;
+  bottom: 0;
+  border-left: 2px solid var(--contrast-sidebar-border);
+  pointer-events: none;
+}
