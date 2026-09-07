@@ -6,10 +6,42 @@ the delivery contract; it does not own an agent loop or a scheduler.
 
 ## Model
 
-- A channel is one v2 thread inside one server-owned project rooted at
-  `<state dir>/openbot`, which is initialized as its own git repository so run
-  checkpoints behave the same as in a normal project. The mapping lives in
+- A chat is one v2 thread. Every chat is the same primitive; its role is
+  derived, not stored. A chat with a parent is a _child_; a chat an OpenBot
+  project points at is that project's _main_ chat; anything else is
+  _standalone_. Nesting stops at one level, so a child never owns children and
+  the tree can be rendered without recursion. The mapping lives in
   [`openbot_channels`](../../apps/server/src/persistence/Migrations/060_OpenbotChannels.ts).
+- A **product project** is not a working directory. `openbot_projects` records
+  the product concept and points at one T3 project that owns the cwd. A
+  `managed` workspace is an app-owned directory under
+  `<state dir>/openbot/projects/`, which sits inside the OpenBot workspace git
+  repository, so a project needs no user folder and still checkpoints normally.
+  An `attached` workspace is a user folder used exactly as it is: never moved,
+  never `git init`ed, and never shared with a second OpenBot project. A chat's
+  project is derived by joining `openbot_projects.t3_project_id`, so a main
+  chat and its children can never disagree about which project they are in.
+- The shared `<state dir>/openbot` project remains the workspace for standalone
+  chats. It is initialized as its own git repository so run checkpoints behave
+  the same as in a normal project.
+- Knowledge in `openbot_knowledge` has stable identity and lives beside chats
+  rather than inside one. `openbot_knowledge_projects` links an entry to the
+  projects it is relevant to; links guide retrieval and never grant access. The
+  turn prompt carries the linked entries in full while they fit the budget, then
+  degrades to titles plus an excerpt rather than truncating silently.
+- Requests reach a project's main chat or a standalone chat across project
+  boundaries; a child chat can never be targeted directly, because its work is
+  the parent's to direct. Parent and child exchange messages along their own
+  edge with `openbot_send_to_thread`. All three paths reuse the one peer
+  dispatch, so ids, readback, and reply routing are identical.
+- Pending questions and approvals reach the client on the channel view. The
+  server derives them from the v2 projection the same way
+  `derivePendingThreadRequests` does for T3's own client; the derivation is
+  duplicated rather than shared because the server never imports
+  `client-runtime`. Answers go back through `runtime-request.respond`, so the
+  approval and question semantics are T3's, unchanged.
+- Snooze, wake, cancel, and model selection are thin adapters over the existing
+  v2 commands. OpenBot adds no wake rules of its own.
 - Sending into a channel dispatches `message.dispatch` with `queue_after_active`
   and `joinQueuedRun` through
   [`ThreadManagementService.sendToThread`](../../apps/server/src/orchestration-v2/ThreadManagementService.ts).
@@ -89,6 +121,75 @@ OpenBot imports set `deliveryMode: "queue"` so a scheduled wake waits behind
 active work. Migration 63 preserves `auto` for existing T3 routines. Updates
 that omit the mode retain the saved choice. Fixed-time routines use the server's
 local time zone.
+
+## Agent tools
+
+Everything a person can do in the OpenBot UI, an agent can do through the
+`t3-code` MCP server, and both go through the same
+[`OpenbotChannelServiceShape`](../../apps/server/src/openbot/OpenbotChannelService.ts)
+operation. There is deliberately no agent-side copy of the validation, the
+idempotency keys, or the compare-and-swap rules; a tool handler resolves the
+calling thread from its MCP credential and calls the operation the RPC calls.
+
+| UI capability                  | Service operation                     | Agent tool                                            |
+| ------------------------------ | ------------------------------------- | ----------------------------------------------------- |
+| New chat                       | `create`                              | `openbot_create_chat`                                 |
+| Chat settings                  | `update`                              | `openbot_update_chat`                                 |
+| Project list                   | `listProjects`                        | `openbot_list_projects`                               |
+| New project                    | `createProject`                       | `openbot_create_project`                              |
+| Project settings               | `updateProject`                       | `openbot_update_project`                              |
+| Knowledge list                 | `listKnowledge`                       | `openbot_knowledge_list`                              |
+| Knowledge editor (read)        | `getKnowledge`                        | `openbot_knowledge_read`                              |
+| Knowledge editor (save)        | `createKnowledge` / `updateKnowledge` | `openbot_knowledge_write`                             |
+| Knowledge delete               | `deleteKnowledge`                     | `openbot_knowledge_delete`                            |
+| New child chat with a task     | `startThread`                         | `openbot_start_thread`                                |
+| Message a child or parent chat | `sendToThread`                        | `openbot_send_to_thread`                              |
+| Chat sidebar                   | `listThreads`                         | `openbot_list_threads`                                |
+| Snooze / unsnooze              | `snooze` / `wake`                     | `openbot_snooze_thread` / `openbot_wake_thread`       |
+| Stop                           | `cancel`                              | `openbot_cancel_thread`                               |
+| Model picker                   | `setModel`                            | `openbot_set_model`                                   |
+| Chat knowledge                 | `getContext` / `updateContext`        | `openbot_get_context` / `openbot_update_knowledge`    |
+| Chat instructions              | `getContext` / `updateContext`        | `openbot_get_context` / `openbot_update_instructions` |
+| Ask another chat               | `requestThread` / `replyToThread`     | `openbot_request_thread` / `openbot_reply_to_thread`  |
+| Reply in the chat              | `recordDelivery`                      | `openbot_send_message` / `openbot_skip_reply`         |
+| Attach an output file          | `prepareFile`                         | `openbot_prepare_file`                                |
+
+Two vocabularies meet at this boundary. `OpenbotError` carries the domain codes;
+`OpenbotMcpFailure` carries the smaller set an agent can act on, so a code only
+exists where a tool description can name the recovery. `*_not_found` collapses to
+`not_found`, every compare-and-swap and duplicate-request conflict collapses to
+`request_conflict` (read again, merge, retry), `nesting_not_allowed` survives
+because the agent must stop rather than retry, and everything else is an opaque
+`operation_failed`. Adding a domain code without deciding its agent-facing code
+silently makes it `operation_failed`.
+
+A tool with no parameters must omit `parameters` rather than pass
+`Schema.Struct({})`: the empty struct serialises to an `anyOf` instead of an
+object schema, and one non-object input schema makes MCP clients reject the whole
+server. `apps/server/src/mcp/toolkits/worktree/registration.test.ts` asserts this
+across every registered toolkit.
+
+## Skills
+
+[`materializeOpenbotSkills`](../../apps/server/src/openbot/skills/index.ts) writes
+the shipped skills into a workspace root when the workspace project is ensured and
+when a managed project directory is created. They are ordinary skills the provider
+discovers from disk, not a wizard: `onboard` sets up projects and knowledge from a
+conversation, `import-grok` moves personal Grok bots in.
+
+The `SKILL.md` files stay the reviewable source, but nothing reads them at runtime.
+[`generate-openbot-skills.ts`](../../apps/server/scripts/generate-openbot-skills.ts)
+embeds them into `generated.ts` as string literals, because the published
+`dist/bin.mjs` is one file and cannot read siblings that were never bundled.
+`OpenbotSkills.test.ts` re-renders the module in memory and fails when it has
+drifted, so editing Markdown without re-running the script cannot land.
+
+Each skill is written twice, to `<workspace>/.claude/skills/<name>/` and
+`<workspace>/.agents/skills/<name>/`. Claude Code scans only the first and
+[deliberately ignores the second](../../apps/server/src/provider/Drivers/ClaudeSkills.ts);
+Codex, Cursor and Antigravity scan the second. A file whose contents already match
+is left alone, because an OpenBot workspace is a git repository and a no-op
+rewrite would dirty the working tree on every chat start.
 
 ## Profiles and files
 

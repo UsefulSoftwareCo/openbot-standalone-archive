@@ -51,6 +51,8 @@ import {
   turnInstructionsLayer as openbotTurnInstructionsLayer,
 } from "../openbot/OpenbotChannelService.ts";
 import { layer as openbotChannelStoreLayer } from "../openbot/OpenbotChannelStore.ts";
+import { layer as openbotComputerLayer } from "../openbot/OpenbotComputerService.ts";
+import { layer as openbotQuestionServiceLayer } from "../openbot/OpenbotQuestionService.ts";
 
 const runtimePolicyProvided = runtimePolicyLayerFromProjectRepository.pipe(
   Layer.provide(ProjectionProjectRepositoryLive),
@@ -241,6 +243,9 @@ const openbotChannelProvided = openbotChannelServiceLayer.pipe(
     ),
   ),
 );
+const openbotQuestionProvided = openbotQuestionServiceLayer.pipe(
+  Layer.provide(threadManagementProvided),
+);
 const providerContinuationWorkerProvided = providerContinuationWorkerLive.pipe(
   Layer.provide(
     Layer.mergeAll(providerContinuationRequestsLayer, threadManagementProvided, idAllocatorLayer),
@@ -299,5 +304,7 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   threadLifecycleProvided,
   scheduledTaskProvided,
   openbotChannelProvided,
+  openbotComputerLayer,
+  openbotQuestionProvided,
   providerContinuationWorkerProvided,
 );

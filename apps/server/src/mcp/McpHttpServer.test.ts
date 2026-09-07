@@ -5,12 +5,16 @@ import { EnvironmentId, PreviewTabId, ProviderInstanceId, ThreadId } from "@t3to
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
-import { McpProtocol, McpSchema, McpServer } from "effect/unstable/ai";
+import { McpProtocol, McpSchema, McpServer, Tool } from "effect/unstable/ai";
 import { HttpBody, HttpClient, HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import { OpenbotToolkit } from "./toolkits/openbot/tools.ts";
+import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
+import { PreviewSnapshotTool, PreviewStandardToolkit } from "./toolkits/preview/tools.ts";
+import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 
 const environmentId = EnvironmentId.make("environment-mcp-test");
 const threadId = ThreadId.make("thread-mcp-test");
@@ -286,3 +290,26 @@ it.effect("registers annotated tools and preserves authenticated request context
     }),
   ).pipe(Effect.provide(TestLayer)),
 );
+
+// MCP's `Tool` schema requires `inputSchema.type === "object"`, and Claude
+// Code's client validates the whole `tools/list` result at once: one tool with
+// a non-object input schema makes it discard every tool on the server while
+// still reporting `t3-code` as connected, so the agent loses the entire
+// toolkit with nothing on the wire to explain why. Codex passes the schema
+// through unvalidated, so this only ever breaks one provider. `McpServer`
+// serves `Tool.getJsonSchema` verbatim, and `Schema.Struct({})` renders as an
+// `anyOf` rather than an object - declare an empty parameter list by omitting
+// `parameters` instead.
+it("gives every served tool an object input schema", () => {
+  const tools = [
+    ...Object.values(OpenbotToolkit.tools),
+    ...Object.values(OrchestratorToolkit.tools),
+    ...Object.values(WorktreeToolkit.tools),
+    ...Object.values(PreviewStandardToolkit.tools),
+    PreviewSnapshotTool,
+  ] as ReadonlyArray<Tool.Any>;
+  const offenders = tools
+    .filter((tool) => (Tool.getJsonSchema(tool) as { readonly type?: string }).type !== "object")
+    .map((tool) => tool.name);
+  expect(offenders).toEqual([]);
+});

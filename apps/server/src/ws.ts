@@ -94,6 +94,7 @@ import { ProviderSessionManagerV2 } from "./orchestration-v2/ProviderSessionMana
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import { OpenbotChannelService } from "./openbot/OpenbotChannelService.ts";
+import { OpenbotComputerService } from "./openbot/OpenbotComputerService.ts";
 import {
   archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
@@ -603,6 +604,7 @@ const makeWsRpcLayer = (
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const openbotChannels = yield* OpenbotChannelService;
+      const openbotComputer = yield* OpenbotComputerService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const usage = yield* UsageService.UsageService;
       const projectService = yield* ProjectService.ProjectService;
@@ -1635,6 +1637,91 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.openbotChannelSend, openbotChannels.send(input), {
             "rpc.aggregate": "openbot",
             "openbot.channel_id": input.channelId,
+          }),
+        [WS_METHODS.openbotChannelRespond]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.openbotChannelRespond,
+            openbotChannels.respond(input).pipe(Effect.as({})),
+            { "rpc.aggregate": "openbot", "openbot.channel_id": input.channelId },
+          ),
+        [WS_METHODS.openbotChannelSnooze]: (input) =>
+          observeRpcEffect(WS_METHODS.openbotChannelSnooze, openbotChannels.snooze(input), {
+            "rpc.aggregate": "openbot",
+            "openbot.channel_id": input.channelId,
+          }),
+        [WS_METHODS.openbotChannelWake]: (input) =>
+          observeRpcEffect(WS_METHODS.openbotChannelWake, openbotChannels.wake(input.channelId), {
+            "rpc.aggregate": "openbot",
+            "openbot.channel_id": input.channelId,
+          }),
+        [WS_METHODS.openbotChannelCancel]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.openbotChannelCancel,
+            openbotChannels.cancel(input.channelId),
+            { "rpc.aggregate": "openbot", "openbot.channel_id": input.channelId },
+          ),
+        [WS_METHODS.openbotChannelSetModel]: (input) =>
+          observeRpcEffect(WS_METHODS.openbotChannelSetModel, openbotChannels.setModel(input), {
+            "rpc.aggregate": "openbot",
+            "openbot.channel_id": input.channelId,
+          }),
+        [WS_METHODS.openbotThreadStart]: (input) =>
+          observeRpcEffect(WS_METHODS.openbotThreadStart, openbotChannels.startThread(input), {
+            "rpc.aggregate": "openbot",
+            "openbot.channel_id": input.parentChannelId,
+          }),
+        [WS_METHODS.openbotProjectsList]: (_input) =>
+          observeRpcEffect(WS_METHODS.openbotProjectsList, openbotChannels.listProjects, {
+            "rpc.aggregate": "openbot",
+          }),
+        [WS_METHODS.openbotProjectsSubscribe]: (_input) =>
+          observeRpcStream(WS_METHODS.openbotProjectsSubscribe, openbotChannels.subscribeProjects, {
+            "rpc.aggregate": "openbot",
+          }),
+        [WS_METHODS.openbotProjectsCreate]: (input) =>
+          observeRpcEffect(WS_METHODS.openbotProjectsCreate, openbotChannels.createProject(input), {
+            "rpc.aggregate": "openbot",
+          }),
+        [WS_METHODS.openbotProjectGet]: ({ projectId }) => openbotChannels.getProject(projectId),
+        [WS_METHODS.openbotProjectUpdate]: (input) =>
+          observeRpcEffect(WS_METHODS.openbotProjectUpdate, openbotChannels.updateProject(input), {
+            "rpc.aggregate": "openbot",
+            "openbot.project_id": input.projectId,
+          }),
+        [WS_METHODS.openbotKnowledgeList]: (input) => openbotChannels.listKnowledge(input),
+        [WS_METHODS.openbotKnowledgeSubscribe]: (input) =>
+          observeRpcStream(
+            WS_METHODS.openbotKnowledgeSubscribe,
+            openbotChannels.subscribeKnowledge(input),
+            { "rpc.aggregate": "openbot" },
+          ),
+        [WS_METHODS.openbotKnowledgeGet]: ({ knowledgeId }) =>
+          openbotChannels.getKnowledge(knowledgeId),
+        [WS_METHODS.openbotKnowledgeCreate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.openbotKnowledgeCreate,
+            openbotChannels.createKnowledge(input),
+            { "rpc.aggregate": "openbot" },
+          ),
+        [WS_METHODS.openbotKnowledgeUpdate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.openbotKnowledgeUpdate,
+            openbotChannels.updateKnowledge(input),
+            { "rpc.aggregate": "openbot" },
+          ),
+        [WS_METHODS.openbotKnowledgeDelete]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.openbotKnowledgeDelete,
+            openbotChannels.deleteKnowledge(input).pipe(Effect.as({})),
+            { "rpc.aggregate": "openbot" },
+          ),
+        [WS_METHODS.openbotComputerStatus]: (_input) =>
+          observeRpcEffect(WS_METHODS.openbotComputerStatus, openbotComputer.status, {
+            "rpc.aggregate": "openbot",
+          }),
+        [WS_METHODS.openbotComputerSnapshot]: (input) =>
+          observeRpcEffect(WS_METHODS.openbotComputerSnapshot, openbotComputer.snapshot(input), {
+            "rpc.aggregate": "openbot",
           }),
         [WS_METHODS.serverProbe]: (_input) =>
           observeRpcEffect(WS_METHODS.serverProbe, Effect.succeed({}), {
