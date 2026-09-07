@@ -47,6 +47,10 @@ the delivery contract; it does not own an agent loop or a scheduler.
   [`ThreadManagementService.sendToThread`](../../apps/server/src/orchestration-v2/ThreadManagementService.ts).
   The orchestrator's per-thread lock and queue promotion are the only scheduler:
   one active run per thread, one queued run promoted after each terminal run.
+  A snoozed thread parks agent-initiated messages (peer requests and replies)
+  as queued runs; they start on the user's wake, on the next user message, or
+  when the settlement service's one-minute tick finds the snooze deadline has
+  passed. Only a direct user send clears a snooze.
   Steering and restart are deliberately not used.
 - Messages that arrive while a run is active are grouped, not queued one per
   run. `joinQueuedRun` is an opt-in on the dispatch command: when a run is

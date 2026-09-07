@@ -335,7 +335,31 @@ export const make = Effect.gen(function* () {
             }),
       ),
     );
-  const worker = yield* makeDrainableWorker(() => runSweep(null));
+  /**
+   * A snooze wake is derived from `snoozedUntil`, never emitted as an event, so
+   * nothing releases the runs an expired snooze parks when no client is open
+   * and no message arrives. This sweep is the host's own clock: it runs on the
+   * same one-minute tick below, which bounds how late a parked run starts, and
+   * it is deliberately outside the auto-settlement settings — those only decide
+   * whether a *settlement* is dispatched, and a disabled shelf must not strand
+   * queued work.
+   */
+  const promoteExpiredSnoozes = orchestrator.promoteExpiredSnoozes.pipe(
+    Effect.tap((promoted) =>
+      promoted === 0
+        ? Effect.void
+        : Effect.logInfo("Started queued V2 runs parked by an expired snooze", { promoted }),
+    ),
+    Effect.catchCause((cause) =>
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.failCause(cause)
+        : Effect.logWarning("expired snooze promotion failed", { cause: Cause.pretty(cause) }),
+    ),
+  );
+
+  const worker = yield* makeDrainableWorker(() =>
+    promoteExpiredSnoozes.pipe(Effect.andThen(runSweep(null))),
+  );
 
   const start: ThreadSettlementServiceV2["Service"]["start"] = Effect.fn(
     "ThreadSettlementServiceV2.start",

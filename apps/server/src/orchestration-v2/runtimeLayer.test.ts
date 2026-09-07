@@ -1984,6 +1984,149 @@ it.layer(SharedApplicationDataPlaneTestLayer)("snoozed dispatch admission", (it)
   );
 });
 
+it.layer(SharedApplicationDataPlaneTestLayer)("snooze deadline promotion", (it) => {
+  // A wake is derived from `snoozedUntil`, so the host's periodic sweep is what
+  // releases a parked run when the deadline passes with nobody watching.
+  const seedParkedThread = Effect.fn("seedParkedThread")(function* (slug: string) {
+    const applicationEngine = yield* OrchestrationEngineService;
+    const orchestrator = yield* OrchestratorV2;
+    const projectId = ProjectId.make(`${slug}-project`);
+    const threadId = ThreadId.make(`${slug}-thread`);
+    const snoozedUntil = DateTime.add(yield* DateTime.now, { minutes: 5 });
+
+    yield* applicationEngine.dispatch({
+      type: "project.create",
+      commandId: CommandId.make(`${slug}-project-create`),
+      projectId,
+      title: "Snooze deadline",
+      workspaceRoot: `/tmp/${slug}-project`,
+      defaultModelSelection: modelSelection,
+      scripts: [],
+      createdAt: "2026-07-24T00:00:00.000Z",
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      createdBy: "user",
+      creationSource: "web",
+      commandId: CommandId.make(`${slug}-thread-create`),
+      threadId,
+      projectId,
+      title: "Snooze deadline",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.snooze",
+      commandId: CommandId.make(`${slug}-snooze`),
+      threadId,
+      snoozedUntil: DateTime.formatIso(snoozedUntil),
+    });
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      createdBy: "agent",
+      creationSource: "mcp",
+      commandId: CommandId.make(`${slug}-peer-message`),
+      threadId,
+      messageId: MessageId.make(`${slug}-peer-message`),
+      text: "Peer request that arrived during the snooze.",
+      attachments: [],
+      modelSelection,
+      dispatchMode: { type: "queue_after_active" },
+    });
+
+    const parked = yield* orchestrator.getThreadProjection(threadId);
+    assert.deepEqual(
+      parked.runs.map((run) => run.status),
+      ["queued"],
+    );
+    return { orchestrator, threadId, snoozedUntil };
+  });
+
+  it.effect("starts the parked run once the deadline passes, without an unsnooze", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, snoozedUntil } =
+        yield* seedParkedThread("deadline-promotion");
+
+      // Before the deadline the sweep is a no-op.
+      assert.equal(yield* orchestrator.promoteExpiredSnoozes, 0);
+      assert.deepEqual(
+        (yield* orchestrator.getThreadProjection(threadId)).runs.map((run) => run.status),
+        ["queued"],
+      );
+
+      yield* TestClock.adjust("6 minutes");
+      assert.equal(yield* orchestrator.promoteExpiredSnoozes, 1);
+
+      const promoted = yield* orchestrator.getThreadProjection(threadId);
+      assert.deepEqual(
+        promoted.runs.map((run) => run.status),
+        ["starting"],
+      );
+      // The snooze fields stay exactly as the user left them: an expired
+      // snooze is what tells both clients and server the thread woke on time
+      // rather than by hand.
+      assert.deepEqual(promoted.thread.snoozedUntil, snoozedUntil);
+      assert.isNotNull(promoted.thread.snoozedAt);
+    }),
+  );
+
+  it.effect("leaves the queue alone while a run is active", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId } = yield* seedParkedThread("deadline-active-run");
+      yield* TestClock.adjust("6 minutes");
+      assert.equal(yield* orchestrator.promoteExpiredSnoozes, 1);
+      const startedRunId = (yield* orchestrator.getThreadProjection(threadId)).runs[0]?.id;
+
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "agent",
+        creationSource: "mcp",
+        commandId: CommandId.make("deadline-active-run-second-peer-message"),
+        threadId,
+        messageId: MessageId.make("deadline-active-run-second-peer-message"),
+        text: "A second peer request.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "queue_after_active" },
+      });
+
+      assert.equal(yield* orchestrator.promoteExpiredSnoozes, 0);
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.deepEqual(
+        projection.runs.map((run) => ({ id: run.id, status: run.status })),
+        [
+          { id: startedRunId!, status: "starting" },
+          { id: projection.runs[1]!.id, status: "queued" },
+        ],
+      );
+    }),
+  );
+
+  it.effect("does not restart a run the startup recovery already promoted", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId } = yield* seedParkedThread("deadline-restart");
+      yield* TestClock.adjust("6 minutes");
+
+      // A restart after the deadline promotes through the existing recovery
+      // path; the sweep that follows must find nothing left to do.
+      assert.equal(yield* orchestrator.resumeQueuedRuns, 1);
+      const recovered = yield* orchestrator.getThreadSnapshot(threadId);
+      assert.deepEqual(
+        recovered.projection.runs.map((run) => run.status),
+        ["starting"],
+      );
+
+      assert.equal(yield* orchestrator.promoteExpiredSnoozes, 0);
+      const swept = yield* orchestrator.getThreadSnapshot(threadId);
+      // No second start: the thread wrote no further events.
+      assert.equal(swept.snapshotSequence, recovered.snapshotSequence);
+    }),
+  );
+});
+
 it.layer(SharedApplicationDataPlaneTestLayer)("visited projection", (it) => {
   it.effect("carries the visited watermark through the V2 shell projection", () =>
     Effect.gen(function* () {

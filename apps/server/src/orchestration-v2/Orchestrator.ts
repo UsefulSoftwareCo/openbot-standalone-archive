@@ -184,6 +184,8 @@ export interface OrchestratorV2DispatchResult {
 
 export interface OrchestratorV2Shape {
   readonly resumeQueuedRuns: Effect.Effect<number, OrchestratorV2Error>;
+  /** Starts runs an expired snooze is still parking. Returns how many threads started one. */
+  readonly promoteExpiredSnoozes: Effect.Effect<number, OrchestratorV2Error>;
   readonly dispatch: (
     command: OrchestrationV2Command,
   ) => Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error>;
@@ -1081,40 +1083,77 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
     });
 
-  const resumeQueuedRuns = Effect.gen(function* () {
-    const threadIds = yield* projectionStore.getRecoveryThreadIds("queued-runs");
-    let resumed = 0;
-    for (const threadId of threadIds) {
-      const resumedThread = yield* Effect.gen(function* () {
-        const projection = yield* projectionStore.getThreadProjection(threadId);
-        if (projection.runs.some(isBlockingRun) || nextQueuedRun(projection) === undefined) {
-          return false;
+  /**
+   * Start one queued run on every idle thread `accept` selects. The filter only
+   * narrows which parked threads a pass looks at; `startNextQueuedRun` still
+   * owns the real admission rules (snooze, blocking runs, archival) under the
+   * thread lock, so two overlapping passes can never double-start a run.
+   */
+  const startParkedQueuedRuns = (options: {
+    readonly accept: (thread: OrchestrationV2AppThread, now: DateTime.Utc) => boolean;
+    readonly commandId: string;
+    readonly failureMessage: string;
+  }) =>
+    Effect.gen(function* () {
+      const threadIds = yield* projectionStore.getRecoveryThreadIds("queued-runs");
+      let started = 0;
+      for (const threadId of threadIds) {
+        const startedThread = yield* Effect.gen(function* () {
+          const projection = yield* projectionStore.getThreadProjection(threadId);
+          if (projection.runs.some(isBlockingRun) || nextQueuedRun(projection) === undefined) {
+            return false;
+          }
+          if (!options.accept(projection.thread, yield* DateTime.now)) {
+            return false;
+          }
+          yield* threadDispatch.withLock(threadId, startNextQueuedRun(threadId));
+          return true;
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning(options.failureMessage, {
+              threadId,
+              cause,
+            }).pipe(Effect.as(false)),
+          ),
+        );
+        if (startedThread) {
+          started += 1;
         }
-        yield* threadDispatch.withLock(threadId, startNextQueuedRun(threadId));
-        return true;
-      }).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("Failed to resume queued V2 run after recovery", {
-            threadId,
-            cause,
-          }).pipe(Effect.as(false)),
-        ),
-      );
-      if (resumedThread) {
-        resumed += 1;
       }
-    }
-    return resumed;
-  }).pipe(
-    Effect.mapError(
-      (cause) =>
-        new OrchestratorDispatchError({
-          commandId: CommandId.make("command:system:resume-queued-runs"),
-          commandType: "message.dispatch",
-          cause,
-        }),
-    ),
-  );
+      return started;
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OrchestratorDispatchError({
+            commandId: CommandId.make(options.commandId),
+            commandType: "message.dispatch",
+            cause,
+          }),
+      ),
+    );
+
+  const resumeQueuedRuns = startParkedQueuedRuns({
+    accept: () => true,
+    commandId: "command:system:resume-queued-runs",
+    failureMessage: "Failed to resume queued V2 run after recovery",
+  });
+
+  /**
+   * Release the runs an expired snooze is still parking. A wake is derived from
+   * `snoozedUntil` rather than emitted (see `threadIsSnoozed`), so nothing fires
+   * when the deadline passes on a server nobody is watching, and a queued
+   * agent-initiated message — an OpenBot peer request, say — would wait for the
+   * next client action, message, or restart. The host's periodic sweep calls
+   * this instead (see ThreadSettlementService). Deliberately no synthetic
+   * `thread.unsnooze`: that clears `snoozedUntil`/`snoozedAt`, and both clients
+   * and server read those fields to tell a thread that woke on its own from one
+   * the user woke by hand.
+   */
+  const promoteExpiredSnoozes = startParkedQueuedRuns({
+    accept: (thread, now) => thread.snoozedUntil != null && !threadIsSnoozed(thread, now),
+    commandId: "command:system:promote-expired-snoozes",
+    failureMessage: "Failed to promote a queued V2 run after its snooze expired",
+  });
 
   const dispatchDelegatedTaskCompletionDeliveryResolution = (
     command: Extract<
@@ -7783,6 +7822,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   return OrchestratorV2.of({
     resumeQueuedRuns,
+    promoteExpiredSnoozes,
     dispatch: dispatchWithReceipt,
     getThreadProjection: (threadId) =>
       projectionStore
@@ -7880,6 +7920,13 @@ export const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(
     resumeQueuedRuns: Effect.fail(
       new OrchestratorDispatchError({
         commandId: CommandId.make("command:system:resume-queued-runs"),
+        commandType: "message.dispatch",
+        cause: "Orchestration V2 live runtime is not configured.",
+      }),
+    ),
+    promoteExpiredSnoozes: Effect.fail(
+      new OrchestratorDispatchError({
+        commandId: CommandId.make("command:system:promote-expired-snoozes"),
         commandType: "message.dispatch",
         cause: "Orchestration V2 live runtime is not configured.",
       }),

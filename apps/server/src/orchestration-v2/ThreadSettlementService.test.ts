@@ -384,6 +384,7 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
   >([]);
   const summaryRecovery = yield* Ref.make<ReadonlyArray<boolean | undefined>>([]);
   const invalidatedCwds = yield* Ref.make<ReadonlyArray<string>>([]);
+  const snoozePromotions = yield* Ref.make(0);
 
   const updateSettings = (patch: ServerSettingsPatch) =>
     Effect.gen(function* () {
@@ -451,6 +452,9 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
     }),
     Layer.mock(OrchestratorV2)({
       dispatch,
+      promoteExpiredSnoozes: Ref.updateAndGet(snoozePromotions, (count) => count + 1).pipe(
+        Effect.as(0),
+      ),
     }),
     Layer.mock(GitManager)({
       branchPullRequest,
@@ -480,6 +484,7 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
     summaryCalls,
     summaryRecovery,
     invalidatedCwds,
+    snoozePromotions,
     updateSettings,
     publishMerge: PubSub.publish(mergedPullRequests, {
       projectId: PROJECT_ID,
@@ -695,6 +700,41 @@ describe("ThreadSettlementServiceV2 worker", () => {
               .toSorted((left, right) => left - right),
             [42, 99, 99],
           );
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect("promotes expired snoozes every tick even with automatic settlement off", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const fixture = yield* makeHarness({
+          // A snooze wake is derived, so the host clock is the only thing that
+          // can release a parked run. The shelf settings must not gate it.
+          settings: {
+            ...DEFAULT_SERVER_SETTINGS,
+            sidebarAutoSettleAfterDays: null,
+            sidebarAutoSettleOnMerge: false,
+          },
+          snapshot: makeSnapshot([
+            makeThread("recently-active", {
+              latestUserMessageAt: DateTime.makeUnsafe("2026-08-27T00:00:00.000Z"),
+            }),
+          ]),
+        });
+
+        yield* Effect.gen(function* () {
+          const reactor = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          yield* startHarness(reactor, fixture.activation, fixture.snapshotReads);
+          expect(yield* Ref.get(fixture.snoozePromotions)).toBe(1);
+          assert.deepStrictEqual(yield* Ref.get(fixture.commands), []);
+
+          // The wake latency is one sweep interval.
+          yield* TestClock.adjust("1 minute");
+          yield* Queue.take(fixture.snapshotReads);
+          yield* reactor.drain;
+          expect(yield* Ref.get(fixture.snoozePromotions)).toBe(2);
         }).pipe(Effect.provide(fixture.layer));
       }),
     ),
