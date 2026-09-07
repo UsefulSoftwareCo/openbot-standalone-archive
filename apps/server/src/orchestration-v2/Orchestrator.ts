@@ -273,6 +273,7 @@ function commandThreadId(command: OrchestrationV2Command): ThreadId {
     case "queued-run.reorder":
     case "queued-run.cancel":
     case "queued-run.edit":
+    case "runtime-request.create":
     case "runtime-request.respond":
     case "checkpoint.rollback":
     case "provider.switch":
@@ -5112,6 +5113,125 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  /**
+   * Records an app-owned question against a thread's active run. This writes
+   * exactly the artifacts a provider adapter writes for a message-mode
+   * question (waiting node, pending `user_input` request with
+   * `responseCapability: "message"`, and the `user_input_request` turn item
+   * that carries the questions), so the pending-request derivation, the
+   * question UI, and `runtime-request.respond`'s message-mode branch all work
+   * unchanged. The node does not count for the run, so the run still ends on
+   * its own and the request stays answerable afterwards.
+   */
+  const dispatchRuntimeRequestCreate = Effect.fn("orchestrationV2.dispatch.runtimeRequestCreate")(
+    function* (
+      command: Extract<OrchestrationV2Command, { readonly type: "runtime-request.create" }>,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    ) {
+      const projection = yield* projectionStore
+        .getThreadProjection(command.threadId)
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      if (projection.runtimeRequests.some((request) => request.id === command.requestId)) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Runtime request ${command.requestId} already exists.`,
+        });
+      }
+      const run = projection.runs
+        .filter(isBlockingRun)
+        .toSorted((left, right) => right.ordinal - left.ordinal)[0];
+      if (run === undefined || run.rootNodeId === null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} has no active run to attach a question to.`,
+        });
+      }
+      const now = yield* DateTime.now;
+      const providerTurn = providerTurnForRun(projection, run);
+      const nodeId = idAllocator.derive.approvalNode({ requestId: command.requestId });
+      const node: OrchestrationV2ExecutionNode = {
+        id: nodeId,
+        threadId: command.threadId,
+        runId: run.id,
+        parentNodeId: run.rootNodeId,
+        rootNodeId: run.rootNodeId,
+        kind: "user_input_request",
+        status: "waiting",
+        countsForRun: false,
+        providerThreadId: run.providerThreadId,
+        providerTurnId: providerTurn?.id ?? null,
+        nativeItemRef: null,
+        runtimeRequestId: command.requestId,
+        checkpointScopeId: null,
+        startedAt: now,
+        completedAt: null,
+      };
+      const emitEvent = emit(events, command);
+      yield* emitEvent({
+        type: "node.updated",
+        threadId: command.threadId,
+        runId: run.id,
+        nodeId,
+        providerInstanceId: run.providerInstanceId,
+        occurredAt: now,
+        payload: node,
+      });
+      yield* emitEvent({
+        type: "runtime-request.updated",
+        threadId: command.threadId,
+        runId: run.id,
+        nodeId,
+        providerInstanceId: run.providerInstanceId,
+        occurredAt: now,
+        payload: {
+          id: command.requestId,
+          nodeId,
+          providerTurnId: providerTurn?.id ?? null,
+          nativeRequestRef: null,
+          kind: command.kind,
+          status: "pending",
+          responseCapability: { type: "message" },
+          createdAt: now,
+          resolvedAt: null,
+        },
+      });
+      yield* emitEvent({
+        type: "turn-item.updated",
+        threadId: command.threadId,
+        runId: run.id,
+        nodeId,
+        providerInstanceId: run.providerInstanceId,
+        occurredAt: now,
+        payload: {
+          id: idAllocator.derive.approvalTurnItem({ requestId: command.requestId }),
+          threadId: command.threadId,
+          runId: run.id,
+          nodeId,
+          providerThreadId: run.providerThreadId,
+          providerTurnId: providerTurn?.id ?? null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: nextTurnItemOrdinal(projection),
+          status: "waiting",
+          title: null,
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+          type: "user_input_request",
+          requestId: command.requestId,
+          questions: command.questions,
+          responseMode: command.responseMode,
+        },
+      });
+    },
+  );
+
   const dispatchRuntimeRequestRespond = (
     command: Extract<OrchestrationV2Command, { readonly type: "runtime-request.respond" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -7191,6 +7311,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "prepared-run.fail":
         yield* dispatchPreparedRunFail(command, events);
+        break;
+      case "runtime-request.create":
+        yield* dispatchRuntimeRequestCreate(command, events);
         break;
       case "runtime-request.respond":
         yield* dispatchRuntimeRequestRespond(command, events, effects);

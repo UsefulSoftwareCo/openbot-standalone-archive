@@ -2283,6 +2283,20 @@ export const OrchestrationV2Command = Schema.Union([
     decision: Schema.optional(ProviderApprovalDecision),
     answers: Schema.optional(ProviderUserInputAnswers),
   }),
+  // An app-owned question on the calling thread's active run, for agents whose
+  // provider question tool is unavailable. Message mode only: the request
+  // outlives the run and its answer comes back as an ordinary user message,
+  // which is what `runtime-request.respond` already does for Codex's async
+  // questions. The caller supplies `requestId` so a retry is a no-op.
+  Schema.Struct({
+    type: Schema.Literal("runtime-request.create"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    requestId: RuntimeRequestId,
+    kind: Schema.Literal("user_input"),
+    responseMode: Schema.Literal("message"),
+    questions: Schema.Array(OrchestrationV2UserInputQuestion).check(Schema.isMinLength(1)),
+  }),
   Schema.Struct({
     type: Schema.Literal("checkpoint.rollback"),
     commandId: CommandId,
