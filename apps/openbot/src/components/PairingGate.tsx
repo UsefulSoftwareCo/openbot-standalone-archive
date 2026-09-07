@@ -7,8 +7,8 @@ export function PairingGate({ errorMessage }: { readonly errorMessage: string | 
         </p>
         <h1 className="mt-2 font-semibold text-xl tracking-tight">Pair this browser</h1>
         <p className="mt-2 text-muted-foreground text-sm leading-relaxed">
-          Open the pairing link printed by the T3 Code server on this host. It signs this browser in
-          once; after that the channel view loads directly.
+          Open the pairing link the OpenBot host printed when it started. It signs this browser in
+          once; after that your chats load directly.
         </p>
         {errorMessage !== null && (
           <p className="mt-3 text-error-foreground text-sm">{errorMessage}</p>

@@ -217,10 +217,10 @@ export function App() {
         {environmentId === null ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground text-sm">
             <Spinner className="size-5" />
-            <p>Connecting to T3 Code…</p>
+            <p>Connecting to the OpenBot host…</p>
             <p className="max-w-sm text-center text-xs">
-              If this does not resolve, pair this browser with the server first by opening the T3
-              Code pairing link on this host.
+              If this does not resolve, pair this browser first by opening the pairing link the host
+              printed when it started.
             </p>
           </div>
         ) : page?.type === "project-settings" ? (
