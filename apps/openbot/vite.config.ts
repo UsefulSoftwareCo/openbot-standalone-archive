@@ -33,6 +33,12 @@ export default defineConfig(() => ({
     tsconfigPaths: true,
     dedupe: ["react", "react-dom"],
   },
+  // Project icons load one Phosphor module at a time through import.meta.glob.
+  // Left to the dep optimizer, each first use of an icon would be a newly
+  // discovered dependency and trigger a re-optimize plus page reload in dev.
+  optimizeDeps: {
+    exclude: ["@phosphor-icons/react"],
+  },
   server: {
     host: "localhost",
     port,

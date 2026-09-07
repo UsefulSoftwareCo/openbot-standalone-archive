@@ -1,43 +1,37 @@
-// The full Phosphor icon set. `import * as Phosphor from "@phosphor-icons/react"`
-// defeats tree-shaking (it pulls in all ~1,500 icon components), so this module
-// must only ever be reached through a dynamic `await import("./iconCatalog")`
-// from a chunk that already needs the whole catalog (the icon picker). Never
-// import it statically from a component that renders on every page, such as a
-// sidebar row — use `ProjectIcon` for that instead.
-import * as Phosphor from "@phosphor-icons/react";
-import type { Icon } from "@phosphor-icons/react";
+// The searchable list of every Phosphor icon, for the icon picker.
+//
+// Names only: `import * as Phosphor from "@phosphor-icons/react"` would pull in
+// all ~1,500 icon components (~5 MB), and importing the components one chunk at
+// a time would make opening the picker fetch every chunk at once. The picker
+// renders the ~120 icons it shows through `ProjectIcon`'s per-icon loader
+// instead, so this module carries no icon code at all.
+//
+// Keep the picker as its only importer. It reads the whole per-icon module
+// table, which a project row does not need, and the picker itself is reached
+// through `lazy(() => import("./ProjectIconPicker"))`.
+import { ALIAS_ICON_MODULES, BUNDLED_ICON_NAMES } from "./projectIconLoader";
+import { ICON_MODULE_LOADERS } from "./projectIconModules";
 
 export interface IconCatalogEntry {
   /** Contract name: the Phosphor export name without the `Icon` suffix. */
   readonly name: string;
   /** Human-readable, space-separated, for search and a11y labels. */
   readonly label: string;
-  readonly component: Icon;
 }
 
-// Non-component exports from the package root, kept out of the catalog even
-// though none of them happen to end in "Icon" today.
-const NON_ICON_EXPORTS = new Set(["IconContext", "IconBase", "SSR"]);
-
-function toEntry(name: string, component: Icon): IconCatalogEntry {
-  return {
-    name: name.replace(/Icon$/, ""),
-    label: name.replace(/Icon$/, "").replace(/([a-z0-9])([A-Z])/g, "$1 $2"),
-    component,
-  };
+function toEntry(name: string): IconCatalogEntry {
+  return { name, label: name.replace(/([a-z0-9])([A-Z])/g, "$1 $2") };
 }
 
-const catalog: IconCatalogEntry[] = [];
-for (const [name, value] of Object.entries(Phosphor)) {
-  if (NON_ICON_EXPORTS.has(name)) continue;
-  if (!name.endsWith("Icon")) continue;
-  if (/Sparkle/.test(name)) continue;
-  catalog.push(toEntry(name, value as Icon));
-}
-catalog.sort((a, b) => a.name.localeCompare(b.name));
+// Every icon with a module of its own, plus the one bundled with the app and
+// the deprecated v1 aliases, which have no module but are still valid names.
+const names = new Set([
+  ...ICON_MODULE_LOADERS.keys(),
+  ...BUNDLED_ICON_NAMES,
+  ...Object.keys(ALIAS_ICON_MODULES),
+]);
 
-export const ICON_CATALOG: ReadonlyArray<IconCatalogEntry> = catalog;
-
-export const ICON_CATALOG_BY_NAME: ReadonlyMap<string, Icon> = new Map(
-  catalog.map((entry) => [entry.name, entry.component]),
-);
+export const ICON_CATALOG: ReadonlyArray<IconCatalogEntry> = [...names]
+  .filter((name) => !name.includes("Sparkle"))
+  .sort((a, b) => a.localeCompare(b))
+  .map(toEntry);

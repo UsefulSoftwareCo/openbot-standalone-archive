@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CheckIcon, FolderIcon } from "@phosphor-icons/react";
+import { CheckIcon } from "@phosphor-icons/react";
 import type { OpenbotProjectIcon, OpenbotProjectIconColor } from "@t3tools/contracts";
 import { Button } from "@t3tools/ui/button";
 import { cn } from "@t3tools/ui/cn";
@@ -8,9 +8,11 @@ import { Input } from "@t3tools/ui/input";
 
 // Statically imported alongside the picker on purpose: this dialog is only
 // ever reached through `lazy(() => import("./ProjectIconPicker"))`, so the
-// full catalog belongs in the same chunk rather than a second lazy hop.
-import { ICON_CATALOG, ICON_CATALOG_BY_NAME } from "./iconCatalog";
-import { PROJECT_ICON_COLORS } from "./ProjectIcon";
+// name catalog belongs in the same chunk rather than a second lazy hop. The
+// glyphs themselves still arrive one small chunk at a time, through
+// `ProjectIcon`, so opening the picker does not download the whole icon set.
+import { ICON_CATALOG } from "./iconCatalog";
+import { PROJECT_ICON_COLORS, ProjectIcon } from "./ProjectIcon";
 
 const ICON_PAGE_SIZE = 120;
 
@@ -60,7 +62,6 @@ export default function ProjectIconPicker({
     ? ICON_CATALOG.filter((icon) => normalize(icon.label).includes(normalize(query)))
     : ICON_CATALOG;
   const visible = matches.slice(0, limit);
-  const SelectedIcon = ICON_CATALOG_BY_NAME.get(value.name) ?? FolderIcon;
 
   return (
     <Dialog
@@ -75,7 +76,7 @@ export default function ProjectIconPicker({
             className="grid size-12 shrink-0 place-items-center rounded-[10px] bg-muted"
             style={{ color: PROJECT_ICON_COLORS[value.color] }}
           >
-            <SelectedIcon aria-hidden size={30} weight="fill" />
+            <ProjectIcon icon={value} size={30} />
           </span>
           <div>
             <DialogTitle>Project icon</DialogTitle>
@@ -139,7 +140,6 @@ export default function ProjectIconPicker({
           <div className="h-[min(320px,40dvh)] overflow-y-auto">
             <div className="grid grid-cols-8 gap-1 p-0.5">
               {visible.map((icon) => {
-                const IconComponent = icon.component;
                 const pressed = value.name === icon.name;
                 return (
                   <button
@@ -155,7 +155,7 @@ export default function ProjectIconPicker({
                     style={{ color: PROJECT_ICON_COLORS[value.color] }}
                     type="button"
                   >
-                    <IconComponent aria-hidden size={23} weight="fill" />
+                    <ProjectIcon icon={{ name: icon.name, color: value.color }} size={23} />
                   </button>
                 );
               })}

@@ -1,8 +1,8 @@
-import { useEffect, useSyncExternalStore } from "react";
-import { FolderIcon } from "@phosphor-icons/react";
+import { useEffect, useState } from "react";
+import { FolderIcon, type Icon } from "@phosphor-icons/react";
 import type { OpenbotProjectIcon, OpenbotProjectIconColor } from "@t3tools/contracts";
 
-type IconCatalogModule = typeof import("./iconCatalog");
+import { getLoadedProjectIcon, loadProjectIconComponent } from "./projectIconLoader";
 
 export const PROJECT_ICON_COLORS: Record<OpenbotProjectIconColor, string> = {
   default: "var(--foreground)",
@@ -17,43 +17,40 @@ export const PROJECT_ICON_COLORS: Record<OpenbotProjectIconColor, string> = {
   red: "#e78f8f",
 };
 
-// Module-level cache so the ~1,500-icon catalog chunk is fetched once for the
-// whole app, however many ProjectIcon rows are mounted (sidebar, headers, ...).
-let cachedCatalog: IconCatalogModule | null = null;
-let pendingLoad: Promise<IconCatalogModule> | null = null;
-const listeners = new Set<() => void>();
+/**
+ * Resolves one icon's component, null until its chunk lands. Renders once per
+ * name: a cache hit is read during render, so a remount of an already-seen icon
+ * never flashes the fallback and never schedules an update.
+ */
+function useProjectIconComponent(name: string): Icon | null {
+  const [state, setState] = useState<{ readonly name: string; readonly icon: Icon | null }>(() => ({
+    name,
+    icon: getLoadedProjectIcon(name),
+  }));
 
-/** Preload the icon catalog chunk; safe to call repeatedly. */
-export function preloadIconCatalog(): void {
-  if (pendingLoad) return;
-  pendingLoad = import("./iconCatalog").then((module) => {
-    cachedCatalog = module;
-    for (const listener of listeners) listener();
-    return module;
-  });
-}
+  if (state.name !== name) {
+    setState({ name, icon: getLoadedProjectIcon(name) });
+  }
 
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
-
-function getSnapshot(): IconCatalogModule | null {
-  return cachedCatalog;
-}
-
-/** Hook returning the loaded catalog, or null while it is still loading. */
-export function useIconCatalog(): IconCatalogModule | null {
   useEffect(() => {
-    preloadIconCatalog();
-  }, []);
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+    if (getLoadedProjectIcon(name)) return;
+    let cancelled = false;
+    void loadProjectIconComponent(name).then((icon) => {
+      if (cancelled || !icon) return;
+      setState((current) => (current.name === name ? { name, icon } : current));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [name]);
+
+  return state.name === name ? state.icon : null;
 }
 
 /**
- * Renders a project's icon anywhere in the app. Resolves from the lazily
- * loaded catalog once it lands; until then (and for any unrecognized name)
- * falls back to the plain folder glyph so rows never show a gap.
+ * Renders a project's icon anywhere in the app. Shows the plain folder glyph
+ * while the icon's own module loads, and keeps it for any name that is unknown
+ * or whose chunk fails to arrive, so rows never show a gap.
  */
 export function ProjectIcon({
   icon,
@@ -65,8 +62,7 @@ export function ProjectIcon({
   readonly size?: number;
   readonly className?: string;
 }) {
-  const catalog = useIconCatalog();
-  const Resolved = catalog?.ICON_CATALOG_BY_NAME.get(icon.name) ?? FolderIcon;
+  const Resolved = useProjectIconComponent(icon.name) ?? FolderIcon;
   return (
     <Resolved
       aria-hidden
