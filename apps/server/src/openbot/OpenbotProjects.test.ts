@@ -245,6 +245,16 @@ it.layer(TestLayer)("OpenBot projects, child chats, and knowledge", (it) => {
       assert.equal(message?.peerMessage?.requestId, started.requestId);
       assert.equal(projection.runs.length, 1, "the task starts exactly one run");
 
+      // The child's transcript shows who asked and what was asked, never the
+      // internal routing envelope.
+      const childView = yield* service.getView(started.channel.id);
+      assert.equal(childView.messages.length, 1);
+      assert.equal(childView.messages[0]?.origin?.kind, "peer_request");
+      assert.equal(childView.messages[0]?.origin?.sourceName, "Planner");
+      assert.equal(childView.messages[0]?.origin?.sourceChannelId, parent.id);
+      assert.equal(childView.messages[0]?.displayText, "Write the launch memo.");
+      assert.notInclude(childView.messages[0]?.displayText ?? "", started.requestId);
+
       const replay = yield* service.startThread(input);
       assert.isFalse(replay.created);
       assert.equal(replay.channel.id, started.channel.id);
@@ -268,6 +278,10 @@ it.layer(TestLayer)("OpenBot projects, child chats, and knowledge", (it) => {
       const parentProjection = yield* orchestrator.getThreadProjection(parent.threadId);
       assert.equal(parentProjection.messages[0]?.peerMessage?.type, "reply");
       assert.include(parentProjection.messages[0]?.text ?? "", "Memo drafted.");
+      const parentView = yield* service.getView(parent.id);
+      assert.equal(parentView.messages[0]?.origin?.kind, "peer_reply");
+      assert.equal(parentView.messages[0]?.origin?.sourceName, "Draft the memo");
+      assert.equal(parentView.messages[0]?.displayText, "Memo drafted.");
 
       const unrelated = yield* service.create({ name: "Elsewhere" });
       const refused = yield* service
@@ -313,6 +327,14 @@ it.layer(TestLayer)("OpenBot projects, child chats, and knowledge", (it) => {
       assert.equal(alphaProjection.messages[0]?.peerMessage?.type, "reply");
       assert.equal(alphaProjection.messages[0]?.peerMessage?.requestId, request.requestId);
       assert.include(alphaProjection.messages[0]?.text ?? "", "Already paid.");
+      const alphaView = yield* service.getView(alphaMain.id);
+      assert.equal(alphaView.messages[0]?.origin?.kind, "peer_reply");
+      assert.equal(
+        alphaView.messages[0]?.origin?.sourceName,
+        `Beta · ${betaMain.name}`,
+        "a chat in another project is qualified by that project",
+      );
+      assert.equal(alphaView.messages[0]?.displayText, "Already paid.");
 
       const child = yield* service.create({ name: "Beta child", parentChannelId: betaMain.id });
       const rejected = yield* service

@@ -9,10 +9,11 @@ import type {
 import { cn } from "@t3tools/ui/cn";
 import { ScrollArea } from "@t3tools/ui/scroll-area";
 import { Spinner } from "@t3tools/ui/spinner";
-import { AlertCircle, CornerUpLeft, MessageSquare } from "lucide-react";
+import { AlertCircle, ArrowRightLeft, CornerUpLeft, MessageSquare } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ChatAvatar } from "./ChatProfileFields";
+import { incomingPresentation, resolveReplyPreview } from "./ChannelView.logic";
 import { Attachment } from "./Attachment";
 import { Markdown } from "./Markdown";
 
@@ -49,27 +50,6 @@ function formatTime(iso: string): string {
 /** DOM id of a timeline row so reply references can jump to it. */
 function rowId(target: OpenbotReplyTarget): string {
   return target.type === "message" ? `msg-${target.messageId}` : `msg-${target.deliveryId}`;
-}
-
-const REPLY_PREVIEW_LENGTH = 90;
-
-function clipPreview(text: string): string {
-  const collapsed = text.replace(/\s+/g, " ").trim();
-  return collapsed.length > REPLY_PREVIEW_LENGTH
-    ? `${collapsed.slice(0, REPLY_PREVIEW_LENGTH).trimEnd()}…`
-    : collapsed;
-}
-
-function resolveReplyPreview(
-  view: ChannelViewData,
-  target: OpenbotReplyTarget,
-): { readonly author: string; readonly text: string } | null {
-  if (target.type === "message") {
-    const message = view.messages.find((candidate) => candidate.id === target.messageId);
-    return message === undefined ? null : { author: "You", text: clipPreview(message.text) };
-  }
-  const delivery = view.deliveries.find((candidate) => candidate.id === target.deliveryId);
-  return delivery === undefined ? null : { author: "OpenBot", text: clipPreview(delivery.text) };
 }
 
 /** Compact reference above a reply, in the style of a chat app's quoted reply. */
@@ -118,7 +98,8 @@ function MessageFailure({
 }: {
   readonly message: OpenbotIncomingMessage;
   readonly hasPendingQuestion: boolean;
-  readonly onContinue: (message: OpenbotIncomingMessage) => void;
+  /** Omitted for peer rows: resending another chat's envelope as the person is nonsense. */
+  readonly onContinue?: (message: OpenbotIncomingMessage) => void;
 }) {
   if (message.state === "failed") {
     return (
@@ -127,13 +108,15 @@ function MessageFailure({
         {message.error !== null && (
           <span className="max-w-xs truncate text-muted-foreground">· {message.error}</span>
         )}
-        <button
-          type="button"
-          className="ml-1 underline underline-offset-2 hover:text-foreground"
-          onClick={() => onContinue(message)}
-        >
-          Retry
-        </button>
+        {onContinue !== undefined && (
+          <button
+            type="button"
+            className="ml-1 underline underline-offset-2 hover:text-foreground"
+            onClick={() => onContinue(message)}
+          >
+            Retry
+          </button>
+        )}
       </span>
     );
   }
@@ -141,13 +124,15 @@ function MessageFailure({
     return (
       <span className="inline-flex items-center gap-1 text-muted-foreground">
         <AlertCircle className="size-3" /> No reply
-        <button
-          type="button"
-          className="ml-1 underline underline-offset-2 hover:text-foreground"
-          onClick={() => onContinue(message)}
-        >
-          Ask again
-        </button>
+        {onContinue !== undefined && (
+          <button
+            type="button"
+            className="ml-1 underline underline-offset-2 hover:text-foreground"
+            onClick={() => onContinue(message)}
+          >
+            Ask again
+          </button>
+        )}
       </span>
     );
   }
@@ -234,6 +219,45 @@ export function ChannelView({
             timeline.map((entry) => {
               if (entry.kind === "incoming") {
                 const id = rowId({ type: "message", messageId: entry.message.id });
+                const presentation = incomingPresentation(entry.message);
+                if (presentation.kind === "peer") {
+                  // Another chat talking, not the person: incoming side, named
+                  // source, and only the task or result it actually carries.
+                  return (
+                    <article
+                      key={`in:${entry.message.id}`}
+                      id={id}
+                      className={cn(
+                        "flex flex-col items-start gap-1 rounded-lg transition-colors",
+                        highlighted === id && "bg-accent/60",
+                      )}
+                    >
+                      <div className="flex flex-wrap items-center gap-2 pl-1 text-[11px] text-muted-foreground">
+                        <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 font-medium text-foreground">
+                          <ArrowRightLeft className="size-3" />
+                          {presentation.label}
+                        </span>
+                        <MessageFailure
+                          message={entry.message}
+                          hasPendingQuestion={hasPendingQuestion}
+                        />
+                        <time dateTime={entry.message.createdAt}>
+                          {formatTime(entry.message.createdAt)}
+                        </time>
+                      </div>
+                      <div className="min-w-0 max-w-full px-1 sm:max-w-[85%]">
+                        <Markdown text={entry.message.displayText} environmentId={environmentId} />
+                        {entry.message.attachments.map((attachment) => (
+                          <Attachment
+                            key={attachment.id}
+                            attachment={attachment}
+                            environmentId={environmentId}
+                          />
+                        ))}
+                      </div>
+                    </article>
+                  );
+                }
                 return (
                   <article
                     key={`in:${entry.message.id}`}
@@ -244,7 +268,7 @@ export function ChannelView({
                     )}
                   >
                     <UserMessageBubble className="min-w-0 max-w-[90%] sm:max-w-[80%]">
-                      <Markdown text={entry.message.text} environmentId={environmentId} />
+                      <Markdown text={entry.message.displayText} environmentId={environmentId} />
                       {entry.message.attachments.map((attachment) => (
                         <Attachment
                           key={attachment.id}

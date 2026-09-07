@@ -241,11 +241,31 @@ export type OpenbotMessageState = typeof OpenbotMessageState.Type;
 export const OpenbotMessageOutcome = Schema.Literals(["replied", "silent", "no_reply", "failed"]);
 export type OpenbotMessageOutcome = typeof OpenbotMessageOutcome.Type;
 
+/**
+ * Where an incoming message came from when the person did not write it. A peer
+ * request or reply is a real user-role message on the thread, so a client needs
+ * this to attribute it to the chat that sent it instead of rendering it as the
+ * person's own text.
+ */
+export const OpenbotMessageOrigin = Schema.Struct({
+  kind: Schema.Literals(["peer_request", "peer_reply"]),
+  /** Null when the source chat is gone or is not an OpenBot chat. */
+  sourceChannelId: Schema.NullOr(OpenbotChannelId),
+  /** Display name of the source chat, qualified by its project when it differs. */
+  sourceName: Schema.String,
+  requestId: MessageId,
+});
+export type OpenbotMessageOrigin = typeof OpenbotMessageOrigin.Type;
+
 export const OpenbotIncomingMessage = Schema.Struct({
   id: MessageId,
   runId: Schema.NullOr(RunId),
   runStatus: Schema.NullOr(OrchestrationV2RunStatus),
+  /** Exactly what the agent's prompt carries, routing header included. */
   text: Schema.String,
+  /** What a client shows: the peer routing header removed, otherwise `text`. */
+  displayText: Schema.String,
+  origin: Schema.optional(OpenbotMessageOrigin),
   attachments: Schema.Array(ChatAttachment),
   createdAt: Schema.String,
   state: OpenbotMessageState,

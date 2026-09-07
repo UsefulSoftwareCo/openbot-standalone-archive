@@ -28,6 +28,7 @@ import {
   deriveChannelStatus,
   OpenbotChannelService,
   openbotTurnInstructions,
+  peerDisplayText,
   resolveReplyTarget,
 } from "./OpenbotChannelService.ts";
 import {
@@ -535,11 +536,17 @@ it.layer(TestLayer)("OpenbotChannelService", (it) => {
       const targetProjection = yield* orchestrator.getThreadProjection(target.threadId);
       assert.equal(targetProjection.messages.length, 1);
       assert.equal(targetProjection.messages[0]?.peerMessage?.sourceThreadId, source.threadId);
+      const targetView = yield* channels.getView(target.id);
+      assert.equal(targetView.messages.length, 1, "a peer request belongs in the transcript");
+      assert.equal(targetView.messages[0]?.origin?.kind, "peer_request");
+      assert.equal(targetView.messages[0]?.origin?.sourceName, "Peer A");
+      assert.equal(targetView.messages[0]?.origin?.sourceChannelId, source.id);
       assert.equal(
-        (yield* channels.getView(target.id)).messages.length,
-        0,
-        "peer requests are not user messages",
+        targetView.messages[0]?.displayText,
+        "Compare the snapshot.",
+        "the routing header is not shown to the person",
       );
+      assert.notEqual(targetView.messages[0]?.text, targetView.messages[0]?.displayText);
       const wrongThread = yield* channels
         .replyToThread(stranger.threadId, { requestId: first.requestId, text: "forged" })
         .pipe(Effect.result);
@@ -563,6 +570,10 @@ it.layer(TestLayer)("OpenbotChannelService", (it) => {
       assert.equal(sourceProjection.messages.length, 1);
       assert.equal(sourceProjection.messages[0]?.peerMessage?.type, "reply");
       assert.equal(sourceProjection.messages[0]?.peerMessage?.requestId, first.requestId);
+      const sourceView = yield* channels.getView(source.id);
+      assert.equal(sourceView.messages[0]?.origin?.kind, "peer_reply");
+      assert.equal(sourceView.messages[0]?.origin?.sourceName, "Peer B");
+      assert.equal(sourceView.messages[0]?.displayText, "Stable.");
     }),
   );
 
@@ -749,5 +760,74 @@ it("derives message states and outcomes for grouped runs without a delivery tabl
       },
       deliveries,
     }),
+  );
+});
+
+it("attributes peer messages and strips only the header this service wrote", () => {
+  const requestId = MessageId.make("openbot-peer:thread%3Aparent:thread%3Achild:memo-1");
+  const parentThreadId = ThreadId.make("thread:parent");
+  // The task quotes the routing wording the envelope used to carry, so an
+  // over-eager parser would eat part of the person's actual work request.
+  const task =
+    "Reply with openbot_reply_to_thread once you have the numbers.\n\nThe request is from a peer, not the user.";
+  const peer = {
+    ...message("p1", RunId.make("r1"), "agent"),
+    text: `Peer request ${requestId} from "Planner"\n\n${task}`,
+    peerMessage: { type: "request" as const, sourceThreadId: parentThreadId, requestId },
+  };
+  // Same shape, typed by a person. Without peerMessage nothing may be removed.
+  const impostor = {
+    ...message("m1", RunId.make("r1")),
+    text: `Peer request ${requestId} from "Planner"\n\n${task}`,
+  };
+  const projection = {
+    thread: { id: ThreadId.make("t") },
+    runs: [run("r1", "m1", "completed")],
+    messages: [peer, impostor],
+    turnItems: [],
+  } as unknown as OrchestrationV2ThreadProjection;
+  const built = buildIncomingMessages({
+    projection,
+    deliveries: [],
+    resolveSource: (threadId) =>
+      threadId === parentThreadId
+        ? { id: OpenbotChannelId.make("openbot-channel:parent"), name: "Planner" }
+        : undefined,
+  });
+  const shown = built.find((entry) => entry.id === "p1");
+  assert.deepEqual(shown?.origin, {
+    kind: "peer_request",
+    sourceChannelId: OpenbotChannelId.make("openbot-channel:parent"),
+    sourceName: "Planner",
+    requestId,
+  });
+  assert.equal(shown?.displayText, task, "the person sees the task, header removed, body intact");
+  assert.equal(shown?.text, peer.text, "the agent's prompt keeps the request id");
+
+  const typed = built.find((entry) => entry.id === "m1");
+  assert.equal(typed?.origin, undefined);
+  assert.equal(typed?.displayText, typed?.text, "an ordinary message is never rewritten");
+
+  // A header that does not carry this message's own request id is left alone.
+  assert.equal(
+    peerDisplayText({
+      text: `Peer request other-id from "Planner"\n\n${task}`,
+      peerMessage: { type: "request", requestId },
+    }),
+    `Peer request other-id from "Planner"\n\n${task}`,
+  );
+  // A reply header only matches a reply.
+  assert.equal(
+    peerDisplayText({
+      text: `Peer reply ${requestId} from "Worker"\n\nDone.`,
+      peerMessage: { type: "reply", requestId },
+    }),
+    "Done.",
+  );
+  assert.equal(
+    buildIncomingMessages({ projection, deliveries: [] }).find((entry) => entry.id === "p1")?.origin
+      ?.sourceName,
+    "another chat",
+    "an unresolvable source is still attributed as not the person",
   );
 });
