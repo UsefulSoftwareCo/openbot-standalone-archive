@@ -145,6 +145,21 @@ import {
   OpenbotChannelSubscribeInput,
   OpenbotChannelView,
   OpenbotError,
+  OpenbotKnowledge,
+  OpenbotKnowledgeCreateInput,
+  OpenbotKnowledgeDeleteInput,
+  OpenbotKnowledgeGetInput,
+  OpenbotKnowledgeListInput,
+  OpenbotKnowledgeListResult,
+  OpenbotKnowledgeUpdateInput,
+  OpenbotProject,
+  OpenbotProjectCreateInput,
+  OpenbotProjectGetInput,
+  OpenbotProjectListResult,
+  OpenbotProjectUpdateInput,
+  OpenbotRespondInput,
+  OpenbotThreadStartInput,
+  OpenbotThreadStartResult,
 } from "./openbot.ts";
 import {
   ProjectListEntriesError,
@@ -376,6 +391,19 @@ export const WS_METHODS = {
   openbotContextGet: "openbot.context.get",
   openbotContextUpdate: "openbot.context.update",
   openbotChannelSend: "openbot.channel.send",
+  openbotChannelRespond: "openbot.channel.respond",
+  openbotThreadStart: "openbot.thread.start",
+  openbotProjectsList: "openbot.projects.list",
+  openbotProjectsSubscribe: "openbot.projects.subscribe",
+  openbotProjectsCreate: "openbot.projects.create",
+  openbotProjectGet: "openbot.project.get",
+  openbotProjectUpdate: "openbot.project.update",
+  openbotKnowledgeList: "openbot.knowledge.list",
+  openbotKnowledgeSubscribe: "openbot.knowledge.subscribe",
+  openbotKnowledgeGet: "openbot.knowledge.get",
+  openbotKnowledgeCreate: "openbot.knowledge.create",
+  openbotKnowledgeUpdate: "openbot.knowledge.update",
+  openbotKnowledgeDelete: "openbot.knowledge.delete",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -1340,6 +1368,81 @@ export const WsOpenbotChannelSendRpc = Rpc.make(WS_METHODS.openbotChannelSend, {
   error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
 });
 
+/** Answer a pending question or approval on the chat's thread. */
+export const WsOpenbotChannelRespondRpc = Rpc.make(WS_METHODS.openbotChannelRespond, {
+  payload: OpenbotRespondInput,
+  success: Schema.Struct({}),
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+
+/** Create a child chat under a parent and dispatch its first work request. */
+export const WsOpenbotThreadStartRpc = Rpc.make(WS_METHODS.openbotThreadStart, {
+  payload: OpenbotThreadStartInput,
+  success: OpenbotThreadStartResult,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+
+export const WsOpenbotProjectsListRpc = Rpc.make(WS_METHODS.openbotProjectsList, {
+  payload: Schema.Struct({}),
+  success: OpenbotProjectListResult,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+/** Streams the full project list: one snapshot on subscribe, then a fresh list after every change. */
+export const WsOpenbotProjectsSubscribeRpc = Rpc.make(WS_METHODS.openbotProjectsSubscribe, {
+  payload: Schema.Struct({}),
+  success: OpenbotProjectListResult,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+export const WsOpenbotProjectsCreateRpc = Rpc.make(WS_METHODS.openbotProjectsCreate, {
+  payload: OpenbotProjectCreateInput,
+  success: OpenbotProject,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+export const WsOpenbotProjectGetRpc = Rpc.make(WS_METHODS.openbotProjectGet, {
+  payload: OpenbotProjectGetInput,
+  success: OpenbotProject,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+export const WsOpenbotProjectUpdateRpc = Rpc.make(WS_METHODS.openbotProjectUpdate, {
+  payload: OpenbotProjectUpdateInput,
+  success: OpenbotProject,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+
+export const WsOpenbotKnowledgeListRpc = Rpc.make(WS_METHODS.openbotKnowledgeList, {
+  payload: OpenbotKnowledgeListInput,
+  success: OpenbotKnowledgeListResult,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+/** Streams knowledge entries: one snapshot on subscribe, then a fresh list after every change. */
+export const WsOpenbotKnowledgeSubscribeRpc = Rpc.make(WS_METHODS.openbotKnowledgeSubscribe, {
+  payload: OpenbotKnowledgeListInput,
+  success: OpenbotKnowledgeListResult,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+export const WsOpenbotKnowledgeGetRpc = Rpc.make(WS_METHODS.openbotKnowledgeGet, {
+  payload: OpenbotKnowledgeGetInput,
+  success: OpenbotKnowledge,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+export const WsOpenbotKnowledgeCreateRpc = Rpc.make(WS_METHODS.openbotKnowledgeCreate, {
+  payload: OpenbotKnowledgeCreateInput,
+  success: OpenbotKnowledge,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+export const WsOpenbotKnowledgeUpdateRpc = Rpc.make(WS_METHODS.openbotKnowledgeUpdate, {
+  payload: OpenbotKnowledgeUpdateInput,
+  success: OpenbotKnowledge,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+export const WsOpenbotKnowledgeDeleteRpc = Rpc.make(WS_METHODS.openbotKnowledgeDelete, {
+  payload: OpenbotKnowledgeDeleteInput,
+  success: Schema.Struct({}),
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+
 export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
   payload: Schema.Struct({}),
   success: AuthAccessStreamEvent,
@@ -1406,6 +1509,19 @@ export const WsRpcGroup = RpcGroup.make(
   WsOpenbotContextGetRpc,
   WsOpenbotContextUpdateRpc,
   WsOpenbotChannelSendRpc,
+  WsOpenbotChannelRespondRpc,
+  WsOpenbotThreadStartRpc,
+  WsOpenbotProjectsListRpc,
+  WsOpenbotProjectsSubscribeRpc,
+  WsOpenbotProjectsCreateRpc,
+  WsOpenbotProjectGetRpc,
+  WsOpenbotProjectUpdateRpc,
+  WsOpenbotKnowledgeListRpc,
+  WsOpenbotKnowledgeSubscribeRpc,
+  WsOpenbotKnowledgeGetRpc,
+  WsOpenbotKnowledgeCreateRpc,
+  WsOpenbotKnowledgeUpdateRpc,
+  WsOpenbotKnowledgeDeleteRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,
