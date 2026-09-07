@@ -50,5 +50,5 @@ export function resolveReplyPreview(
     };
   }
   const delivery = view.deliveries.find((candidate) => candidate.id === target.deliveryId);
-  return delivery === undefined ? null : { author: "OpenBot", text: clipPreview(delivery.text) };
+  return delivery === undefined ? null : { author: "Assistant", text: clipPreview(delivery.text) };
 }

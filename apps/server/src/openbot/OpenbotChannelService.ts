@@ -760,7 +760,7 @@ export const make = Effect.gen(function* () {
                   new OpenbotError({
                     code: "no_provider_available",
                     message:
-                      "No agent provider is installed and enabled. Set one up in T3 Code first.",
+                      "No agent is available. Install and sign in to a supported agent CLI on this host (for example Codex or Claude Code), then try again.",
                   }),
                 )
               : Effect.succeed(selection);

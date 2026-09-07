@@ -146,8 +146,8 @@ function ChannelActivity({ view }: { readonly view: ChannelViewData }) {
     view.status === "failed"
       ? "The last run failed"
       : view.status === "waiting"
-        ? "OpenBot is waiting for input in T3 Code"
-        : "OpenBot is typing…";
+        ? "Assistant is waiting for your answer"
+        : "Assistant is typing…";
   return (
     <div className="flex h-7 items-center gap-2 px-4 text-muted-foreground text-xs">
       {view.status === "failed" ? (
@@ -306,7 +306,7 @@ export function ChannelView({
                       name={view.channel.name}
                       className="size-5"
                     />
-                    <span className="font-medium text-foreground">{view.channel.name}</span>
+                    <span className="font-medium text-foreground">Assistant</span>
                     <time dateTime={entry.delivery.createdAt}>
                       {formatTime(entry.delivery.createdAt)}
                     </time>

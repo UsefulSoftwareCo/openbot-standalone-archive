@@ -78,7 +78,7 @@ describe("resolveReplyPreview", () => {
   it("reports a missing target instead of guessing", () => {
     assert.equal(resolveReplyPreview(view, { type: "message", messageId: "gone" as never }), null);
     assert.deepEqual(resolveReplyPreview(view, { type: "delivery", deliveryId: "d1" as never }), {
-      author: "OpenBot",
+      author: "Assistant",
       text: "On it.",
     });
   });
