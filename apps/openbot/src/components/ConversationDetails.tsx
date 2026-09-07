@@ -179,7 +179,7 @@ function RoutineEditor({
   const [cronTimeZone, setCronTimeZone] = useState(
     task?.schedule.type === "cron"
       ? task.schedule.timeZone
-      : Intl.DateTimeFormat().resolvedOptions().timeZone,
+      : new Intl.DateTimeFormat().resolvedOptions().timeZone,
   );
   const [time, setTime] = useState(
     task?.schedule.type === "fixed_time" ? task.schedule.timeOfDay : "08:00",
