@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { autoRefreshActive, displaySummary } from "./ComputerPanel";
+import type { OpenbotComputerStatus } from "@t3tools/contracts";
+
+import { autoRefreshActive, computerStateView, displaySummary } from "./ComputerPanel";
 
 describe("displaySummary", () => {
   it("names the main display's resolution", () => {
@@ -36,5 +38,63 @@ describe("autoRefreshActive", () => {
     expect(autoRefreshActive({ enabled: true, showing: true, visibility: "hidden" })).toBe(false);
     expect(autoRefreshActive({ enabled: true, showing: false, visibility: "visible" })).toBe(false);
     expect(autoRefreshActive({ enabled: false, showing: true, visibility: "visible" })).toBe(false);
+  });
+});
+
+function status(overrides: Partial<OpenbotComputerStatus>): OpenbotComputerStatus {
+  return {
+    host: { label: "Studio", platform: "darwin" },
+    session: "signed-in-desktop",
+    availability: "unknown",
+    detail: null,
+    displays: null,
+    lastCaptureAt: null,
+    lastError: null,
+    checkedAt: "2026-09-07T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
+describe("computerStateView", () => {
+  it("never reads as ready before a capture has succeeded", () => {
+    const view = computerStateView({ status: status({}), statusError: null });
+    expect(view.label).toBe("Not checked");
+    expect(view.canCapture).toBe(true);
+  });
+
+  it("reads as ready once the server has a real capture behind it", () => {
+    const view = computerStateView({
+      status: status({ availability: "ready", lastCaptureAt: "2026-09-07T09:59:00.000Z" }),
+      statusError: null,
+    });
+    expect(view.label).toBe("Ready");
+    expect(view.dotClass).toBe("bg-success");
+    expect(view.canCapture).toBe(true);
+  });
+
+  it("offers a retry after a capture failed, but not when the host simply cannot", () => {
+    const refused = computerStateView({
+      status: status({ availability: "unavailable", lastError: "could not create image" }),
+      statusError: null,
+    });
+    expect(refused.label).toBe("Unavailable");
+    expect(refused.canCapture).toBe(true);
+
+    const missingTool = computerStateView({
+      status: status({ availability: "unavailable", detail: "no screencapture" }),
+      statusError: null,
+    });
+    expect(missingTool.canCapture).toBe(false);
+  });
+
+  it("offers nothing on an unsupported platform or an unreachable server", () => {
+    expect(
+      computerStateView({ status: status({ availability: "unsupported" }), statusError: null }),
+    ).toMatchObject({ label: "Unsupported", canCapture: false });
+    expect(computerStateView({ status: null, statusError: null }).label).toBe("Checking…");
+    expect(computerStateView({ status: null, statusError: "closed" })).toMatchObject({
+      label: "Unreachable",
+      canCapture: false,
+    });
   });
 });

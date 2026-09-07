@@ -58,9 +58,52 @@ function capturedAtLabel(capturedAt: string): string {
 
 const DOT_CLASS: Record<OpenbotComputerStatus["availability"], string> = {
   ready: "bg-success",
+  unknown: "bg-muted-foreground",
   unavailable: "bg-warning",
   unsupported: "bg-muted-foreground",
 };
+
+const LABEL: Record<OpenbotComputerStatus["availability"], string> = {
+  ready: "Ready",
+  unknown: "Not checked",
+  unavailable: "Unavailable",
+  unsupported: "Unsupported",
+};
+
+interface ComputerStateView {
+  readonly label: string;
+  readonly dotClass: string;
+  readonly canCapture: boolean;
+}
+
+/**
+ * How the header reads and whether a capture is worth offering.
+ *
+ * The server only calls a host `ready` once a capture has actually succeeded
+ * there, so the panel must never upgrade `unknown` to "Ready" on its own. An
+ * `unavailable` host is retryable exactly when a real attempt failed
+ * (`lastError`); a host that is unavailable for a structural reason, such as
+ * having no `screencapture`, cannot be retried into working.
+ */
+export function computerStateView(input: {
+  readonly status: OpenbotComputerStatus | null;
+  readonly statusError: string | null;
+}): ComputerStateView {
+  const { status, statusError } = input;
+  if (status === null) {
+    return statusError === null
+      ? { label: "Checking…", dotClass: "bg-muted-foreground", canCapture: false }
+      : { label: "Unreachable", dotClass: "bg-warning", canCapture: false };
+  }
+  return {
+    label: LABEL[status.availability],
+    dotClass: DOT_CLASS[status.availability],
+    canCapture:
+      status.availability === "ready" ||
+      status.availability === "unknown" ||
+      (status.availability === "unavailable" && status.lastError !== null),
+  };
+}
 
 /**
  * The computer the environment's agents act on. Agents run in this same
@@ -83,20 +126,28 @@ export default function ComputerPanel({
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
+  const applyStatus = useCallback((result: Awaited<ReturnType<typeof readStatus>>) => {
+    if (result._tag === "Success") {
+      setStatus(result.value);
+      setStatusError(null);
+    } else setStatusError(failureText(result));
+  }, []);
+
+  const refreshStatus = useCallback(async () => {
+    applyStatus(await readStatus({ environmentId, input: {} }));
+  }, [applyStatus, environmentId, readStatus]);
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       const result = await readStatus({ environmentId, input: {} });
       if (cancelled) return;
-      if (result._tag === "Success") {
-        setStatus(result.value);
-        setStatusError(null);
-      } else setStatusError(failureText(result));
+      applyStatus(result);
     })();
     return () => {
       cancelled = true;
     };
-  }, [environmentId, readStatus]);
+  }, [applyStatus, environmentId, readStatus]);
 
   const capture = useCallback(async () => {
     setBusy(true);
@@ -107,7 +158,10 @@ export default function ComputerPanel({
       setSnapshotError(null);
       // A failed capture keeps the last good image, so clear the error only here.
     } else setSnapshotError(failureText(result));
-  }, [environmentId, readSnapshot]);
+    // The attempt is the only evidence of whether this host can be captured, so
+    // the header follows it either way.
+    await refreshStatus();
+  }, [environmentId, readSnapshot, refreshStatus]);
 
   // The interval outlives each render, so it reads the latest capture through a
   // ref instead of being torn down and rebuilt every time `capture` changes.
@@ -128,7 +182,7 @@ export default function ComputerPanel({
     return () => clearInterval(timer);
   }, [autoRefresh, showing]);
 
-  const previewable = status !== null && status.availability === "ready";
+  const view = computerStateView({ status, statusError });
   const imageUrl =
     snapshot === null ? null : `data:${snapshot.mimeType};base64,${snapshot.dataBase64}`;
 
@@ -137,19 +191,8 @@ export default function ComputerPanel({
       <header className="flex items-center justify-between">
         <h2 className="text-sm font-medium">Computer</h2>
         <span className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span
-            aria-hidden
-            className={`size-2 rounded-full ${status === null ? "bg-muted-foreground" : DOT_CLASS[status.availability]}`}
-          />
-          {status === null
-            ? statusError === null
-              ? "Checking…"
-              : "Unreachable"
-            : status.availability === "ready"
-              ? "Ready"
-              : status.availability === "unavailable"
-                ? "Unavailable"
-                : "Unsupported"}
+          <span aria-hidden className={`size-2 rounded-full ${view.dotClass}`} />
+          {view.label}
         </span>
       </header>
 
@@ -178,11 +221,11 @@ export default function ComputerPanel({
         </dl>
       )}
 
-      {status !== null && !previewable && status.detail !== null && (
+      {status !== null && status.availability !== "unknown" && status.detail !== null && (
         <p className="text-sm text-muted-foreground">{status.detail}</p>
       )}
 
-      {previewable && (
+      {view.canCapture && status !== null && (
         <>
           <div className="flex aspect-16/10 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted">
             {imageUrl === null ? (

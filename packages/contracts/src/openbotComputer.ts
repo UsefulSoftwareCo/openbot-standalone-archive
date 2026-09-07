@@ -14,8 +14,15 @@ import { ExecutionEnvironmentPlatformOs } from "./environment.ts";
 
 /** Why a host can or cannot be previewed. `unsupported` is a property of the
     platform, `unavailable` of this particular host (missing tool, denied
-    permission). */
-export const OpenbotComputerAvailability = Schema.Literals(["ready", "unsupported", "unavailable"]);
+    permission). `ready` is only ever claimed after a capture has actually
+    succeeded on this server, so a host that has never been asked is `unknown`
+    rather than optimistically ready. */
+export const OpenbotComputerAvailability = Schema.Literals([
+  "ready",
+  "unknown",
+  "unsupported",
+  "unavailable",
+]);
 export type OpenbotComputerAvailability = typeof OpenbotComputerAvailability.Type;
 
 /** Pixel sizes are null when the host reported a shape we could not parse. */
@@ -45,6 +52,12 @@ export const OpenbotComputerStatus = Schema.Struct({
   detail: Schema.NullOr(Schema.String),
   /** Null when the display list could not be read. */
   displays: Schema.NullOr(Schema.Array(OpenbotComputerDisplay)),
+  /** When this server last captured the screen successfully, null if never.
+      This is the evidence behind `ready`. */
+  lastCaptureAt: Schema.NullOr(IsoDateTime),
+  /** The raw failure text of the last capture attempt, null when the last
+      attempt succeeded or none was made. `detail` is the human reading of it. */
+  lastError: Schema.NullOr(Schema.String),
   checkedAt: IsoDateTime,
 });
 export type OpenbotComputerStatus = typeof OpenbotComputerStatus.Type;
@@ -72,7 +85,7 @@ export type OpenbotComputerSnapshot = typeof OpenbotComputerSnapshot.Type;
 export class OpenbotComputerError extends Schema.TaggedErrorClass<OpenbotComputerError>()(
   "OpenbotComputerError",
   {
-    code: Schema.Literals(["unsupported", "capture_failed"]),
+    code: Schema.Literals(["unsupported", "capture_failed", "permission_denied"]),
     message: Schema.String,
   },
 ) {}

@@ -47,14 +47,38 @@ const UNSUPPORTED_DETAIL = "Screen preview is only implemented for macOS hosts."
 const MISSING_TOOL_DETAIL = `This host has no ${SCREENCAPTURE_PATH}, so the screen cannot be captured.`;
 const DISPLAYS_UNREADABLE_DETAIL =
   "The display list could not be read from system_profiler; the preview still works.";
+/** Said before any capture has been tried, because a host that has never been
+    captured has produced no evidence either way. */
+export const NOT_TRIED_DETAIL = "Preview not tried yet";
+/** Recent macOS refuses the capture outright when Screen Recording was never
+    granted to the process chain that launched this server, and it does not
+    prompt on behalf of a background process. */
+export const PERMISSION_DENIED_DETAIL =
+  "macOS refused screen capture for this server. Grant Screen Recording to the app that launched the OpenBot server (System Settings › Privacy & Security › Screen Recording), then restart it.";
 /**
- * macOS does not report a denied Screen Recording permission: `screencapture`
- * exits 0 and writes a wallpaper-only image. Nothing in the capture result
- * distinguishes that from an empty desktop, so the caveat is attached to every
- * successful capture as a standing note rather than inferred from the image.
+ * Attached to every successful capture as a standing note. On the macOS
+ * releases that answer a denied permission with a wallpaper-only image instead
+ * of an error, nothing in the result distinguishes that from an empty desktop,
+ * so this is never inferred from the image.
  */
 export const PERMISSION_CAVEAT =
   "Shows the host's signed-in desktop session, shared by agents and anyone at the machine. If the image shows only the desktop background, this server's parent process needs Screen Recording permission in System Settings › Privacy & Security.";
+
+/** macOS's wording when it refuses the capture rather than prompting. */
+const PERMISSION_REFUSAL = /could not create image from display/i;
+
+export function isPermissionRefusal(error: string): boolean {
+  return PERMISSION_REFUSAL.test(error);
+}
+
+/** The human reading of a recorded capture failure. Only the refusal wording
+    justifies naming Screen Recording; anything else is reported verbatim so we
+    never claim a cause the evidence does not support. */
+export function captureFailureDetail(error: string): string {
+  return isPermissionRefusal(error)
+    ? PERMISSION_DENIED_DETAIL
+    : `The last preview failed: ${error}`;
+}
 
 const DISPLAYS_CACHE_MS = 60_000;
 /** Captures closer together than this reuse the previous image. */
@@ -177,6 +201,14 @@ interface CachedSnapshot {
   readonly snapshot: OpenbotComputerSnapshot;
 }
 
+/** What this server process actually knows about capturing this screen.
+    `availability` is derived from it, so `ready` can only follow a real
+    capture. Not persisted: a restart is exactly when the answer can change. */
+interface CaptureOutcome {
+  readonly lastCaptureAt: string | null;
+  readonly lastError: string | null;
+}
+
 export const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -185,6 +217,7 @@ export const make = Effect.gen(function* () {
   const captureLock = yield* Semaphore.make(1);
   const displaysCache = yield* Ref.make<CachedDisplays | null>(null);
   const lastSnapshot = yield* Ref.make<CachedSnapshot | null>(null);
+  const captureOutcome = yield* Ref.make<CaptureOutcome>({ lastCaptureAt: null, lastError: null });
 
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
@@ -203,7 +236,14 @@ export const make = Effect.gen(function* () {
   const status: Effect.Effect<OpenbotComputerStatus> = Effect.gen(function* () {
     const descriptor = yield* environment.getDescriptor;
     const host = { label: descriptor.label, platform: descriptor.platform.os } as const;
-    const base = { host, session: "signed-in-desktop", checkedAt: yield* nowIso } as const;
+    const outcome = yield* Ref.get(captureOutcome);
+    const base = {
+      host,
+      session: "signed-in-desktop",
+      lastCaptureAt: outcome.lastCaptureAt,
+      lastError: outcome.lastError,
+      checkedAt: yield* nowIso,
+    } as const;
     if (descriptor.platform.os !== "darwin") {
       return {
         ...base,
@@ -222,6 +262,24 @@ export const make = Effect.gen(function* () {
       } satisfies OpenbotComputerStatus;
     }
     const displays = yield* readDisplays;
+    // The tool being present says nothing about macOS letting us use it, so
+    // availability follows what capturing actually did, not what exists.
+    if (outcome.lastError !== null) {
+      return {
+        ...base,
+        availability: "unavailable",
+        detail: captureFailureDetail(outcome.lastError),
+        displays,
+      } satisfies OpenbotComputerStatus;
+    }
+    if (outcome.lastCaptureAt === null) {
+      return {
+        ...base,
+        availability: "unknown",
+        detail: NOT_TRIED_DETAIL,
+        displays,
+      } satisfies OpenbotComputerStatus;
+    }
     return {
       ...base,
       availability: "ready",
@@ -230,8 +288,13 @@ export const make = Effect.gen(function* () {
     } satisfies OpenbotComputerStatus;
   });
 
+  /** The refusal wording is the one failure macOS gives us that has a specific
+      fix, so it gets its own code; everything else stays `capture_failed`. */
   const captureFailed = (message: string) =>
-    new OpenbotComputerError({ code: "capture_failed", message });
+    new OpenbotComputerError({
+      code: isPermissionRefusal(message) ? "permission_denied" : "capture_failed",
+      message,
+    });
 
   /** Downscales in place. A `sips` that fails or is missing leaves the
       original file, which is still a correct (if larger) capture. */
@@ -291,8 +354,13 @@ export const make = Effect.gen(function* () {
         if (previous !== null && nowMs - previous.atMs < MIN_CAPTURE_SPACING_MS) {
           return previous.snapshot;
         }
-        const taken = yield* capture(input.maxWidthPx ?? DEFAULT_MAX_WIDTH_PX);
+        const taken = yield* capture(input.maxWidthPx ?? DEFAULT_MAX_WIDTH_PX).pipe(
+          Effect.tapError((failure) =>
+            Ref.update(captureOutcome, (current) => ({ ...current, lastError: failure.message })),
+          ),
+        );
         yield* Ref.set(lastSnapshot, { atMs: yield* Clock.currentTimeMillis, snapshot: taken });
+        yield* Ref.set(captureOutcome, { lastCaptureAt: taken.capturedAt, lastError: null });
         return taken;
       }),
     );

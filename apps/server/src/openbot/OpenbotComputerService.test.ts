@@ -17,7 +17,9 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import {
   make,
+  NOT_TRIED_DETAIL,
   PERMISSION_CAVEAT,
+  PERMISSION_DENIED_DETAIL,
   SCREENCAPTURE_PATH,
   parseDisplays,
 } from "./OpenbotComputerService.ts";
@@ -184,8 +186,11 @@ it.layer(NodeServices.layer)("OpenbotComputerService", (it) => {
         host: { systemProfilerJson: SYSTEM_PROFILER_JSON },
       });
       const status = yield* computer.status;
-      expect(status.availability).toBe("ready");
-      expect(status.detail).toBeNull();
+      // Nothing has been captured yet, so the host has produced no evidence.
+      expect(status.availability).toBe("unknown");
+      expect(status.detail).toBe(NOT_TRIED_DETAIL);
+      expect(status.lastCaptureAt).toBeNull();
+      expect(status.lastError).toBeNull();
       expect(status.displays).toEqual([
         {
           id: "display-0",
@@ -201,11 +206,55 @@ it.layer(NodeServices.layer)("OpenbotComputerService", (it) => {
 
   it.effect("stays ready when the display list cannot be parsed", () =>
     Effect.gen(function* () {
-      const computer = yield* service({ os: "darwin", host: { systemProfilerJson: "not json" } });
+      const computer = yield* service({
+        os: "darwin",
+        host: { systemProfilerJson: "not json", captureBytes: jpeg(1280, 800, 40_000) },
+      });
+      yield* computer.snapshot({});
       const status = yield* computer.status;
       expect(status.availability).toBe("ready");
       expect(status.displays).toBeNull();
       expect(status.detail).toContain("display list");
+    }),
+  );
+
+  it.effect("only claims ready once a capture has actually succeeded", () =>
+    Effect.gen(function* () {
+      const computer = yield* service({
+        os: "darwin",
+        host: {
+          systemProfilerJson: SYSTEM_PROFILER_JSON,
+          captureBytes: jpeg(1280, 800, 40_000),
+        },
+      });
+      expect((yield* computer.status).availability).toBe("unknown");
+
+      const snapshot = yield* computer.snapshot({});
+      const status = yield* computer.status;
+      expect(status.availability).toBe("ready");
+      expect(status.detail).toBeNull();
+      expect(status.lastCaptureAt).toBe(snapshot.capturedAt);
+      expect(status.lastError).toBeNull();
+    }),
+  );
+
+  it.effect("turns a refused capture into an actionable permission state", () =>
+    Effect.gen(function* () {
+      const computer = yield* service({
+        os: "darwin",
+        host: {
+          captureExitCode: 1,
+          captureStderr: "could not create image from display",
+        },
+      });
+      const failure = yield* computer.snapshot({}).pipe(Effect.flip);
+      expect(failure.code).toBe("permission_denied");
+
+      const status = yield* computer.status;
+      expect(status.availability).toBe("unavailable");
+      expect(status.detail).toBe(PERMISSION_DENIED_DETAIL);
+      expect(status.lastCaptureAt).toBeNull();
+      expect(status.lastError).toContain("could not create image from display");
     }),
   );
 
@@ -262,6 +311,13 @@ it.layer(NodeServices.layer)("OpenbotComputerService", (it) => {
       const failure = yield* computer.snapshot({}).pipe(Effect.flip);
       expect(failure.code).toBe("capture_failed");
       expect(failure.message).toContain("could not create image");
+
+      // An unrecognised failure is reported verbatim rather than blamed on a
+      // permission we have no evidence about.
+      const status = yield* computer.status;
+      expect(status.availability).toBe("unavailable");
+      expect(status.detail).toContain("could not create image");
+      expect(status.detail).not.toBe(PERMISSION_DENIED_DETAIL);
     }),
   );
 
