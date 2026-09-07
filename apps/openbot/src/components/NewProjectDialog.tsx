@@ -16,7 +16,7 @@ import {
 import { Input } from "@t3tools/ui/input";
 import { lazy, Suspense, useState } from "react";
 
-import { newCommandId } from "../state/ids";
+import { type CommandAttempt, commandAttempt } from "../state/ids";
 import { ProjectIcon } from "./ProjectIcon";
 
 const ProjectIconPicker = lazy(() => import("./ProjectIconPicker"));
@@ -43,7 +43,10 @@ export function NewProjectDialog({
   const [attachedPath, setAttachedPath] = useState("");
   const [icon, setIcon] = useState<OpenbotProjectIcon>(DEFAULT_OPENBOT_PROJECT_ICON);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [commandId] = useState(() => newCommandId("project-create"));
+  const [attempt, setAttempt] = useState<CommandAttempt<{
+    readonly name: string;
+    readonly attachedPath: string;
+  }> | null>(null);
   const trimmedName = name.trim();
   const trimmedPath = attachedPath.trim();
   return (
@@ -59,10 +62,17 @@ export function NewProjectDialog({
             onSubmit={(event) => {
               event.preventDefault();
               if (trimmedName === "" || busy) return;
+              // The icon is not part of the key: the server compares the name
+              // and the folder decision when a create replays.
+              const next = commandAttempt(attempt, "project-create", {
+                name: trimmedName,
+                attachedPath: trimmedPath,
+              });
+              setAttempt(next);
               onCreate({
                 name: trimmedName,
                 icon,
-                commandId,
+                commandId: next.commandId,
                 ...(trimmedPath === "" ? {} : { attachedPath: trimmedPath }),
               });
             }}

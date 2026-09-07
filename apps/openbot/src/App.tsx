@@ -2,7 +2,7 @@ import type { EnvironmentId, OpenbotChannelId, OpenbotProjectId } from "@t3tools
 import { Button } from "@t3tools/ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "@t3tools/ui/dialog";
 import { Spinner } from "@t3tools/ui/spinner";
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 
 import { ChannelView } from "./components/ChannelView";
 import { ChatHeader } from "./components/ChatHeader";
@@ -24,30 +24,47 @@ import {
   useChannels,
   useConnectionPhase,
   usePrimaryEnvironmentId,
-  useProjects,
+  useProjectsState,
 } from "./state/channels";
 import { commandErrorText } from "./state/errors";
-import type { OpenbotPage } from "./state/route";
+import { knowledgeReturnPage, type OpenbotPage, projectKnowledgePage } from "./state/route";
 
 const ProjectIconPicker = lazy(() => import("./components/ProjectIconPicker"));
 
 const SELECTED_CHANNEL_KEY = "openbot:selected-channel";
 
+// Storage is unavailable in some embedded and privacy-mode browsers, where
+// reading it throws. Losing the remembered chat is fine; crashing is not.
 function readSelectedChannel(): OpenbotChannelId | null {
-  const value = window.localStorage.getItem(SELECTED_CHANNEL_KEY);
-  return value === null || value === "" ? null : (value as OpenbotChannelId);
+  try {
+    const value = window.localStorage.getItem(SELECTED_CHANNEL_KEY);
+    return value === null || value === "" ? null : (value as OpenbotChannelId);
+  } catch {
+    return null;
+  }
+}
+
+function rememberSelectedChannel(channelId: OpenbotChannelId): void {
+  try {
+    window.localStorage.setItem(SELECTED_CHANNEL_KEY, channelId);
+  } catch {
+    // Nothing to do: the selection simply does not survive a reload.
+  }
 }
 
 export function App() {
   const environmentId = usePrimaryEnvironmentId();
   const phase = useConnectionPhase(environmentId);
   const channels = useChannels(environmentId);
-  const projects = useProjects(environmentId);
+  const projectsState = useProjectsState(environmentId);
+  const projects = projectsState.items;
+  const projectsLoading = projectsState.loading;
 
   const [selectedChannelId, setSelectedChannelId] = useState<OpenbotChannelId | null>(
     readSelectedChannel,
   );
   const [page, setPage] = useState<OpenbotPage | null>(null);
+  const [unsaved, setUnsaved] = useState(false);
   const [search, setSearch] = useState("");
   const [detailsOpen, setDetailsOpen] = useState(true);
   const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
@@ -93,9 +110,7 @@ export function App() {
       ? selectedChannelId
       : (channels[0]?.id ?? null);
   useEffect(() => {
-    if (activeChannelId !== null) {
-      window.localStorage.setItem(SELECTED_CHANNEL_KEY, activeChannelId);
-    }
+    if (activeChannelId !== null) rememberSelectedChannel(activeChannelId);
   }, [activeChannelId]);
 
   const view = useChannelView(environmentId, page === null ? activeChannelId : null);
@@ -117,10 +132,26 @@ export function App() {
       ? (projects.find((project) => project.id === page.projectId) ?? null)
       : null;
 
+  // A full-page editor owns unsaved text. Every way out of it goes through one
+  // guard, so the sidebar, the tabs and the back button all behave the same.
+  const confirmLeave = useCallback(
+    () => !unsaved || window.confirm("Discard your unsaved changes?"),
+    [unsaved],
+  );
+
   const openChannel = (channelId: OpenbotChannelId) => {
+    if (!confirmLeave()) return;
+    setUnsaved(false);
     setSelectedChannelId(channelId);
     setPage(null);
     setSendError(null);
+    setSidebarOpen(false);
+  };
+
+  const openPage = (next: OpenbotPage | null) => {
+    if (!confirmLeave()) return;
+    setUnsaved(false);
+    setPage(next);
     setSidebarOpen(false);
   };
 
@@ -145,10 +176,7 @@ export function App() {
         setIconError(null);
         setIconProjectId(projectId);
       }}
-      onOpenProjectSettings={(projectId) => {
-        setPage({ type: "project-settings", projectId, tab: "knowledge" });
-        setSidebarOpen(false);
-      }}
+      onOpenProjectSettings={(projectId) => openPage(projectKnowledgePage(projectId))}
       onNewProject={() => {
         setCreateProjectError(null);
         setSidebarOpen(false);
@@ -197,8 +225,13 @@ export function App() {
           </div>
         ) : page?.type === "project-settings" ? (
           settingsProject === null ? (
-            <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm">
-              This project no longer exists.
+            <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground text-sm">
+              <p>{projectsLoading ? "Loading this project…" : "This project no longer exists."}</p>
+              {!projectsLoading && (
+                <Button variant="outline" size="sm" onClick={() => openPage(null)}>
+                  Back to chat
+                </Button>
+              )}
             </div>
           ) : (
             <ProjectSettingsPage
@@ -206,14 +239,15 @@ export function App() {
               environmentId={environmentId}
               project={settingsProject}
               tab={page.tab}
-              onTabChange={(tab) => setPage({ ...page, tab })}
+              onTabChange={(tab) => openPage({ ...page, tab })}
               onBack={() => openChannel(settingsProject.mainChannelId)}
               onOpenKnowledge={(knowledgeId) =>
-                setPage({ type: "knowledge", knowledgeId, projectId: settingsProject.id })
+                openPage({ type: "knowledge", knowledgeId, projectId: settingsProject.id })
               }
               onNewKnowledge={() =>
-                setPage({ type: "knowledge", knowledgeId: null, projectId: settingsProject.id })
+                openPage({ type: "knowledge", knowledgeId: null, projectId: settingsProject.id })
               }
+              onUnsavedChange={setUnsaved}
             />
           )
         ) : page?.type === "knowledge" ? (
@@ -222,11 +256,12 @@ export function App() {
             environmentId={environmentId}
             knowledgeId={page.knowledgeId}
             projectId={page.projectId}
-            onClose={() => {
-              if (page.projectId === null) setPage(null);
-              else
-                setPage({ type: "project-settings", projectId: page.projectId, tab: "knowledge" });
+            onCancel={() => openPage(knowledgeReturnPage(page))}
+            onSaved={() => {
+              setUnsaved(false);
+              setPage(knowledgeReturnPage(page));
             }}
+            onUnsavedChange={setUnsaved}
           />
         ) : channels.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground text-sm">

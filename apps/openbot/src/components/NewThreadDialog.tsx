@@ -11,12 +11,13 @@ import {
 import { Input } from "@t3tools/ui/input";
 import { useState } from "react";
 
-import { randomToken } from "../state/ids";
+import { type CommandAttempt, commandAttempt } from "../state/ids";
 
 /**
  * Starts a focused child chat and dispatches its first work request in one
- * step. The request id is minted once so a retry after a dropped socket returns
- * the same child instead of starting a second one.
+ * step. The request id is keyed to the text, so a retry after a dropped socket
+ * returns the same child instead of starting a second one, while an edited
+ * task still gets through: the server rejects a replay carrying new text.
  */
 export function NewThreadDialog({
   open,
@@ -39,7 +40,10 @@ export function NewThreadDialog({
 }) {
   const [title, setTitle] = useState("");
   const [task, setTask] = useState("");
-  const [clientRequestId] = useState(() => `openbot:thread:${randomToken()}`);
+  const [attempt, setAttempt] = useState<CommandAttempt<{
+    readonly title: string;
+    readonly task: string;
+  }> | null>(null);
   const ready = title.trim() !== "" && task.trim() !== "";
   return (
     <Dialog
@@ -53,7 +57,12 @@ export function NewThreadDialog({
           onSubmit={(event) => {
             event.preventDefault();
             if (!ready || busy) return;
-            onStart({ title: title.trim(), task: task.trim(), clientRequestId });
+            const next = commandAttempt(attempt, "thread-start", {
+              title: title.trim(),
+              task: task.trim(),
+            });
+            setAttempt(next);
+            onStart({ ...next.payload, clientRequestId: next.commandId });
           }}
         >
           <DialogHeader>

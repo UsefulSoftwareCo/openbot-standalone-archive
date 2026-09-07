@@ -23,3 +23,19 @@ export type OpenbotRoute =
 
 /** Everything the main area can show other than a chat. */
 export type OpenbotPage = Exclude<OpenbotRoute, { readonly type: "chat" }>;
+
+export type KnowledgePage = Extract<OpenbotPage, { readonly type: "knowledge" }>;
+
+/** The knowledge tab of one project's settings. */
+export function projectKnowledgePage(projectId: OpenbotProjectId): OpenbotPage {
+  return { type: "project-settings", projectId, tab: "knowledge" };
+}
+
+/**
+ * Where the knowledge editor goes when it closes: back to the project settings
+ * it was opened from, or to the chat when it was opened without one. `null`
+ * means "show the selected chat again".
+ */
+export function knowledgeReturnPage(page: KnowledgePage): OpenbotPage | null {
+  return page.projectId === null ? null : projectKnowledgePage(page.projectId);
+}

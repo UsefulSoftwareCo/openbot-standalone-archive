@@ -30,8 +30,36 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useContext } from "react";
 
 import { connectionAtomRuntime } from "../connection/atomRuntime";
+import { commandErrorText } from "./errors";
 
 export const environmentCatalog = createEnvironmentCatalogAtoms(connectionAtomRuntime);
+
+/**
+ * A live list plus the two states a view has to tell apart: "nothing here yet"
+ * and "we do not know yet". Rendering an empty list before the first snapshot
+ * arrives is a lie the user acts on, so subscriptions that back an empty state
+ * expose this instead of a bare array.
+ */
+export interface LiveList<A> {
+  readonly items: ReadonlyArray<A>;
+  readonly loading: boolean;
+  /** Set when the stream itself failed. */
+  readonly error: string | null;
+}
+
+function toLiveList<V, E, A>(
+  result: AsyncResult.AsyncResult<V, E>,
+  select: (value: V) => ReadonlyArray<A>,
+  empty: ReadonlyArray<A>,
+): LiveList<A> {
+  if (AsyncResult.isSuccess(result)) {
+    return { items: select(result.value), loading: false, error: null };
+  }
+  if (AsyncResult.isFailure(result)) {
+    return { items: empty, loading: false, error: commandErrorText(result) };
+  }
+  return { items: empty, loading: true, error: null };
+}
 
 /** The same-origin T3 server; null until the descriptor has been discovered. */
 export const primaryEnvironmentIdAtom = Atom.make((get): EnvironmentId | null => {
@@ -207,24 +235,34 @@ const projectsSubscription = createEnvironmentRpcSubscriptionAtomFamily(connecti
 });
 
 const EMPTY_PROJECTS: ReadonlyArray<OpenbotProject> = Object.freeze([]);
-const EMPTY_PROJECTS_ATOM = Atom.make(EMPTY_PROJECTS).pipe(
+const LOADING_PROJECTS: LiveList<OpenbotProject> = {
+  items: EMPTY_PROJECTS,
+  loading: true,
+  error: null,
+};
+const EMPTY_PROJECTS_ATOM = Atom.make(LOADING_PROJECTS).pipe(
   Atom.withLabel("openbot-projects:empty"),
 );
 
 const projectsValueAtom = Atom.family((environmentId: EnvironmentId) =>
-  Atom.make(
-    (get) =>
-      Option.getOrElse(
-        AsyncResult.value(get(projectsSubscription({ environmentId, input: {} }))),
-        () => ({ projects: EMPTY_PROJECTS }),
-      ).projects,
+  Atom.make((get) =>
+    toLiveList(
+      get(projectsSubscription({ environmentId, input: {} })),
+      (value) => value.projects,
+      EMPTY_PROJECTS,
+    ),
   ).pipe(Atom.withLabel(`openbot-projects:${environmentId}`)),
 );
 
-export function useProjects(environmentId: EnvironmentId | null): ReadonlyArray<OpenbotProject> {
+/** Live projects, including whether the first snapshot has arrived. */
+export function useProjectsState(environmentId: EnvironmentId | null): LiveList<OpenbotProject> {
   return useAtomValue(
     environmentId === null ? EMPTY_PROJECTS_ATOM : projectsValueAtom(environmentId),
   );
+}
+
+export function useProjects(environmentId: EnvironmentId | null): ReadonlyArray<OpenbotProject> {
+  return useProjectsState(environmentId).items;
 }
 
 export const createProject = createEnvironmentRpcCommand(connectionAtomRuntime, {
@@ -249,27 +287,36 @@ const knowledgeSubscription = createEnvironmentRpcSubscriptionAtomFamily(connect
 });
 
 const EMPTY_KNOWLEDGE: ReadonlyArray<OpenbotKnowledge> = Object.freeze([]);
-const EMPTY_KNOWLEDGE_ATOM = Atom.make(EMPTY_KNOWLEDGE).pipe(
+const LOADING_KNOWLEDGE: LiveList<OpenbotKnowledge> = {
+  items: EMPTY_KNOWLEDGE,
+  loading: true,
+  error: null,
+};
+const EMPTY_KNOWLEDGE_ATOM = Atom.make(LOADING_KNOWLEDGE).pipe(
   Atom.withLabel("openbot-knowledge:empty"),
 );
 
 const knowledgeValueAtom = Atom.family((key: string) => {
   const [environmentId, projectId] = JSON.parse(key) as [EnvironmentId, OpenbotProjectId | null];
   const input = projectId === null ? {} : { projectId };
-  return Atom.make(
-    (get) =>
-      Option.getOrElse(
-        AsyncResult.value(get(knowledgeSubscription({ environmentId, input }))),
-        () => ({ entries: EMPTY_KNOWLEDGE }),
-      ).entries,
+  return Atom.make((get) =>
+    toLiveList(
+      get(knowledgeSubscription({ environmentId, input })),
+      (value) => value.entries,
+      EMPTY_KNOWLEDGE,
+    ),
   ).pipe(Atom.withLabel(`openbot-knowledge:${key}`));
 });
 
-/** Live knowledge entries; pass a project id to see only the entries linked to it. */
+/**
+ * Live knowledge entries; pass a project id to see only the entries linked to
+ * it. Editors and lists share one subscription per scope, so opening an entry
+ * from a project's settings reuses the snapshot that list already has.
+ */
 export function useKnowledge(
   environmentId: EnvironmentId | null,
   projectId: OpenbotProjectId | null = null,
-): ReadonlyArray<OpenbotKnowledge> {
+): LiveList<OpenbotKnowledge> {
   return useAtomValue(
     environmentId === null
       ? EMPTY_KNOWLEDGE_ATOM
