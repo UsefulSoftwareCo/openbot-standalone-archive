@@ -118,13 +118,13 @@ project and focused chat. Decide the destination for each bot with the person
 before writing anything, using what already exists (\`openbot_list_projects\`,
 \`openbot_list_threads\`):
 
-| Grok                      | OpenBot destination                                                                                                                                                                       |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Grok                      | OpenBot destination                                                                                                                                                                      |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Bot                       | An existing project when its work belongs there; a new project only when the person agrees the topic deserves one; a focused chat under a project's main chat for a narrow standing task |
-| System prompt             | Distilled standing preferences merged into the destination project's \`instructions\` (or the chat's private notes), never pasted whole                                                     |
-| Memory or knowledge entry | Knowledge entry via \`openbot_knowledge_write\`, linked to the destination project(s)                                                                                                       |
-| Automation or routine     | \`schedule_task\` with \`enabled: false\` and \`deliveryMode: "queue"\`, targeting the destination chat's thread                                                                                |
-| Transcript                | Skipped entirely                                                                                                                                                                          |
+| System prompt             | Distilled standing preferences merged into the destination project's \`instructions\` (or the chat's private notes), never pasted whole                                                    |
+| Memory or knowledge entry | Knowledge entry via \`openbot_knowledge_write\`, linked to the destination project(s)                                                                                                      |
+| Automation or routine     | \`schedule_task\` with \`enabled: false\` and \`deliveryMode: "queue"\`, targeting the destination chat's thread                                                                               |
+| Transcript                | Skipped entirely                                                                                                                                                                         |
 
 Several bots can land in one project. A bot with no sensible home is reported
 under "needs a destination" rather than imported as a project of its own.
