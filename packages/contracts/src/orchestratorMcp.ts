@@ -63,7 +63,7 @@ const OrchestratorMcpSchedule = Schema.Union([
   OrchestratorMcpScheduleFromJsonString,
 ]).annotate({
   description:
-    "Recurring schedule object: {type:'interval', everyMs} or {type:'fixed_time', timeOfDay, weekdays?}. Never stringify it unless the provider requires the compatibility form.",
+    "Recurring schedule object: {type:'interval', everyMs}, {type:'fixed_time', timeOfDay, weekdays?}, or {type:'cron', expression, timeZone}. Never stringify it unless the provider requires the compatibility form.",
 });
 
 /**

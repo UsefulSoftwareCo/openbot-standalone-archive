@@ -1,3 +1,7 @@
+import * as Cron from "effect/Cron";
+import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import {
@@ -55,15 +59,57 @@ const ScheduledTaskFixedTimeSchedule = Schema.Struct({
 });
 
 /**
+ * Standard 5-field cron expression: `minute hour day-of-month month weekday`.
+ * The seconds and year variants are rejected on purpose — five fields cannot
+ * express sub-minute recurrence, which is what keeps cron schedules inside the
+ * same one-minute floor as `interval`.
+ */
+const CronExpression = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(256),
+  Schema.makeFilter((value) => value.split(/\s+/).length === 5, {
+    expected:
+      "a 5-field cron expression 'minute hour day-of-month month weekday' (seconds and year fields are not supported)",
+  }),
+  Schema.makeFilter((value) => Result.isSuccess(Cron.parse(value)), {
+    expected: "a parsable cron expression",
+  }),
+).annotate({
+  description:
+    "Standard 5-field cron expression, such as '0 9 * * 1-5' for 09:00 on weekdays. Ranges, lists, and steps are supported.",
+});
+
+/** IANA zone name the cron fields are evaluated in, such as "UTC" or "America/Los_Angeles". */
+const CronTimeZone = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(128),
+  Schema.makeFilter((value) => Option.isSome(DateTime.zoneFromString(value)), {
+    expected: "a valid IANA time zone name",
+  }),
+).annotate({
+  description: "IANA time zone the cron expression is evaluated in, such as UTC.",
+});
+
+const ScheduledTaskCronSchedule = Schema.Struct({
+  type: Schema.Literal("cron").annotate({
+    description: "Select cron scheduling.",
+  }),
+  expression: CronExpression,
+  timeZone: CronTimeZone,
+}).annotate({
+  description:
+    "Run on a 5-field cron expression evaluated in an explicit IANA time zone. Use this for exact recurring times that must survive DST, rather than approximating them as fixed_time.",
+});
+
+/**
  * Read model for persisted schedules. Keep accepting legacy sub-minute rows so
  * users can list, disable, edit, or delete them after the write minimum changes.
  */
 export const ScheduledTaskSchedule = Schema.Union([
   ScheduledTaskIntervalSchedule,
   ScheduledTaskFixedTimeSchedule,
+  ScheduledTaskCronSchedule,
 ]).annotate({
   description:
-    "Structured recurring schedule. Pass an object with type 'interval' or 'fixed_time'.",
+    "Structured recurring schedule. Pass an object with type 'interval', 'fixed_time', or 'cron'.",
 });
 export type ScheduledTaskSchedule = typeof ScheduledTaskSchedule.Type;
 
@@ -82,8 +128,12 @@ export const ScheduledTaskUpsertSchedule = Schema.Union([
     description: "Run repeatedly after a fixed number of milliseconds.",
   }),
   ScheduledTaskFixedTimeSchedule,
+  // No stricter write form: five cron fields cannot fire more than once a
+  // minute, so the interval floor is already inherent here.
+  ScheduledTaskCronSchedule,
 ]).annotate({
-  description: "Writable recurring schedule. Pass an object with type 'interval' or 'fixed_time'.",
+  description:
+    "Writable recurring schedule. Pass an object with type 'interval', 'fixed_time', or 'cron'.",
 });
 export type ScheduledTaskUpsertSchedule = typeof ScheduledTaskUpsertSchedule.Type;
 

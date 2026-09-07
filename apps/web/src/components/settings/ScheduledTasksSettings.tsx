@@ -54,8 +54,16 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SettingsPageContainer, SettingsSection, useRelativeTimeTick } from "./settingsLayout";
 
-type ScheduleMode = "fixed" | "interval";
+type ScheduleMode = "fixed" | "interval" | "cron";
 type WorkspaceMode = "root" | "worktree" | "existing_worktree";
+
+/**
+ * Zone a fresh cron draft starts in. Cron schedules are the one variant that
+ * pins their own zone, so the browser's is the least surprising default.
+ */
+function browserTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
 
 interface DraftState {
   readonly editingId: string | null;
@@ -66,6 +74,8 @@ interface DraftState {
   readonly intervalMinutes: string;
   readonly timeOfDay: string;
   readonly weekdays: ReadonlySet<number>;
+  readonly cronExpression: string;
+  readonly cronTimeZone: string;
   readonly projectId: string;
   readonly threadId: string;
   readonly workspaceMode: WorkspaceMode;
@@ -104,6 +114,8 @@ const EMPTY_DRAFT: DraftState = {
   intervalMinutes: "15",
   timeOfDay: "09:00",
   weekdays: new Set([1, 2, 3, 4, 5]),
+  cronExpression: "0 9 * * 1-5",
+  cronTimeZone: browserTimeZone(),
   projectId: "",
   threadId: "",
   workspaceMode: "worktree",
@@ -161,6 +173,15 @@ function scheduleFromDraft(draft: DraftState): ScheduledTaskSchedule {
     const minutes = Math.max(1, Number.parseInt(draft.intervalMinutes, 10) || 1);
     return { type: "interval", everyMs: minutes * 60_000 };
   }
+  if (draft.scheduleMode === "cron") {
+    // The server is the authority on cron syntax and zone names; sending the
+    // raw text keeps the two from disagreeing about what is valid.
+    return {
+      type: "cron",
+      expression: draft.cronExpression.trim(),
+      timeZone: draft.cronTimeZone.trim(),
+    };
+  }
   const selectedEveryDay = draft.weekdays.size === 0 || draft.weekdays.size === 7;
   return {
     type: "fixed_time",
@@ -176,6 +197,9 @@ export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
       ? `Every ${minutes} min`
       : `Every ${Math.round(schedule.everyMs / 1000)} sec`;
   }
+  // A cron expression is already the most precise description of itself, and
+  // the zone is load-bearing — never render one without the other.
+  if (schedule.type === "cron") return `${schedule.expression} (${schedule.timeZone})`;
   const weekdays = schedule.weekdays ?? [];
   const days =
     weekdays.length === 0
@@ -218,13 +242,18 @@ function taskToDraft(task: ScheduledTask): DraftState {
     title: task.title,
     prompt: task.prompt,
     enabled: task.enabled,
-    scheduleMode: schedule.type === "interval" ? "interval" : "fixed",
+    // The stored variant selects the mode; the dialog never migrates a task
+    // between schedule types on its own.
+    scheduleMode:
+      schedule.type === "interval" ? "interval" : schedule.type === "cron" ? "cron" : "fixed",
     intervalMinutes:
       schedule.type === "interval"
         ? String(Math.max(1, Math.round(schedule.everyMs / 60_000)))
         : "15",
     timeOfDay: schedule.type === "fixed_time" ? schedule.timeOfDay : "09:00",
     weekdays,
+    cronExpression: schedule.type === "cron" ? schedule.expression : EMPTY_DRAFT.cronExpression,
+    cronTimeZone: schedule.type === "cron" ? schedule.timeZone : EMPTY_DRAFT.cronTimeZone,
     projectId: task.projectId,
     threadId: task.threadId ?? "",
     workspaceMode: task.workspaceStrategy.type,
@@ -330,6 +359,18 @@ export function ScheduledTasksSettings() {
     const selection = splitModelKey(draft.modelKey || defaultModelKey);
     if (!draft.title.trim() || !draft.prompt.trim() || !draft.projectId || selection === null) {
       reportFailure("Schedule task is incomplete", "Add a title, prompt, project, and model.");
+      return;
+    }
+    // Cheap shape check only — the server owns cron syntax and zone validity,
+    // and reports precise errors for both.
+    if (
+      draft.scheduleMode === "cron" &&
+      (draft.cronExpression.trim().split(/\s+/).length !== 5 || !draft.cronTimeZone.trim())
+    ) {
+      reportFailure(
+        "Cron schedule is incomplete",
+        "Use a 5-field expression such as 0 9 * * 1-5 and an IANA time zone such as UTC.",
+      );
       return;
     }
     // Keep the original selection object (with provider options) when the
@@ -625,6 +666,7 @@ export function ScheduledTasksSettings() {
                     [
                       ["fixed", "Daily"],
                       ["interval", "Interval"],
+                      ["cron", "Cron"],
                     ] as const
                   ).map(([mode, label]) => (
                     <button
@@ -696,7 +738,7 @@ export function ScheduledTasksSettings() {
                     })}
                   </div>
                 </div>
-              ) : (
+              ) : draft.scheduleMode === "interval" ? (
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">Run every</span>
                   <Input
@@ -710,6 +752,37 @@ export function ScheduledTasksSettings() {
                     }
                   />
                   <span className="text-xs text-muted-foreground">minutes</span>
+                </div>
+              ) : (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field
+                    label="Cron expression"
+                    hint="minute hour day month weekday"
+                    htmlFor="scheduled-task-cron-expression"
+                  >
+                    <Input
+                      id="scheduled-task-cron-expression"
+                      nativeInput
+                      spellCheck={false}
+                      placeholder="0 9 * * 1-5"
+                      value={draft.cronExpression}
+                      onChange={(event) =>
+                        setDraft((current) => ({ ...current, cronExpression: event.target.value }))
+                      }
+                    />
+                  </Field>
+                  <Field label="Time zone" hint="IANA name" htmlFor="scheduled-task-cron-time-zone">
+                    <Input
+                      id="scheduled-task-cron-time-zone"
+                      nativeInput
+                      spellCheck={false}
+                      placeholder="UTC"
+                      value={draft.cronTimeZone}
+                      onChange={(event) =>
+                        setDraft((current) => ({ ...current, cronTimeZone: event.target.value }))
+                      }
+                    />
+                  </Field>
                 </div>
               )}
             </div>
