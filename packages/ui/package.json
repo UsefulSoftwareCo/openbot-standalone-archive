@@ -47,6 +47,30 @@
     "./message-bubble": {
       "types": "./src/message-bubble.tsx",
       "import": "./src/message-bubble.tsx"
+    },
+    "./collapsible": {
+      "types": "./src/collapsible.tsx",
+      "import": "./src/collapsible.tsx"
+    },
+    "./tooltip": {
+      "types": "./src/tooltip.tsx",
+      "import": "./src/tooltip.tsx"
+    },
+    "./composer-banner": {
+      "types": "./src/composer-banner.tsx",
+      "import": "./src/composer-banner.tsx"
+    },
+    "./pending-approval": {
+      "types": "./src/pending-approval.tsx",
+      "import": "./src/pending-approval.tsx"
+    },
+    "./pending-user-input": {
+      "types": "./src/pending-user-input.tsx",
+      "import": "./src/pending-user-input.tsx"
+    },
+    "./pending-user-input-logic": {
+      "types": "./src/pending-user-input-logic.ts",
+      "import": "./src/pending-user-input-logic.ts"
     }
   },
   "scripts": {
@@ -54,6 +78,7 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
+    "@t3tools/contracts": "workspace:*",
     "class-variance-authority": "^0.7.1",
     "lucide-react": "^0.564.0",
     "react": "19.2.6",
