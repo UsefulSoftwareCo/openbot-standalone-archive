@@ -49,17 +49,16 @@ const DISPLAYS_UNREADABLE_DETAIL =
   "The display list could not be read from system_profiler; the preview still works.";
 /**
  * macOS does not report a denied Screen Recording permission: `screencapture`
- * exits 0 and writes a wallpaper-only image. A wallpaper JPEG compresses far
- * smaller than a desktop with windows and text, so size is the only signal we
- * have. It is a heuristic, and a genuinely empty desktop trips it too.
+ * exits 0 and writes a wallpaper-only image. Nothing in the capture result
+ * distinguishes that from an empty desktop, so the caveat is attached to every
+ * successful capture as a standing note rather than inferred from the image.
  */
 export const PERMISSION_CAVEAT =
-  "If the image shows only the desktop background, this server's parent process needs Screen Recording permission in System Settings › Privacy & Security.";
+  "Shows the host's signed-in desktop session, shared by agents and anyone at the machine. If the image shows only the desktop background, this server's parent process needs Screen Recording permission in System Settings › Privacy & Security.";
 
 const DISPLAYS_CACHE_MS = 60_000;
 /** Captures closer together than this reuse the previous image. */
 export const MIN_CAPTURE_SPACING_MS = 1_000;
-const SMALL_IMAGE_BYTES = 15 * 1024;
 const MAX_BASE64_BYTES = 1_500_000;
 const DEFAULT_MAX_WIDTH_PX = 1280;
 const FALLBACK_MAX_WIDTH_PX = 960;
@@ -271,7 +270,7 @@ export const make = Effect.gen(function* () {
         dataBase64,
         ...(size === null ? {} : { widthPx: size.width, heightPx: size.height }),
         capturedAt: yield* nowIso,
-        caveat: bytes.length < SMALL_IMAGE_BYTES ? PERMISSION_CAVEAT : null,
+        caveat: PERMISSION_CAVEAT,
       } satisfies OpenbotComputerSnapshot;
     }).pipe(Effect.scoped);
 

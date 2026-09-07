@@ -141,6 +141,61 @@ it.layer(TestLayer)("OpenBot projects, child chats, and knowledge", (it) => {
     }),
   );
 
+  it.effect("replays a create only for the same folder decision", () =>
+    Effect.gen(function* () {
+      const service = yield* OpenbotChannelService;
+      const config = yield* ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const folderA = path.join(config.stateDir, "replay-a");
+      const folderB = path.join(config.stateDir, "replay-b");
+      yield* fs.makeDirectory(folderA, { recursive: true });
+      yield* fs.makeDirectory(folderB, { recursive: true });
+      const commandId = CommandId.make("create-replay");
+      const first = yield* service.createProject({
+        name: "Replay",
+        attachedPath: folderA,
+        commandId,
+      });
+      const same = yield* service.createProject({
+        name: "Replay",
+        attachedPath: folderA,
+        commandId,
+      });
+      assert.equal(same.id, first.id);
+      const otherFolder = yield* service
+        .createProject({ name: "Replay", attachedPath: folderB, commandId })
+        .pipe(Effect.flip);
+      assert.equal(otherFolder.code, "profile_conflict");
+      const managedInstead = yield* service
+        .createProject({ name: "Replay", commandId })
+        .pipe(Effect.flip);
+      assert.equal(managedInstead.code, "profile_conflict");
+    }),
+  );
+
+  it.effect("keeps the thread and the chat on the same model across repeated toggles", () =>
+    Effect.gen(function* () {
+      const service = yield* OpenbotChannelService;
+      const orchestrator = yield* OrchestratorV2;
+      const chat = yield* service.create({
+        name: "Toggle",
+        commandId: CommandId.make("create-toggle"),
+      });
+      const other = { ...openbotModelSelection, model: "gpt-5.4-mini" };
+      for (const selection of [other, openbotModelSelection, other, openbotModelSelection, other]) {
+        const updated = yield* service.setModel({ channelId: chat.id, modelSelection: selection });
+        assert.equal(updated.modelSelection.model, selection.model);
+        const projection = yield* orchestrator.getThreadProjection(chat.threadId);
+        assert.equal(
+          projection.thread.modelSelection.model,
+          selection.model,
+          "the T3 thread follows every toggle, not only the first of each value",
+        );
+      }
+    }),
+  );
+
   it.effect("keeps child chats one level deep inside the parent's workspace", () =>
     Effect.gen(function* () {
       const service = yield* OpenbotChannelService;

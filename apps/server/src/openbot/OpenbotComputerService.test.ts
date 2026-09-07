@@ -230,7 +230,8 @@ it.layer(NodeServices.layer)("OpenbotComputerService", (it) => {
       expect(snapshot.mimeType).toBe("image/jpeg");
       expect(snapshot.widthPx).toBe(1280);
       expect(snapshot.heightPx).toBe(800);
-      expect(snapshot.caveat).toBeNull();
+      // The permission note is a standing caveat, never inferred from the image.
+      expect(snapshot.caveat).toBe(PERMISSION_CAVEAT);
       expect(snapshot.dataBase64.length).toBeGreaterThan(0);
       expect(log.captures).toHaveLength(1);
       expect(log.resamples).toEqual(["1280"]);
@@ -239,14 +240,16 @@ it.layer(NodeServices.layer)("OpenbotComputerService", (it) => {
     }),
   );
 
-  it.effect("flags a suspiciously small capture as a permission problem", () =>
+  it.effect("does not infer permission state from a small capture", () =>
     Effect.gen(function* () {
       const computer = yield* service({
         os: "darwin",
         host: { captureBytes: jpeg(1280, 800, 2_000) },
       });
       const snapshot = yield* computer.snapshot({});
+      // Same standing note as any other capture; a sparse desktop is not an error.
       expect(snapshot.caveat).toBe(PERMISSION_CAVEAT);
+      expect(snapshot.dataBase64.length).toBeGreaterThan(0);
     }),
   );
 

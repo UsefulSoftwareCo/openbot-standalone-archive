@@ -230,7 +230,7 @@ export default function ComputerPanel({
           )}
 
           {snapshot?.caveat != null && (
-            <p className="text-sm text-warning-foreground">{snapshot.caveat}</p>
+            <p className="text-xs text-muted-foreground">{snapshot.caveat}</p>
           )}
           {snapshotError !== null && (
             <p role="alert" className="text-sm text-error-foreground">

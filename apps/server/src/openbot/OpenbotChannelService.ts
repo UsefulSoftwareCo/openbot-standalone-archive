@@ -1251,10 +1251,14 @@ export const make = Effect.gen(function* () {
       .getProject(projectId)
       .pipe(Effect.mapError(orchestrationError("Unable to check project creation")));
     if (existing !== undefined) {
-      if (
-        existing.name !== input.name ||
-        (input.attachedPath !== undefined && existing.workspace.kind !== "attached")
-      )
+      // A replay must carry the same payload: same name and the same folder
+      // decision (managed, or attached to exactly this path).
+      const sameWorkspace =
+        input.attachedPath === undefined
+          ? existing.workspace.kind === "managed"
+          : existing.workspace.kind === "attached" &&
+            existing.workspace.path === path.resolve(input.attachedPath);
+      if (existing.name !== input.name || !sameWorkspace)
         return yield* new OpenbotError({
           code: "profile_conflict",
           message:
@@ -1713,6 +1717,8 @@ export const make = Effect.gen(function* () {
                 ? null
                 : DateTime.formatIso(snoozedUntil),
             pendingRequests: derivePendingRequests(projection).length,
+            revision: channel.revision,
+            modelSelection: channel.modelSelection,
             updatedAt: channel.updatedAt,
           } satisfies OpenbotMcpThreadSummary;
         }),
@@ -1819,12 +1825,14 @@ export const make = Effect.gen(function* () {
   const setModel: OpenbotChannelServiceShape["setModel"] = Effect.fn(function* (input) {
     const channel = yield* requireChannel(input.channelId);
     const modelSelection = yield* resolveModelSelection(input.modelSelection);
+    // Each call is its own logical mutation. A command id derived only from
+    // the target selection would replay an old receipt on A→B→A→B and leave
+    // the thread on the stale model while the profile row moved on.
+    const mutationId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
     yield* threads
       .dispatch({
         type: "thread.model-selection.set",
-        commandId: CommandId.make(
-          `command:openbot:model:${channel.id}:${modelSelection.instanceId}:${modelSelection.model}`,
-        ),
+        commandId: CommandId.make(`command:openbot:model:${channel.id}:${mutationId}`),
         threadId: channel.threadId,
         modelSelection,
       })

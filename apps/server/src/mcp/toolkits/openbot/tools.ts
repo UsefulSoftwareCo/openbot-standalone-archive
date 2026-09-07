@@ -366,7 +366,7 @@ export const OpenbotCreateChatTool = Tool.make("openbot_create_chat", {
 
 export const OpenbotUpdateChatTool = Tool.make("openbot_update_chat", {
   description:
-    "Change a chat's name, description, or model, the same fields as the chat settings form. Omit channelId to change this chat. Compare-and-swap on the chat's profile revision, which openbot_create_chat and this tool return; omit any field you are not changing and the stored value is kept. A request_conflict means the profile changed first, so read the chat again and retry with its new revision. Prefer openbot_set_model when the model is all you are changing, and ask the person before renaming a chat they drive themselves.",
+    "Change a chat's name, description, or model, the same fields as the chat settings form. Omit channelId to change this chat. Compare-and-swap on the chat's profile revision, which openbot_create_chat and this tool return; omit any field you are not changing and the stored value is kept. A request_conflict means the profile changed first, so read the chat again and retry with its new revision. Prefer openbot_set_model when the model is all you are changing, and ask the person before renaming a chat they drive themselves. Read the current revision from openbot_list_threads.",
   parameters: OpenbotMcpUpdateChatInput,
   success: OpenbotChannel,
   failure: OpenbotMcpFailure,

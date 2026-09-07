@@ -605,6 +605,9 @@ export const OpenbotMcpThreadSummary = Schema.Struct({
   status: OpenbotChannelStatus,
   snoozedUntil: Schema.NullOr(Schema.String),
   pendingRequests: Schema.Int,
+  /** Profile revision, the expectedRevision for openbot_update_chat. */
+  revision: Revision,
+  modelSelection: ModelSelection,
   updatedAt: Schema.String,
 });
 export type OpenbotMcpThreadSummary = typeof OpenbotMcpThreadSummary.Type;
