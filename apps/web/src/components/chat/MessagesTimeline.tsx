@@ -1,3 +1,5 @@
+import { UserMessageBubble } from "@t3tools/ui/message-bubble";
+import { AttachmentImage } from "@t3tools/ui/attachment-image";
 import {
   type AssistantCitation,
   type EnvironmentId,
@@ -1443,7 +1445,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       {row.message.inputIntent && row.message.inputIntent !== "turn_start" ? (
         <UserMessageIntentMarker intent={row.message.inputIntent} />
       ) : null}
-      <div className="relative max-w-[80%] rounded-2xl bg-accent p-3">
+      <UserMessageBubble>
         {(regularImages.length > 0 || userVideos.length > 0) && (
           <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
             {regularImages.map((image) => (
@@ -1451,28 +1453,14 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                 key={image.id}
                 className="aspect-[4/3] overflow-hidden rounded-lg border border-border/80 bg-background/70"
               >
-                {image.previewUrl ? (
-                  <button
-                    type="button"
-                    className="block h-full w-full cursor-zoom-in"
-                    aria-label={`Preview ${image.name}`}
-                    onClick={() => {
-                      const preview = buildExpandedImagePreview(regularImages, image.id);
-                      if (!preview) return;
-                      ctx.onImageExpand(preview);
-                    }}
-                  >
-                    <img
-                      src={image.previewUrl}
-                      alt={image.name}
-                      className="block size-full object-cover"
-                    />
-                  </button>
-                ) : (
-                  <div className="flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-[11px] text-muted-foreground/70">
-                    {image.name}
-                  </div>
-                )}
+                <AttachmentImage
+                  src={image.previewUrl}
+                  name={image.name}
+                  onPreview={() => {
+                    const preview = buildExpandedImagePreview(regularImages, image.id);
+                    if (preview) ctx.onImageExpand(preview);
+                  }}
+                />
               </div>
             ))}
             {userVideos.map((file) => (
@@ -1589,7 +1577,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           skills={ctx.skills}
           markdownCwd={ctx.markdownCwd}
         />
-      </div>
+      </UserMessageBubble>
       {row.projectedItem &&
       row.projectedItem.item.status !== "completed" &&
       row.projectedItem.item.status !== "pending" &&

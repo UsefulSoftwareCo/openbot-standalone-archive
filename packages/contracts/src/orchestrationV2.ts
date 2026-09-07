@@ -703,6 +703,12 @@ export const OrchestrationV2RuntimeRequest = Schema.Struct({
 });
 export type OrchestrationV2RuntimeRequest = typeof OrchestrationV2RuntimeRequest.Type;
 
+export const OrchestrationV2PeerMessage = Schema.Struct({
+  type: Schema.Literals(["request", "reply"]),
+  sourceThreadId: ThreadId,
+  requestId: MessageId,
+});
+
 export const OrchestrationV2ConversationMessage = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: MessageId,
@@ -715,6 +721,7 @@ export const OrchestrationV2ConversationMessage = Schema.Struct({
   streaming: Schema.Boolean,
   createdAt: Schema.DateTimeUtc,
   updatedAt: Schema.DateTimeUtc,
+  peerMessage: Schema.optional(OrchestrationV2PeerMessage),
   delegatedCompletion: Schema.optional(
     Schema.Struct({
       parentRunId: RunId,
@@ -2188,6 +2195,7 @@ export const OrchestrationV2Command = Schema.Union([
     modelSelection: Schema.optional(ModelSelection),
     sourcePlanRef: Schema.optional(Schema.Struct({ threadId: ThreadId, planId: PlanId })),
     restartContinuationOfRunId: Schema.optional(RunId),
+    peerMessage: Schema.optional(OrchestrationV2PeerMessage),
     delegatedCompletion: Schema.optional(
       Schema.Struct({
         parentRunId: RunId,
@@ -2195,6 +2203,13 @@ export const OrchestrationV2Command = Schema.Union([
         taskIds: Schema.Array(NodeId),
       }),
     ),
+    /**
+     * When a run is already queued on this thread, attach the message to it
+     * instead of queueing another run, so the next turn consumes the whole
+     * group in arrival order. Off by default: ordinary threads keep one
+     * queued run per message.
+     */
+    joinQueuedRun: Schema.optional(Schema.Boolean),
     dispatchMode: Schema.Union([
       Schema.Struct({ type: Schema.Literal("defer_start") }),
       Schema.Struct({ type: Schema.Literal("steer_active"), targetRunId: RunId }),

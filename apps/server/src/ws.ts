@@ -1628,6 +1628,9 @@ const makeWsRpcLayer = (
             openbotChannels.subscribeView(input.channelId),
             { "rpc.aggregate": "openbot", "openbot.channel_id": input.channelId },
           ),
+        [WS_METHODS.openbotContextGet]: ({ channelId }) => openbotChannels.getContext(channelId),
+        [WS_METHODS.openbotChannelUpdate]: (input) => openbotChannels.update(input),
+        [WS_METHODS.openbotContextUpdate]: (input) => openbotChannels.updateContext(input),
         [WS_METHODS.openbotChannelSend]: (input) =>
           observeRpcEffect(WS_METHODS.openbotChannelSend, openbotChannels.send(input), {
             "rpc.aggregate": "openbot",

@@ -35,7 +35,19 @@
       "types": "./src/dialog.tsx",
       "import": "./src/dialog.tsx"
     },
-    "./tokens.css": "./src/tokens.css"
+    "./tokens.css": "./src/tokens.css",
+    "./attachment-image": {
+      "types": "./src/attachment-image.tsx",
+      "import": "./src/attachment-image.tsx"
+    },
+    "./composer-surface": {
+      "types": "./src/composer-surface.tsx",
+      "import": "./src/composer-surface.tsx"
+    },
+    "./message-bubble": {
+      "types": "./src/message-bubble.tsx",
+      "import": "./src/message-bubble.tsx"
+    }
   },
   "scripts": {
     "typecheck": "tsgo --noEmit"

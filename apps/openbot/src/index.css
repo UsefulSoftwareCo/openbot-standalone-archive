@@ -88,3 +88,37 @@
   font-weight: 600;
   margin: 0.75em 0 0.35em;
 }
+
+/* Keep the composer above the keyboard and out of the home indicator area. */
+.openbot-shell {
+  position: fixed;
+  top: var(--chat-top, 0px);
+  height: var(--chat-height, 100dvh);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+.openbot-markdown {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.openbot-markdown pre {
+  max-width: 100%;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+.openbot-markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+.openbot-markdown th,
+.openbot-markdown td {
+  padding: 0.4em 0.65em;
+  border: 1px solid var(--border);
+}
+.openbot-markdown img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-md);
+}

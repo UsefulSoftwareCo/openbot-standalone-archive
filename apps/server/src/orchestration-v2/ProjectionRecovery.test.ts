@@ -262,6 +262,14 @@ it.effect("recovers terminal subagent results until their cross-thread transfer 
     const archivedChild = children[1];
     assert.isDefined(archivedChild);
     assert.deepEqual(yield* projections.getRecoveryThreadIds("subagent-results"), [archivedChild]);
+    // A delivered first run must not hide a missing follow-up result, even
+    // while a later run is queued.
+    yield* createRun(completed, "completed", { ordinal: 2 });
+    yield* createRun(completed, "queued", { ordinal: 3 });
+    assert.deepEqual(
+      new Set(yield* projections.getRecoveryThreadIds("subagent-results")),
+      new Set([completed, archivedChild]),
+    );
     assert.deepEqual(yield* projections.getUnreadableThreadIds(), []);
     yield* sql`
       UPDATE orchestration_v2_projection_context_transfers SET payload_json = '{}'

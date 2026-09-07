@@ -135,8 +135,11 @@ import {
 } from "./orchestrationV2.ts";
 import {
   OpenbotChannelCreateInput,
+  OpenbotChannelUpdateInput,
   OpenbotChannel,
   OpenbotChannelListResult,
+  OpenbotThreadContext,
+  OpenbotContextUpdateInput,
   OpenbotChannelSendInput,
   OpenbotChannelSendResult,
   OpenbotChannelSubscribeInput,
@@ -368,7 +371,10 @@ export const WS_METHODS = {
   openbotChannelsList: "openbot.channels.list",
   openbotChannelsSubscribe: "openbot.channels.subscribe",
   openbotChannelsCreate: "openbot.channels.create",
+  openbotChannelUpdate: "openbot.channel.update",
   openbotChannelSubscribe: "openbot.channel.subscribe",
+  openbotContextGet: "openbot.context.get",
+  openbotContextUpdate: "openbot.context.update",
   openbotChannelSend: "openbot.channel.send",
 
   // Cloud environment methods
@@ -1297,6 +1303,12 @@ export const WsOpenbotChannelsSubscribeRpc = Rpc.make(WS_METHODS.openbotChannels
   stream: true,
 });
 
+export const WsOpenbotChannelUpdateRpc = Rpc.make(WS_METHODS.openbotChannelUpdate, {
+  payload: OpenbotChannelUpdateInput,
+  success: OpenbotChannel,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+
 export const WsOpenbotChannelsCreateRpc = Rpc.make(WS_METHODS.openbotChannelsCreate, {
   payload: OpenbotChannelCreateInput,
   success: OpenbotChannel,
@@ -1309,6 +1321,17 @@ export const WsOpenbotChannelSubscribeRpc = Rpc.make(WS_METHODS.openbotChannelSu
   success: OpenbotChannelView,
   error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
   stream: true,
+});
+
+export const WsOpenbotContextGetRpc = Rpc.make(WS_METHODS.openbotContextGet, {
+  payload: OpenbotChannelSubscribeInput,
+  success: OpenbotThreadContext,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+export const WsOpenbotContextUpdateRpc = Rpc.make(WS_METHODS.openbotContextUpdate, {
+  payload: OpenbotContextUpdateInput,
+  success: OpenbotThreadContext,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
 });
 
 export const WsOpenbotChannelSendRpc = Rpc.make(WS_METHODS.openbotChannelSend, {
@@ -1378,7 +1401,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsOpenbotChannelsListRpc,
   WsOpenbotChannelsSubscribeRpc,
   WsOpenbotChannelsCreateRpc,
+  WsOpenbotChannelUpdateRpc,
   WsOpenbotChannelSubscribeRpc,
+  WsOpenbotContextGetRpc,
+  WsOpenbotContextUpdateRpc,
   WsOpenbotChannelSendRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,

@@ -1,3 +1,4 @@
+import { createAssetEnvironmentAtoms } from "@t3tools/client-runtime/state/assets";
 import { useAtomValue } from "@effect/atom-react";
 import {
   AVAILABLE_CONNECTION_STATE,
@@ -17,6 +18,7 @@ import {
   type OpenbotChannel,
   type OpenbotChannelId,
   type OpenbotChannelView,
+  ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
 } from "@t3tools/contracts";
 import { RegistryContext } from "@effect/atom-react";
@@ -58,6 +60,15 @@ export const createChannel = createEnvironmentRpcCommand(connectionAtomRuntime, 
 export const sendChannelMessage = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "openbot:channel-send",
   tag: WS_METHODS.openbotChannelSend,
+});
+
+export const getThreadContext = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:context-get",
+  tag: WS_METHODS.openbotContextGet,
+});
+export const updateThreadContext = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:context-update",
+  tag: WS_METHODS.openbotContextUpdate,
 });
 
 const EMPTY_CHANNELS: ReadonlyArray<OpenbotChannel> = Object.freeze([]);
@@ -136,3 +147,51 @@ export function useAtomCommand<A, E, W>(
     [command, options?.label, options?.reportDefect, options?.reportFailure, registry],
   );
 }
+
+const routinesSubscription = createEnvironmentRpcSubscriptionAtomFamily(connectionAtomRuntime, {
+  label: "openbot:routines",
+  tag: WS_METHODS.scheduledTasksSubscribe,
+});
+/** Live routine state, including loading and errors; callers scope it to their thread. */
+export function useRoutines(environmentId: EnvironmentId) {
+  return useAtomValue(routinesSubscription({ environmentId, input: {} }));
+}
+export const saveRoutine = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:routine-save",
+  tag: WS_METHODS.scheduledTasksUpsert,
+});
+export const setRoutineEnabled = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:routine-enabled",
+  tag: WS_METHODS.scheduledTasksSetEnabled,
+});
+export const deleteRoutine = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:routine-delete",
+  tag: WS_METHODS.scheduledTasksDelete,
+});
+export const testRoutine = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:routine-test",
+  tag: WS_METHODS.scheduledTasksRunNow,
+});
+export const getRoutineThread = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:routine-history",
+  tag: ORCHESTRATION_V2_WS_METHODS.getThreadProjection,
+});
+
+/** Upload grants use the same environment connection as messages. */
+export const createAttachmentUpload = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:attachment-upload",
+  tag: WS_METHODS.attachmentsCreateUploadUrl,
+});
+/** Resolve signed asset URLs for image previews and downloads. */
+export const assetEnvironment = createAssetEnvironmentAtoms(connectionAtomRuntime);
+/** Configured providers and their advertised models. */
+export const getBotProviders = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:providers",
+  tag: WS_METHODS.serverGetConfig,
+});
+
+/** Save the bot profile with a revision precondition. */
+export const updateBotProfile = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:profile-update",
+  tag: WS_METHODS.openbotChannelUpdate,
+});

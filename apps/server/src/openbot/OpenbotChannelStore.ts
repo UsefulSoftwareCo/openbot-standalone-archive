@@ -1,10 +1,12 @@
 import {
+  type OpenbotThreadContext,
   ModelSelection,
   OpenbotChannel,
   OpenbotChannelId,
   OpenbotDelivery,
   OpenbotDeliveryId,
   OpenbotDeliveryKind,
+  OpenbotReplyTarget,
   ProjectId,
   RunId,
   ThreadId,
@@ -24,6 +26,9 @@ import type { SqlError } from "effect/unstable/sql/SqlError";
 interface ChannelRow {
   readonly channel_id: string;
   readonly name: string;
+  readonly avatar: string;
+  readonly description: string;
+  readonly revision: number;
   readonly project_id: string;
   readonly thread_id: string;
   readonly model_selection_json: string;
@@ -37,16 +42,28 @@ interface DeliveryRow {
   readonly run_id: string;
   readonly kind: string;
   readonly text: string;
+  readonly reply_to_json: string | null;
   readonly created_at: string;
 }
 
 const decodeModelSelection = Schema.decodeUnknownEffect(Schema.fromJsonString(ModelSelection));
 const encodeModelSelection = Schema.encodeEffect(Schema.fromJsonString(ModelSelection));
 const decodeDeliveryKind = Schema.decodeUnknownEffect(OpenbotDeliveryKind);
+const decodeReplyTarget = Schema.decodeUnknownEffect(Schema.fromJsonString(OpenbotReplyTarget));
+const encodeReplyTarget = Schema.encodeEffect(Schema.fromJsonString(OpenbotReplyTarget));
 
 export type OpenbotChannelStoreError = SqlError | Schema.SchemaError;
 
 export interface OpenbotChannelStoreShape {
+  readonly update: (
+    channel: OpenbotChannel,
+  ) => Effect.Effect<OpenbotChannel | undefined, OpenbotChannelStoreError>;
+  readonly getContext: (
+    threadId: ThreadId,
+  ) => Effect.Effect<OpenbotThreadContext, OpenbotChannelStoreError>;
+  readonly updateContext: (
+    context: OpenbotThreadContext,
+  ) => Effect.Effect<OpenbotThreadContext | undefined, OpenbotChannelStoreError>;
   readonly list: Effect.Effect<ReadonlyArray<OpenbotChannel>, OpenbotChannelStoreError>;
   readonly getById: (
     channelId: OpenbotChannelId,
@@ -74,6 +91,9 @@ const rowToChannel = (row: ChannelRow) =>
     Effect.map((modelSelection): OpenbotChannel => ({
       id: OpenbotChannelId.make(row.channel_id),
       name: row.name,
+      avatar: row.avatar,
+      description: row.description,
+      revision: row.revision,
       projectId: ProjectId.make(row.project_id),
       threadId: ThreadId.make(row.thread_id),
       modelSelection,
@@ -83,13 +103,18 @@ const rowToChannel = (row: ChannelRow) =>
   );
 
 const rowToDelivery = (row: DeliveryRow) =>
-  decodeDeliveryKind(row.kind).pipe(
-    Effect.map((kind): OpenbotDelivery => ({
+  Effect.all({
+    kind: decodeDeliveryKind(row.kind),
+    replyTo:
+      row.reply_to_json === null ? Effect.succeed(null) : decodeReplyTarget(row.reply_to_json),
+  }).pipe(
+    Effect.map(({ kind, replyTo }): OpenbotDelivery => ({
       id: OpenbotDeliveryId.make(row.delivery_id),
       channelId: OpenbotChannelId.make(row.channel_id),
       runId: RunId.make(row.run_id),
       kind,
       text: row.text,
+      replyTo,
       createdAt: row.created_at,
     })),
   );
@@ -98,7 +123,7 @@ export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   const selectChannels = (where: ReturnType<typeof sql.and> | undefined) => sql<ChannelRow>`
-    SELECT channel_id, name, project_id, thread_id, model_selection_json, created_at, updated_at
+    SELECT channel_id, name, avatar, description, revision, project_id, thread_id, model_selection_json, created_at, updated_at
     FROM openbot_channels
     ${where === undefined ? sql`` : sql`WHERE ${where}`}
     ORDER BY created_at ASC, rowid ASC
@@ -127,10 +152,10 @@ export const make = Effect.gen(function* () {
       Effect.flatMap(
         (modelSelectionJson) => sql`
           INSERT INTO openbot_channels (
-            channel_id, name, project_id, thread_id, model_selection_json, created_at, updated_at
+            channel_id, name, avatar, description, revision, project_id, thread_id, model_selection_json, created_at, updated_at
           )
           VALUES (
-            ${channel.id}, ${channel.name}, ${channel.projectId}, ${channel.threadId},
+            ${channel.id}, ${channel.name}, ${channel.avatar}, ${channel.description}, ${channel.revision}, ${channel.projectId}, ${channel.threadId},
             ${modelSelectionJson}, ${channel.createdAt}, ${channel.updatedAt}
           )
         `,
@@ -140,7 +165,7 @@ export const make = Effect.gen(function* () {
 
   const listDeliveries: OpenbotChannelStoreShape["listDeliveries"] = (channelId) =>
     sql<DeliveryRow>`
-      SELECT delivery_id, channel_id, run_id, kind, text, created_at
+      SELECT delivery_id, channel_id, run_id, kind, text, reply_to_json, created_at
       FROM openbot_deliveries
       WHERE channel_id = ${channelId}
       ORDER BY created_at ASC, delivery_id ASC
@@ -151,16 +176,70 @@ export const make = Effect.gen(function* () {
       SELECT COUNT(*) AS count FROM openbot_deliveries WHERE run_id = ${runId}
     `.pipe(Effect.map((rows) => Number(rows[0]?.count ?? 0)));
 
-  const insertDelivery: OpenbotChannelStoreShape["insertDelivery"] = (delivery) =>
-    sql`
-      INSERT INTO openbot_deliveries (delivery_id, channel_id, run_id, kind, text, created_at)
-      VALUES (
-        ${delivery.id}, ${delivery.channelId}, ${delivery.runId}, ${delivery.kind},
-        ${delivery.text}, ${delivery.createdAt}
-      )
-    `.pipe(Effect.asVoid);
+  const insertDelivery: OpenbotChannelStoreShape["insertDelivery"] = (delivery) => {
+    const replyToJson: Effect.Effect<string | null, Schema.SchemaError> =
+      delivery.replyTo === null ? Effect.succeed(null) : encodeReplyTarget(delivery.replyTo);
+    return replyToJson.pipe(
+      Effect.flatMap(
+        (replyToJson) => sql`
+          INSERT INTO openbot_deliveries (
+            delivery_id, channel_id, run_id, kind, text, reply_to_json, created_at
+          )
+          VALUES (
+            ${delivery.id}, ${delivery.channelId}, ${delivery.runId}, ${delivery.kind},
+            ${delivery.text}, ${replyToJson}, ${delivery.createdAt}
+          )
+        `,
+      ),
+      Effect.asVoid,
+    );
+  };
 
+  const getContext: OpenbotChannelStoreShape["getContext"] = Effect.fn(function* (threadId) {
+    const rows = yield* sql<{
+      readonly instructions: string;
+      readonly knowledge: string;
+      readonly revision: number;
+    }>`
+      SELECT instructions, knowledge, revision FROM openbot_thread_context WHERE thread_id = ${threadId}
+    `;
+    const row = rows[0];
+    return row === undefined
+      ? { threadId, instructions: "", knowledge: "", revision: 0 }
+      : { threadId, ...row };
+  });
+
+  const updateContext: OpenbotChannelStoreShape["updateContext"] = Effect.fn(function* (context) {
+    // One atomic statement for both first-write and compare-and-swap updates.
+    const rows = yield* sql<{
+      readonly instructions: string;
+      readonly knowledge: string;
+      readonly revision: number;
+    }>`
+      INSERT INTO openbot_thread_context (thread_id, instructions, knowledge, revision)
+      SELECT ${context.threadId}, ${context.instructions}, ${context.knowledge}, 1
+      WHERE ${context.revision} = 0 OR EXISTS (
+        SELECT 1 FROM openbot_thread_context WHERE thread_id = ${context.threadId}
+      )
+      ON CONFLICT(thread_id) DO UPDATE SET
+        instructions = excluded.instructions, knowledge = excluded.knowledge,
+        revision = openbot_thread_context.revision + 1
+      WHERE openbot_thread_context.revision = ${context.revision}
+      RETURNING instructions, knowledge, revision
+    `;
+    return rows[0] === undefined ? undefined : { threadId: context.threadId, ...rows[0] };
+  });
+
+  const update: OpenbotChannelStoreShape["update"] = Effect.fn(function* (channel) {
+    const model = yield* encodeModelSelection(channel.modelSelection);
+    const rows =
+      yield* sql<ChannelRow>`UPDATE openbot_channels SET name = ${channel.name}, avatar = ${channel.avatar}, description = ${channel.description}, model_selection_json = ${model}, revision = revision + 1, updated_at = ${channel.updatedAt} WHERE channel_id = ${channel.id} AND revision = ${channel.revision} RETURNING *`;
+    return rows[0] === undefined ? undefined : yield* rowToChannel(rows[0]);
+  });
   return OpenbotChannelStore.of({
+    update,
+    getContext,
+    updateContext,
     list,
     getById,
     getByThreadId,

@@ -106,6 +106,8 @@ export interface ThreadManagementSendInput {
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly modelSelection?: ModelSelection;
   readonly mode: ThreadManagementSendMode;
+  /** Queue mode only: join an already queued run instead of queueing another. */
+  readonly joinQueuedRun?: boolean;
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
 }
@@ -518,6 +520,7 @@ const make = Effect.gen(function* () {
         text: input.text,
         attachments: input.attachments,
         ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+        ...(input.joinQueuedRun === true && input.mode === "queue" ? { joinQueuedRun: true } : {}),
         dispatchMode,
         createdBy: input.createdBy,
         creationSource: input.creationSource,

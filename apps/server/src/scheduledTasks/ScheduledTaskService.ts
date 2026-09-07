@@ -51,6 +51,7 @@ interface ScheduledTaskRow {
   readonly schedule_json: string;
   readonly project_id: string;
   readonly thread_id: string | null;
+  readonly delivery_mode: string;
   readonly workspace_strategy_json: string;
   readonly model_selection_json: string;
   readonly runtime_mode: string;
@@ -135,6 +136,7 @@ const decodeRow = (row: ScheduledTaskRow) =>
       schedule,
       projectId: row.project_id,
       threadId: row.thread_id,
+      deliveryMode: row.delivery_mode,
       workspaceStrategy,
       modelSelection,
       runtimeMode: row.runtime_mode,
@@ -181,6 +183,7 @@ export const layer = Layer.effect(
         schedule_json,
         project_id,
         thread_id,
+        delivery_mode,
         workspace_strategy_json,
         model_selection_json,
         runtime_mode,
@@ -232,6 +235,7 @@ export const layer = Layer.effect(
         schedule_json,
         project_id,
         thread_id,
+        delivery_mode,
         workspace_strategy_json,
         model_selection_json,
         runtime_mode,
@@ -282,6 +286,7 @@ export const layer = Layer.effect(
           schedule_json,
           project_id,
           thread_id,
+          delivery_mode,
           workspace_strategy_json,
           model_selection_json,
           runtime_mode,
@@ -304,6 +309,7 @@ export const layer = Layer.effect(
           ${JSON.stringify(task.schedule)},
           ${task.projectId},
           ${task.threadId},
+          ${task.deliveryMode ?? "auto"},
           ${JSON.stringify(task.workspaceStrategy)},
           ${JSON.stringify(task.modelSelection)},
           ${task.runtimeMode},
@@ -326,6 +332,7 @@ export const layer = Layer.effect(
           schedule_json = excluded.schedule_json,
           project_id = excluded.project_id,
           thread_id = excluded.thread_id,
+          delivery_mode = excluded.delivery_mode,
           workspace_strategy_json = excluded.workspace_strategy_json,
           model_selection_json = excluded.model_selection_json,
           runtime_mode = excluded.runtime_mode,
@@ -505,7 +512,7 @@ export const layer = Layer.effect(
                   text: prompt,
                   attachments: [],
                   modelSelection: active.modelSelection,
-                  mode: "auto",
+                  mode: active.deliveryMode ?? "auto",
                   createdBy: active.createdBy,
                   creationSource: active.creationSource,
                 }),
@@ -723,6 +730,7 @@ export const layer = Layer.effect(
           schedule: input.schedule,
           projectId: input.projectId,
           threadId: input.threadId ?? null,
+          deliveryMode: input.deliveryMode ?? existingTask?.deliveryMode ?? "auto",
           workspaceStrategy: input.workspaceStrategy,
           modelSelection: input.modelSelection,
           runtimeMode: input.runtimeMode,

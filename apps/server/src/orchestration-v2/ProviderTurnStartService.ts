@@ -39,6 +39,7 @@ import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import {
   ProviderTurnInstructionsV2,
   providerMessageWithTurnInstructions,
+  runMessagesInOrder,
 } from "./TurnInstructions.ts";
 
 export class ProviderTurnStartError extends Schema.TaggedErrorClass<ProviderTurnStartError>()(
@@ -107,6 +108,15 @@ export const layer: Layer.Layer<
         // The effect is idempotent once the run has advanced or terminalized.
         return;
       }
+      // Resolve app context before committing running state. A failed context read
+      // must be retryable and must never start a turn without its instructions.
+      // A queued run may carry several user messages (grouped follow-ups).
+      const runMessages = runMessagesInOrder(projection, run);
+      const appInstructions = yield* turnInstructions.resolve({
+        threadId: projection.thread.id,
+        runOrdinal: run.ordinal,
+        messageCount: runMessages.length,
+      });
       const rootNode = projection.nodes.find((candidate) => candidate.id === run.rootNodeId);
       const attempt = projection.attempts.find((candidate) => candidate.id === run.activeAttemptId);
       const providerThread = projection.providerThreads.find(
@@ -623,16 +633,16 @@ export const layer: Layer.Layer<
       const routableSubagents = projection.subagents.filter((subagent) =>
         canRouteRelatedSubagent(subagent.status),
       );
-      const appInstructions = yield* turnInstructions.resolve({
-        threadId: projection.thread.id,
-        runOrdinal: run.ordinal,
+      const messageText = providerMessageWithTurnInstructions({
+        instructions: appInstructions,
+        messages: runMessages.map((candidate) => ({ id: candidate.id, text: candidate.text })),
       });
       const userText =
         effectiveHandoffs.length === 0
-          ? message.text
+          ? messageText
           : providerMessageWithContextHandoffs({
               handoffs: effectiveHandoffs,
-              userText: message.text,
+              userText: messageText,
             });
       yield* runExecution.startRootRun({
         commandId: CommandId.make(`command:effect:provider-turn.start:${run.id}`),
@@ -694,8 +704,8 @@ export const layer: Layer.Layer<
           ),
         message: {
           messageId: message.id,
-          text: providerMessageWithTurnInstructions({ instructions: appInstructions, userText }),
-          attachments: message.attachments,
+          text: userText,
+          attachments: runMessages.flatMap((candidate) => candidate.attachments),
           createdBy: message.createdBy,
           creationSource: message.creationSource,
         },

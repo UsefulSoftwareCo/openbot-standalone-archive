@@ -13,7 +13,7 @@ layer("048_049_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        Array.from({ length: 60 }, (_, index) => index + 1),
+        Array.from({ length: 61 }, (_, index) => index + 1),
       );
     }),
   );
@@ -62,6 +62,29 @@ layer("048_049_OrchestrationV2", (it) => {
       assert.ok(eventColumns.some((column) => column.name === "event_id"));
       assert.ok(subagentColumns.some((column) => column.name === "child_thread_id"));
     }),
+  );
+
+  it.effect("adds the delivery reply target column without touching existing rows", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 60 });
+      yield* sql`
+        INSERT INTO openbot_deliveries (delivery_id, channel_id, run_id, kind, text, created_at)
+        VALUES ('d:old', 'c:one', 'r:one', 'message', 'hello', '2026-09-06T00:00:00.000Z')
+      `;
+
+      yield* runMigrations({ toMigrationInclusive: 61 });
+      // Re-running is a no-op (the column is only added when missing).
+      yield* runMigrations({ toMigrationInclusive: 61 });
+
+      const rows = yield* sql<{
+        readonly delivery_id: string;
+        readonly reply_to_json: string | null;
+      }>`
+        SELECT delivery_id, reply_to_json FROM openbot_deliveries
+      `;
+      assert.deepStrictEqual(rows, [{ delivery_id: "d:old", reply_to_json: null }]);
+    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
   );
 
   it.effect("backfills provider-session thread bindings in migration 051", () =>

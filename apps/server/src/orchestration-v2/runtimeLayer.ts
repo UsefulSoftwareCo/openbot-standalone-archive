@@ -133,7 +133,7 @@ const runExecutionServiceProvided = runExecutionServiceLayer.pipe(
 );
 
 const openbotTurnInstructionsProvided = openbotTurnInstructionsLayer.pipe(
-  Layer.provide(openbotChannelStoreLayer),
+  Layer.provide(Layer.merge(openbotChannelStoreLayer, projectionStoreLayer)),
 );
 
 const providerTurnStartServiceProvided = providerTurnStartServiceLayer.pipe(

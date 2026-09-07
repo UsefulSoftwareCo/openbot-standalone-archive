@@ -1475,6 +1475,64 @@ describe("orchestrator MCP toolkit", () => {
             });
             expect(delegatedStatusAfterFollowup.latestTerminalSummary).not.toBeNull();
 
+            const firstFollowupDelivery = yield* waitForProjection(
+              orchestrator,
+              parentThreadId,
+              (projection) =>
+                projection.contextTransfers.some(
+                  (transfer) =>
+                    transfer.type === "subagent_result" &&
+                    transfer.sourcePoint?.runId === childFollowup.runId,
+                ),
+            );
+            const followupTransfer = firstFollowupDelivery.contextTransfers.find(
+              (transfer) =>
+                transfer.type === "subagent_result" &&
+                transfer.sourcePoint?.runId === childFollowup.runId,
+            );
+            expect(followupTransfer?.targetRunId).not.toBeNull();
+            const followupRun = firstFollowupDelivery.runs.find(
+              (run) => run.id === followupTransfer?.targetRunId,
+            );
+            expect(followupRun?.status).toBe("queued");
+            expect(
+              firstFollowupDelivery.messages.find(
+                (message) => message.id === followupRun?.userMessageId,
+              )?.text,
+            ).toContain(delegatedStatusAfterFollowup.latestTerminalSummary);
+
+            const secondFollowupCall = yield* invoke("t3_thread_send", {
+              threadId: delegated.childThreadId,
+              message: "Confirm the delegated API boundary a second time.",
+              clientRequestId: "delegated-child-followup-2",
+            });
+            const secondFollowup = yield* decodeThreadSendResult(
+              secondFollowupCall.structuredContent,
+            ).pipe(Effect.orDie);
+            yield* invoke("t3_thread_wait", {
+              threadId: delegated.childThreadId,
+              runId: secondFollowup.runId,
+              timeoutMs: 10_000,
+            });
+            const secondFollowupDelivery = yield* waitForProjection(
+              orchestrator,
+              parentThreadId,
+              (projection) =>
+                projection.contextTransfers.some(
+                  (transfer) =>
+                    transfer.type === "subagent_result" &&
+                    transfer.sourcePoint?.runId === secondFollowup.runId,
+                ),
+            );
+            for (const runId of [childFollowup.runId, secondFollowup.runId]) {
+              const transfers = secondFollowupDelivery.contextTransfers.filter(
+                (transfer) =>
+                  transfer.type === "subagent_result" && transfer.sourcePoint?.runId === runId,
+              );
+              expect(transfers).toHaveLength(1);
+              expect(transfers[0]?.targetRunId).not.toBeNull();
+            }
+
             const activeChildFollowupCall = yield* invoke("t3_thread_send", {
               threadId: delegated.childThreadId,
               message: cancellationPrompt,
@@ -1499,7 +1557,7 @@ describe("orchestrator MCP toolkit", () => {
               status: "completed",
               summary: delegatedResult,
               hasPendingChildRuns: true,
-              latestTerminalRunId: childFollowup.runId,
+              latestTerminalRunId: secondFollowup.runId,
               latestTerminalStatus: "completed",
             });
             const activeChildProjection = yield* orchestrator.getThreadProjection(
@@ -1560,6 +1618,23 @@ describe("orchestrator MCP toolkit", () => {
                 (run) => run.id === activeChildFollowup.runId && run.status === "interrupted",
               ),
             );
+            const interruptedDelivery = yield* waitForProjection(
+              orchestrator,
+              parentThreadId,
+              (projection) =>
+                projection.contextTransfers.some(
+                  (transfer) =>
+                    transfer.type === "subagent_result" &&
+                    transfer.sourcePoint?.runId === activeChildFollowup.runId,
+                ),
+            );
+            expect(
+              interruptedDelivery.contextTransfers.find(
+                (transfer) =>
+                  transfer.type === "subagent_result" &&
+                  transfer.sourcePoint?.runId === activeChildFollowup.runId,
+              )?.targetRunId,
+            ).toBeNull();
             const delegatedStatusAfterCleanupCall = yield* invoke("task_status", {
               taskId: delegated.taskId,
             });

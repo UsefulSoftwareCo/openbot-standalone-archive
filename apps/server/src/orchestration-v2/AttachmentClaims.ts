@@ -51,6 +51,7 @@ export const releaseClaimedAttachments = Effect.fn("AttachmentClaims.releaseClai
  */
 export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingAttachments")(
   function* (input: {
+    readonly claimKey?: string;
     readonly threadId: string;
     readonly attachments: ReadonlyArray<ChatAttachment>;
   }) {
@@ -68,6 +69,7 @@ export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingA
             return attachment;
           }
           const claim = planAttachmentClaim({
+            ...(input.claimKey === undefined ? {} : { claimKey: input.claimKey }),
             attachmentsDir: serverConfig.attachmentsDir,
             threadId: input.threadId,
             attachmentId: attachment.id,

@@ -1,3 +1,5 @@
+import type { EnvironmentId, OpenbotChannelCreateInput } from "@t3tools/contracts";
+import { CommandId } from "@t3tools/contracts";
 import { Button } from "@t3tools/ui/button";
 import {
   Dialog,
@@ -8,66 +10,97 @@ import {
   DialogPopup,
   DialogTitle,
 } from "@t3tools/ui/dialog";
-import { Input } from "@t3tools/ui/input";
+import * as Effect from "effect/Effect";
+import * as Random from "effect/Random";
 import { useState } from "react";
+import { BotProfileFields, type BotProfileDraft } from "./BotProfileFields";
 
+/** Create a bot with a stable command id for retries after a dropped connection. */
 export function NewChannelDialog({
   open,
+  environmentId,
   onOpenChange,
   onCreate,
   busy,
   error,
 }: {
   readonly open: boolean;
+  readonly environmentId: EnvironmentId;
   readonly onOpenChange: (open: boolean) => void;
-  readonly onCreate: (name: string) => void;
+  readonly onCreate: (input: OpenbotChannelCreateInput) => void;
   readonly busy: boolean;
   readonly error: string | null;
 }) {
-  const [name, setName] = useState("");
-  const trimmed = name.trim();
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const [draft, setDraft] = useState<BotProfileDraft>({
+    name: "",
+    avatar: "",
+    description: "",
+    modelSelection: undefined,
+  });
+  const [commandId] = useState(() =>
+    CommandId.make(
+      `command:openbot:create:${Effect.runSync(Effect.all([Random.nextInt, Random.nextInt, Random.nextInt, Random.nextInt])).join("-")}`,
+    ),
+  );
   return (
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!next) setName("");
-        onOpenChange(next);
+        if (!busy && !avatarBusy) onOpenChange(next);
       }}
     >
-      <DialogPopup className="max-w-sm" bottomStickOnMobile={false}>
+      <DialogPopup className="max-w-md" bottomStickOnMobile={false}>
         <form
           onSubmit={(event) => {
             event.preventDefault();
-            if (trimmed.length === 0 || busy) return;
-            onCreate(trimmed);
+            if (
+              draft.name.trim() === "" ||
+              busy ||
+              avatarBusy ||
+              draft.modelSelection?.model.trim() === ""
+            )
+              return;
+            onCreate({ ...draft, name: draft.name.trim(), commandId });
           }}
         >
           <DialogHeader>
-            <DialogTitle>New channel</DialogTitle>
-            <DialogDescription>A place for an ongoing conversation with OpenBot.</DialogDescription>
+            <DialogTitle>New bot</DialogTitle>
+            <DialogDescription>Create a bot for an ongoing conversation.</DialogDescription>
           </DialogHeader>
-          <DialogPanel className="flex flex-col gap-2">
-            <label className="font-medium text-sm" htmlFor="openbot-channel-name">
-              Name
-            </label>
-            <Input
-              id="openbot-channel-name"
-              autoComplete="off"
-              data-1p-ignore
-              autoFocus
-              placeholder="e.g. Work or Life"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              maxLength={80}
+          <DialogPanel className="max-h-[65dvh] space-y-4 overflow-y-auto">
+            <BotProfileFields
+              environmentId={environmentId}
+              value={draft}
+              onChange={setDraft}
+              disabled={busy || avatarBusy}
+              onBusyChange={setAvatarBusy}
             />
-            {error !== null && <p className="text-error-foreground text-sm">{error}</p>}
+            {error !== null && (
+              <p role="alert" className="text-error-foreground text-sm">
+                {error}
+              </p>
+            )}
           </DialogPanel>
           <DialogFooter variant="bare">
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={busy || avatarBusy}
+              onClick={() => onOpenChange(false)}
+            >
               Cancel
             </Button>
-            <Button type="submit" disabled={trimmed.length === 0 || busy}>
-              Create channel
+            <Button
+              type="submit"
+              disabled={
+                draft.name.trim() === "" ||
+                busy ||
+                avatarBusy ||
+                draft.modelSelection?.model.trim() === ""
+              }
+            >
+              Create bot
             </Button>
           </DialogFooter>
         </form>

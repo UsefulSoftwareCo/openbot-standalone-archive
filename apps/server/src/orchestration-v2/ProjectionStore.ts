@@ -285,14 +285,19 @@ function needsRecovery(
         projection.thread.lineage.relationshipToParent === "subagent" &&
         parentThreadId !== null &&
         projection.thread.forkedFrom?.type === "node" &&
-        ["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
-          projection.runs.at(-1)?.status ?? "idle",
-        ) &&
-        !projection.contextTransfers.some(
-          (transfer) =>
-            transfer.type === "subagent_result" &&
-            transfer.sourceThreadId === projection.thread.id &&
-            transfer.targetThreadId === parentThreadId,
+        projection.runs.some(
+          (run) =>
+            ["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
+              run.status,
+            ) &&
+            !projection.contextTransfers.some(
+              (transfer) =>
+                transfer.type === "subagent_result" &&
+                transfer.sourceThreadId === projection.thread.id &&
+                transfer.targetThreadId === parentThreadId &&
+                (transfer.sourcePoint?.runId === run.id ||
+                  (transfer.sourcePoint?.runId === undefined && run.id === projection.runs[0]?.id)),
+            ),
         )
       );
     }
@@ -2808,16 +2813,21 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
                   AND json_extract(child.payload_json, '$.lineage.parentThreadId') IS NOT NULL
                   AND json_extract(child.payload_json, '$.forkedFrom.type') = 'node'
-                  AND (
-                    SELECT status FROM orchestration_v2_projection_runs
-                    WHERE thread_id = child.thread_id
-                    ORDER BY ordinal DESC LIMIT 1
-                  ) IN ('completed', 'interrupted', 'failed', 'cancelled', 'rolled_back')
-                  AND NOT EXISTS (
-                    SELECT 1 FROM orchestration_v2_projection_context_transfers
-                    WHERE source_thread_id = child.thread_id
-                      AND target_thread_id = json_extract(child.payload_json, '$.lineage.parentThreadId')
-                      AND type = 'subagent_result'
+                  AND EXISTS (
+                    SELECT 1 FROM orchestration_v2_projection_runs AS child_run
+                    WHERE child_run.thread_id = child.thread_id
+                      AND child_run.status IN ('completed', 'interrupted', 'failed', 'cancelled', 'rolled_back')
+                      AND NOT EXISTS (
+                        SELECT 1 FROM orchestration_v2_projection_context_transfers
+                        WHERE source_thread_id = child.thread_id
+                          AND target_thread_id = json_extract(child.payload_json, '$.lineage.parentThreadId')
+                          AND type = 'subagent_result'
+                          AND (json_extract(payload_json, '$.sourcePoint.runId') = child_run.run_id
+                            OR (json_extract(payload_json, '$.sourcePoint.runId') IS NULL
+                              AND child_run.ordinal = (SELECT MIN(first_run.ordinal)
+                                FROM orchestration_v2_projection_runs AS first_run
+                                WHERE first_run.thread_id = child.thread_id)))
+                      )
                   )
                   ELSE 0 END
               `;

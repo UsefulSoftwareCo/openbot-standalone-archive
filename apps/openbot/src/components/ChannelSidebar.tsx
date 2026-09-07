@@ -2,7 +2,8 @@ import { Button } from "@t3tools/ui/button";
 import { cn } from "@t3tools/ui/cn";
 import { ScrollArea } from "@t3tools/ui/scroll-area";
 import type { OpenbotChannel, OpenbotChannelId } from "@t3tools/contracts";
-import { Hash, Plus } from "lucide-react";
+import { BotAvatar } from "./BotProfileFields";
+import { Plus } from "lucide-react";
 
 export function ChannelSidebar({
   channels,
@@ -33,7 +34,13 @@ export function ChannelSidebar({
         <span className="font-medium text-[11px] text-sidebar-muted-foreground uppercase tracking-wide">
           Channels
         </span>
-        <Button size="icon-xs" variant="ghost-muted" aria-label="New channel" onClick={onCreate}>
+        <Button
+          size="icon"
+          className="size-11 md:size-7"
+          variant="ghost-muted"
+          aria-label="New bot"
+          onClick={onCreate}
+        >
           <Plus />
         </Button>
       </div>
@@ -53,13 +60,13 @@ export function ChannelSidebar({
                   onClick={() => onSelect(channel.id)}
                   aria-current={selected ? "page" : undefined}
                   className={cn(
-                    "flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
+                    "flex min-h-11 w-full items-center gap-2 md:min-h-0 md:gap-1.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
                     selected
                       ? "bg-sidebar-row-selected text-foreground shadow-xs/5"
                       : "text-sidebar-foreground/85 hover:bg-sidebar-row-hover hover:text-foreground",
                   )}
                 >
-                  <Hash className="size-3.5 shrink-0 text-sidebar-muted-foreground" />
+                  <BotAvatar avatar={channel.avatar} name={channel.name} />
                   <span className="truncate">{channel.name}</span>
                 </button>
               );

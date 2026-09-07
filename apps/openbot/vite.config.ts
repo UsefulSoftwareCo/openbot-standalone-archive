@@ -37,6 +37,13 @@ export default defineConfig(() => ({
     host: "localhost",
     port,
     strictPort: true,
+    allowedHosts: [
+      ".ts.net",
+      ...(process.env.T3CODE_DEV_ALLOWED_HOSTS ?? "")
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0),
+    ],
     ...(devProxyTarget
       ? {
           proxy: Object.fromEntries(

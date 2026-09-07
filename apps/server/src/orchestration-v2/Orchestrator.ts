@@ -63,6 +63,7 @@ import { ProviderContinuationRequests } from "./ProviderContinuationRequests.ts"
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
+import { runMessagesInOrder } from "./TurnInstructions.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import {
   makeSubagentChildThread,
@@ -972,6 +973,37 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         completedAt: now,
         updatedAt: now,
       };
+      // Messages that joined this queued run (see `joinQueuedRun`) get their
+      // own user turn items now, in arrival order after the primary message,
+      // so transcripts show every input the provider turn consumes.
+      const groupedTurnItems: ReadonlyArray<OrchestrationV2TurnItem> = runMessagesInOrder(
+        projection,
+        queuedRun,
+      )
+        .filter((candidate) => candidate.id !== queuedMessage.id)
+        .map((candidate, index) => ({
+          id: idAllocator.derive.userTurnItem({ messageId: candidate.id }),
+          threadId,
+          runId: queuedRun.id,
+          nodeId: rootNodeId,
+          providerThreadId: queuedProviderThread.id,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: userTurnItem.ordinal + index + 1,
+          status: "completed",
+          title: null,
+          type: "user_message",
+          messageId: candidate.id,
+          text: candidate.text,
+          attachments: candidate.attachments,
+          createdBy: candidate.createdBy,
+          creationSource: candidate.creationSource,
+          inputIntent: "queued_turn",
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+        }));
       const checkpointEvents: ReadonlyArray<Omit<OrchestrationV2DomainEvent, "id">> =
         storedCheckpointScope === undefined
           ? [
@@ -1005,15 +1037,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             occurredAt: now,
             payload: providerThread,
           },
-          {
-            type: "turn-item.updated",
-            threadId,
-            runId: queuedRun.id,
-            nodeId: rootNodeId,
-            providerInstanceId: queuedRun.providerInstanceId,
-            occurredAt: now,
-            payload: userTurnItem,
-          },
+          ...[userTurnItem, ...groupedTurnItems].map(
+            (item): Omit<OrchestrationV2DomainEvent, "id"> => ({
+              type: "turn-item.updated",
+              threadId,
+              runId: queuedRun.id,
+              nodeId: rootNodeId,
+              providerInstanceId: queuedRun.providerInstanceId,
+              occurredAt: now,
+              payload: item,
+            }),
+          ),
           {
             type: "run.updated",
             threadId,
@@ -3089,6 +3123,74 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         (dispatchMode.type === "defer_start" ||
           dispatchMode.type === "start_immediately" ||
           dispatchMode.type === "queue_after_active");
+      // Opt-in grouping: while a run is active and another run is already
+      // queued, the new message joins that queued run instead of queueing a
+      // run of its own. The queued run's next turn then carries every grouped
+      // message in arrival order. Only a plain user message can join, and only
+      // a run that is still queued: once it is promoted the lock-protected
+      // status check below no longer matches and the message queues normally.
+      const joinableQueuedRun =
+        shouldQueue &&
+        command.joinQueuedRun === true &&
+        command.peerMessage === undefined &&
+        delegatedCompletion === undefined &&
+        command.sourcePlanRef === undefined &&
+        command.restartContinuationOfRunId === undefined &&
+        !isNativeMaintenanceCommand(command)
+          ? queuedRunsInDeliveryOrder(projection).findLast((candidate) => {
+              const primary = projection.messages.find(
+                (message) => message.id === candidate.userMessageId,
+              );
+              return (
+                candidate.rootNodeId !== null &&
+                primary !== undefined &&
+                primary.peerMessage === undefined &&
+                !isAutomaticCompletionRun(projection, candidate) &&
+                !isNativeMaintenanceCommand(primary)
+              );
+            })
+          : undefined;
+      if (joinableQueuedRun !== undefined) {
+        const now = yield* DateTime.now;
+        // Arrival order inside a group is carried by createdAt. Writes are
+        // serialized by the thread lock, so bumping past the newest message on
+        // the run keeps the order strict even when the clock does not move.
+        const newest = runMessagesInOrder(projection, joinableQueuedRun).at(-1);
+        const createdAt =
+          newest !== undefined &&
+          DateTime.toEpochMillis(newest.createdAt) >= DateTime.toEpochMillis(now)
+            ? DateTime.add(newest.createdAt, { milliseconds: 1 })
+            : now;
+        const message: OrchestrationV2ConversationMessage = {
+          createdBy: command.createdBy,
+          creationSource: command.creationSource,
+          id: command.messageId,
+          threadId: command.threadId,
+          runId: joinableQueuedRun.id,
+          nodeId: joinableQueuedRun.rootNodeId,
+          role: "user",
+          text: dispatchText,
+          attachments: command.attachments,
+          streaming: false,
+          createdAt,
+          updatedAt: createdAt,
+        };
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "message.updated",
+          threadId: command.threadId,
+          runId: joinableQueuedRun.id,
+          ...(joinableQueuedRun.rootNodeId === null
+            ? {}
+            : { nodeId: joinableQueuedRun.rootNodeId }),
+          providerInstanceId: joinableQueuedRun.providerInstanceId,
+          occurredAt: now,
+          payload: message,
+        });
+        return;
+      }
       if (shouldQueue) {
         if (pendingMergeBackTransfers.length > 0) {
           return yield* new OrchestratorDispatchError({
@@ -3237,6 +3339,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           createdAt: now,
           updatedAt: now,
           ...(delegatedCompletion === undefined ? {} : { delegatedCompletion }),
+          ...(command.peerMessage === undefined ? {} : { peerMessage: command.peerMessage }),
         };
         const emitEvent = emit(events, command);
         yield* emitEvent({
@@ -3493,6 +3596,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           createdAt: now,
           updatedAt: now,
           ...(delegatedCompletion === undefined ? {} : { delegatedCompletion }),
+          ...(command.peerMessage === undefined ? {} : { peerMessage: command.peerMessage }),
         };
         const turnItem: OrchestrationV2TurnItem = {
           createdBy: command.createdBy,
@@ -4155,6 +4259,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         createdAt: now,
         updatedAt: now,
         ...(delegatedCompletion === undefined ? {} : { delegatedCompletion }),
+        ...(command.peerMessage === undefined ? {} : { peerMessage: command.peerMessage }),
       };
       const turnItem: OrchestrationV2TurnItem = {
         createdBy: command.createdBy,
@@ -6742,6 +6847,98 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
     });
 
+  // Each follow-up has its own receipt and transfer. The original task/cohort
+  // remains the record of the delegation's first run.
+  const finalizeAppOwnedSubagentFollowups = (childThreadId: ThreadId) =>
+    Effect.gen(function* () {
+      const child = yield* projectionStore.getThreadProjection(childThreadId);
+      const parentThreadId = child.thread.lineage.parentThreadId;
+      const fork = child.thread.forkedFrom;
+      if (
+        child.thread.lineage.relationshipToParent !== "subagent" ||
+        parentThreadId === null ||
+        fork?.type !== "node"
+      )
+        return;
+      let parent = yield* projectionStore.getThreadProjection(parentThreadId);
+      const task = parent.subagents.find(
+        (candidate) =>
+          candidate.id === fork.nodeId &&
+          candidate.origin === "app_owned" &&
+          candidate.childThreadId === childThreadId,
+      );
+      if (task === undefined) return;
+      for (const run of child.runs.slice(1)) {
+        if (
+          delegatedTaskTerminalStatus(run.status) === null ||
+          parent.contextTransfers.some(
+            (transfer) =>
+              transfer.type === "subagent_result" &&
+              transfer.sourceThreadId === childThreadId &&
+              transfer.sourcePoint?.runId === run.id,
+          )
+        )
+          continue;
+        const result = subagentResultForRun(child, run);
+        const messageId = MessageId.make(`subagent-followup:${childThreadId}:${run.id}`);
+        const shouldNotify =
+          (run.status === "completed" || run.status === "failed") &&
+          parent.thread.archivedAt === null &&
+          parent.thread.deletedAt === null;
+        if (shouldNotify) {
+          yield* dispatchWithReceiptEffect({
+            type: "message.dispatch",
+            commandId: CommandId.make(`subagent-followup:${parentThreadId}:${run.id}`),
+            threadId: parentThreadId,
+            messageId,
+            text: `Delegated task ${task.id} follow-up run ${run.id} ${run.status}.\nChild thread: ${childThreadId}\n\n${result.text ?? "No result text was produced."}`,
+            attachments: [],
+            createdBy: "system",
+            creationSource: "server",
+            dispatchMode: { type: "queue_after_active" },
+          });
+          parent = yield* projectionStore.getThreadProjection(parentThreadId);
+        }
+        const targetRun = parent.runs.find((candidate) => candidate.userMessageId === messageId);
+        const now = yield* DateTime.now;
+        yield* writeSystemEvents([
+          {
+            type: "context-transfer.created",
+            threadId: parentThreadId,
+            occurredAt: now,
+            providerInstanceId: run.providerInstanceId,
+            payload: {
+              id: yield* idAllocator.allocate.contextTransfer({
+                sourceThreadId: childThreadId,
+                targetThreadId: parentThreadId,
+                type: "subagent_result",
+              }),
+              type: "subagent_result",
+              sourceThreadId: childThreadId,
+              targetThreadId: parentThreadId,
+              sourcePoint: {
+                ...contextSourcePointForRun(child, run),
+                ...(result.turnItemId === null ? {} : { turnItemId: result.turnItemId }),
+              },
+              basePoint: null,
+              sourceProviderInstanceId: run.providerInstanceId,
+              targetProviderInstanceId:
+                targetRun?.providerInstanceId ?? parent.thread.providerInstanceId,
+              targetRunId: targetRun?.id ?? null,
+              status: "consumed",
+              resolution: null,
+              createdBy: "system",
+              error: null,
+              createdAt: now,
+              updatedAt: now,
+              consumedAt: now,
+            },
+          },
+        ]);
+        parent = yield* projectionStore.getThreadProjection(parentThreadId);
+      }
+    });
+
   const finalizeDelegatedCompletionDelivery = (threadId: ThreadId, runId: RunId) =>
     Effect.gen(function* () {
       const projection = yield* projectionStore.getThreadProjection(threadId);
@@ -7197,7 +7394,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       // semaphores are neither reentrant nor deadlock-aware.
       const parentThreadId = yield* appOwnedSubagentParentThreadId(threadId);
       if (parentThreadId !== undefined) {
-        yield* threadDispatch.withLock(parentThreadId, finalizeAppOwnedSubagent(threadId));
+        yield* threadDispatch.withLock(
+          parentThreadId,
+          finalizeAppOwnedSubagent(threadId).pipe(
+            Effect.andThen(finalizeAppOwnedSubagentFollowups(threadId)),
+          ),
+        );
       }
       if (stored.event.type === "run.updated") {
         yield* threadDispatch.withLock(
@@ -7259,7 +7461,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             const thread = yield* projectionStore.getThreadShell(threadId);
             const parentThreadId = thread?.lineage.parentThreadId;
             if (parentThreadId === undefined || parentThreadId === null) return;
-            yield* threadDispatch.withLock(parentThreadId, finalizeAppOwnedSubagent(threadId));
+            yield* threadDispatch.withLock(
+              parentThreadId,
+              finalizeAppOwnedSubagent(threadId).pipe(
+                Effect.andThen(finalizeAppOwnedSubagentFollowups(threadId)),
+              ),
+            );
           }).pipe(
             Effect.catchCause((cause) =>
               Effect.logWarning("Failed to recover terminal app-owned subagent", {
