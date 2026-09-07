@@ -158,9 +158,18 @@ import {
   OpenbotProjectListResult,
   OpenbotProjectUpdateInput,
   OpenbotRespondInput,
+  OpenbotChannelControlInput,
+  OpenbotChannelSnoozeInput,
+  OpenbotChannelSetModelInput,
   OpenbotThreadStartInput,
   OpenbotThreadStartResult,
 } from "./openbot.ts";
+import {
+  OpenbotComputerError,
+  OpenbotComputerSnapshot,
+  OpenbotComputerSnapshotInput,
+  OpenbotComputerStatus,
+} from "./openbotComputer.ts";
 import {
   ProjectListEntriesError,
   ProjectListEntriesInput,
@@ -392,6 +401,10 @@ export const WS_METHODS = {
   openbotContextUpdate: "openbot.context.update",
   openbotChannelSend: "openbot.channel.send",
   openbotChannelRespond: "openbot.channel.respond",
+  openbotChannelSnooze: "openbot.channel.snooze",
+  openbotChannelWake: "openbot.channel.wake",
+  openbotChannelCancel: "openbot.channel.cancel",
+  openbotChannelSetModel: "openbot.channel.setModel",
   openbotThreadStart: "openbot.thread.start",
   openbotProjectsList: "openbot.projects.list",
   openbotProjectsSubscribe: "openbot.projects.subscribe",
@@ -404,6 +417,8 @@ export const WS_METHODS = {
   openbotKnowledgeCreate: "openbot.knowledge.create",
   openbotKnowledgeUpdate: "openbot.knowledge.update",
   openbotKnowledgeDelete: "openbot.knowledge.delete",
+  openbotComputerStatus: "openbot.computer.status",
+  openbotComputerSnapshot: "openbot.computer.snapshot",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -1375,6 +1390,28 @@ export const WsOpenbotChannelRespondRpc = Rpc.make(WS_METHODS.openbotChannelResp
   error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
 });
 
+export const WsOpenbotChannelSnoozeRpc = Rpc.make(WS_METHODS.openbotChannelSnooze, {
+  payload: OpenbotChannelSnoozeInput,
+  success: OpenbotChannel,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+export const WsOpenbotChannelWakeRpc = Rpc.make(WS_METHODS.openbotChannelWake, {
+  payload: OpenbotChannelControlInput,
+  success: OpenbotChannel,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+/** Interrupt the active run and cancel queued runs; same operation as openbot_cancel_thread. */
+export const WsOpenbotChannelCancelRpc = Rpc.make(WS_METHODS.openbotChannelCancel, {
+  payload: OpenbotChannelControlInput,
+  success: OpenbotChannel,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+export const WsOpenbotChannelSetModelRpc = Rpc.make(WS_METHODS.openbotChannelSetModel, {
+  payload: OpenbotChannelSetModelInput,
+  success: OpenbotChannel,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+
 /** Create a child chat under a parent and dispatch its first work request. */
 export const WsOpenbotThreadStartRpc = Rpc.make(WS_METHODS.openbotThreadStart, {
   payload: OpenbotThreadStartInput,
@@ -1441,6 +1478,19 @@ export const WsOpenbotKnowledgeDeleteRpc = Rpc.make(WS_METHODS.openbotKnowledgeD
   payload: OpenbotKnowledgeDeleteInput,
   success: Schema.Struct({}),
   error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+
+/** What the host's desktop session looks like, and whether it can be previewed at all. */
+export const WsOpenbotComputerStatusRpc = Rpc.make(WS_METHODS.openbotComputerStatus, {
+  payload: Schema.Struct({}),
+  success: OpenbotComputerStatus,
+  error: Schema.Union([OpenbotComputerError, EnvironmentAuthorizationError]),
+});
+/** One JPEG of the host's main display, captured on demand. */
+export const WsOpenbotComputerSnapshotRpc = Rpc.make(WS_METHODS.openbotComputerSnapshot, {
+  payload: OpenbotComputerSnapshotInput,
+  success: OpenbotComputerSnapshot,
+  error: Schema.Union([OpenbotComputerError, EnvironmentAuthorizationError]),
 });
 
 export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
@@ -1510,6 +1560,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsOpenbotContextUpdateRpc,
   WsOpenbotChannelSendRpc,
   WsOpenbotChannelRespondRpc,
+  WsOpenbotChannelSnoozeRpc,
+  WsOpenbotChannelWakeRpc,
+  WsOpenbotChannelCancelRpc,
+  WsOpenbotChannelSetModelRpc,
   WsOpenbotThreadStartRpc,
   WsOpenbotProjectsListRpc,
   WsOpenbotProjectsSubscribeRpc,
@@ -1522,6 +1576,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsOpenbotKnowledgeCreateRpc,
   WsOpenbotKnowledgeUpdateRpc,
   WsOpenbotKnowledgeDeleteRpc,
+  WsOpenbotComputerStatusRpc,
+  WsOpenbotComputerSnapshotRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,

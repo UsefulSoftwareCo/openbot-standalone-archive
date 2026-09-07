@@ -318,6 +318,25 @@ export const OpenbotRespondInput = Schema.Struct({
 });
 export type OpenbotRespondInput = typeof OpenbotRespondInput.Type;
 
+/**
+ * Thread controls the UI and the agent tools share. Both surfaces call the
+ * same service operation, so "Stop" in the UI and openbot_cancel_thread do
+ * exactly the same thing: interrupt the active run and cancel queued runs.
+ */
+export const OpenbotChannelControlInput = Schema.Struct({ channelId: OpenbotChannelId });
+export type OpenbotChannelControlInput = typeof OpenbotChannelControlInput.Type;
+export const OpenbotChannelSnoozeInput = Schema.Struct({
+  channelId: OpenbotChannelId,
+  /** ISO 8601 instant. Wake follows T3's existing snooze rules. */
+  until: TrimmedNonEmptyString,
+});
+export type OpenbotChannelSnoozeInput = typeof OpenbotChannelSnoozeInput.Type;
+export const OpenbotChannelSetModelInput = Schema.Struct({
+  channelId: OpenbotChannelId,
+  modelSelection: ModelSelection,
+});
+export type OpenbotChannelSetModelInput = typeof OpenbotChannelSetModelInput.Type;
+
 export const OpenbotChannelView = Schema.Struct({
   channel: OpenbotChannel,
   status: OpenbotChannelStatus,
