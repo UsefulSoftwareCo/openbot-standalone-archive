@@ -45,16 +45,24 @@ export function snoozeActive(snoozedUntil: string | null, nowMs: number): boolea
   return Number.isFinite(wakeAtMs) && wakeAtMs > nowMs;
 }
 
-function useSnoozeActive(snoozedUntil: string | null): boolean {
-  const [, bump] = useState(0);
-  const active = snoozeActive(snoozedUntil, Date.now());
+export function useSnoozeActive(snoozedUntil: string | null): boolean {
+  // The deadline is an external clock event: the state holds the wake time
+  // that has already passed (if any), and the timer is the only writer, so
+  // render stays pure and nothing is set synchronously inside the effect.
+  const [expired, setExpired] = useState<string | null>(null);
   useEffect(() => {
-    if (!active || snoozedUntil === null) return;
-    const delay = Math.min(Math.max(0, Date.parse(snoozedUntil) - Date.now()) + 50, 2_147_483_647);
-    const id = window.setTimeout(() => bump((tick) => tick + 1), delay);
+    if (snoozedUntil === null) return;
+    const delay = Date.parse(snoozedUntil) - Date.now();
+    if (!Number.isFinite(delay)) return;
+    const id = window.setTimeout(
+      () => setExpired(snoozedUntil),
+      Math.min(Math.max(0, delay) + 50, 2_147_483_647),
+    );
     return () => window.clearTimeout(id);
-  }, [active, snoozedUntil]);
-  return active;
+  }, [snoozedUntil]);
+  return (
+    snoozedUntil !== null && expired !== snoozedUntil && Number.isFinite(Date.parse(snoozedUntil))
+  );
 }
 
 function formatSnoozedUntil(iso: string): string {

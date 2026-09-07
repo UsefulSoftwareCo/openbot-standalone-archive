@@ -9,11 +9,12 @@ import type {
 import { cn } from "@t3tools/ui/cn";
 import { ScrollArea } from "@t3tools/ui/scroll-area";
 import { Spinner } from "@t3tools/ui/spinner";
-import { AlertCircle, ArrowRightLeft, CornerUpLeft, MessageSquare } from "lucide-react";
+import { AlertCircle, ArrowRightLeft, Clock3, CornerUpLeft, MessageSquare } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useSnoozeActive } from "./ChatHeader";
 import { ChatAvatar } from "./ChatProfileFields";
-import { incomingPresentation, resolveReplyPreview } from "./ChannelView.logic";
+import { channelActivity, incomingPresentation, resolveReplyPreview } from "./ChannelView.logic";
 import { Attachment } from "./Attachment";
 import { Markdown } from "./Markdown";
 
@@ -141,17 +142,28 @@ function MessageFailure({
 
 /** Subtle channel-level activity line, like a typing indicator. */
 function ChannelActivity({ view }: { readonly view: ChannelViewData }) {
-  if (view.status === "idle") return null;
+  // The "until this chat wakes" wording only needs to know whether the snooze
+  // is still ahead; the header already tracks that against the clock and
+  // re-renders at the deadline, so read the same derived value here.
+  const snoozed = useSnoozeActive(view.snoozedUntil);
+  const activity = channelActivity(view, snoozed);
+  if (activity.kind === "none") return null;
   const label =
-    view.status === "failed"
+    activity.kind === "failed"
       ? "The last run failed"
-      : view.status === "waiting"
+      : activity.kind === "waiting"
         ? "Assistant is waiting for your answer"
-        : "Assistant is typing…";
+        : activity.kind === "queued"
+          ? activity.snoozed
+            ? "Queued until this chat wakes"
+            : "Queued"
+          : "Assistant is typing…";
   return (
     <div className="flex h-7 items-center gap-2 px-4 text-muted-foreground text-xs">
-      {view.status === "failed" ? (
+      {activity.kind === "failed" ? (
         <AlertCircle className="size-3 text-error-foreground" />
+      ) : activity.kind === "queued" ? (
+        <Clock3 className="size-3" />
       ) : (
         <Spinner className="size-3" />
       )}

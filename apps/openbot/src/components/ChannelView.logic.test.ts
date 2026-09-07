@@ -1,7 +1,12 @@
 import type { OpenbotChannelView, OpenbotIncomingMessage } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 
-import { clipPreview, incomingPresentation, resolveReplyPreview } from "./ChannelView.logic";
+import {
+  channelActivity,
+  clipPreview,
+  incomingPresentation,
+  resolveReplyPreview,
+} from "./ChannelView.logic";
 
 const message = (
   id: string,
@@ -89,4 +94,38 @@ it("clips a long preview on a word boundary and collapses whitespace", () => {
   const long = "word ".repeat(40);
   assert.isTrue(clipPreview(long).endsWith("…"));
   assert.isBelow(clipPreview(long).length, 95);
+});
+
+describe("channelActivity", () => {
+  const message = (runStatus: OpenbotIncomingMessage["runStatus"]): OpenbotIncomingMessage => ({
+    id: "message:1" as OpenbotIncomingMessage["id"],
+    runId: null,
+    runStatus,
+    text: "hi",
+    displayText: "hi",
+    attachments: [],
+    createdAt: "2026-04-10T11:00:00.000Z",
+    state: "pending",
+    outcome: null,
+    error: null,
+  });
+
+  it("reports a parked queue instead of a typing agent", () => {
+    assert.deepEqual(channelActivity({ status: "working", messages: [message("queued")] }, true), {
+      kind: "queued",
+      snoozed: true,
+    });
+    assert.deepEqual(channelActivity({ status: "working", messages: [message("queued")] }, false), {
+      kind: "queued",
+      snoozed: false,
+    });
+  });
+
+  it("reports working only when a run is actually executing", () => {
+    assert.deepEqual(
+      channelActivity({ status: "working", messages: [message("running")] }, false),
+      { kind: "working" },
+    );
+    assert.deepEqual(channelActivity({ status: "idle", messages: [] }, false), { kind: "none" });
+  });
 });

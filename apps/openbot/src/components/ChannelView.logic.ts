@@ -52,3 +52,34 @@ export function resolveReplyPreview(
   const delivery = view.deliveries.find((candidate) => candidate.id === target.deliveryId);
   return delivery === undefined ? null : { author: "Assistant", text: clipPreview(delivery.text) };
 }
+
+/**
+ * What the activity line should say. The server folds "queued, nothing
+ * running" into `working`, but the messages carry their run status, so the UI
+ * can tell a parked queue (snoozed thread, or waiting for a wake) from a run
+ * that is actually executing and must not claim the assistant is typing.
+ */
+export type ChannelActivityState =
+  | { readonly kind: "none" }
+  | { readonly kind: "failed" }
+  | { readonly kind: "waiting" }
+  | { readonly kind: "queued"; readonly snoozed: boolean }
+  | { readonly kind: "working" };
+
+export function channelActivity(
+  view: Pick<OpenbotChannelView, "status" | "messages">,
+  snoozed: boolean,
+): ChannelActivityState {
+  if (view.status === "idle") return { kind: "none" };
+  if (view.status === "failed") return { kind: "failed" };
+  if (view.status === "waiting") return { kind: "waiting" };
+  const running = view.messages.some(
+    (message) =>
+      message.runStatus === "preparing" ||
+      message.runStatus === "starting" ||
+      message.runStatus === "running" ||
+      message.runStatus === "waiting",
+  );
+  if (running) return { kind: "working" };
+  return { kind: "queued", snoozed };
+}
