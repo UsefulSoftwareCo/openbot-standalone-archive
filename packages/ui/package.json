@@ -1,0 +1,53 @@
+{
+  "name": "@t3tools/ui",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./cn": {
+      "types": "./src/cn.ts",
+      "import": "./src/cn.ts"
+    },
+    "./button": {
+      "types": "./src/button.tsx",
+      "import": "./src/button.tsx"
+    },
+    "./input": {
+      "types": "./src/input.tsx",
+      "import": "./src/input.tsx"
+    },
+    "./textarea": {
+      "types": "./src/textarea.tsx",
+      "import": "./src/textarea.tsx"
+    },
+    "./scroll-area": {
+      "types": "./src/scroll-area.tsx",
+      "import": "./src/scroll-area.tsx"
+    },
+    "./spinner": {
+      "types": "./src/spinner.tsx",
+      "import": "./src/spinner.tsx"
+    },
+    "./dialog-styles": {
+      "types": "./src/dialog-styles.ts",
+      "import": "./src/dialog-styles.ts"
+    },
+    "./dialog": {
+      "types": "./src/dialog.tsx",
+      "import": "./src/dialog.tsx"
+    },
+    "./tokens.css": "./src/tokens.css"
+  },
+  "scripts": {
+    "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@base-ui/react": "^1.4.1",
+    "class-variance-authority": "^0.7.1",
+    "lucide-react": "^0.564.0",
+    "react": "19.2.6",
+    "tailwind-merge": "^3.4.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.14"
+  }
+}

@@ -1,0 +1,90 @@
+@import "tailwindcss";
+@import "@t3tools/ui/tokens.css";
+@source "../../../packages/ui/src";
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html,
+  body {
+    background-color: var(--app-chrome-background);
+  }
+  body {
+    @apply text-foreground;
+    font-family: var(--font-sans);
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+  }
+  #root {
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+  }
+  pre,
+  code {
+    font-family: var(--font-mono);
+  }
+}
+
+/* Chat markdown: quiet, readable prose that matches T3's message styling. */
+.openbot-markdown > :first-child {
+  margin-top: 0;
+}
+.openbot-markdown > :last-child {
+  margin-bottom: 0;
+}
+.openbot-markdown p,
+.openbot-markdown ul,
+.openbot-markdown ol,
+.openbot-markdown pre,
+.openbot-markdown blockquote {
+  margin: 0.5em 0;
+}
+.openbot-markdown ul,
+.openbot-markdown ol {
+  padding-left: 1.25em;
+}
+.openbot-markdown ul {
+  list-style: disc;
+}
+.openbot-markdown ol {
+  list-style: decimal;
+}
+.openbot-markdown code {
+  font-size: 0.9em;
+  background: var(--code-background);
+  color: var(--code-foreground);
+  border-radius: 0.3em;
+  padding: 0.1em 0.35em;
+}
+.openbot-markdown pre {
+  background: var(--code-background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0.75em 0.9em;
+  overflow-x: auto;
+}
+.openbot-markdown pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 0.85em;
+}
+.openbot-markdown a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.openbot-markdown blockquote {
+  border-left: 2px solid var(--border);
+  padding-left: 0.75em;
+  color: var(--muted-foreground);
+}
+.openbot-markdown h1,
+.openbot-markdown h2,
+.openbot-markdown h3 {
+  font-weight: 600;
+  margin: 0.75em 0 0.35em;
+}

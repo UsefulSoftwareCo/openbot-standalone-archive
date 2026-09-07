@@ -93,6 +93,7 @@ import * as ThreadManagementService from "./orchestration-v2/ThreadManagementSer
 import { ProviderSessionManagerV2 } from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
+import { OpenbotChannelService } from "./openbot/OpenbotChannelService.ts";
 import {
   archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
@@ -601,6 +602,7 @@ const makeWsRpcLayer = (
       );
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
+      const openbotChannels = yield* OpenbotChannelService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const usage = yield* UsageService.UsageService;
       const projectService = yield* ProjectService.ProjectService;
@@ -1607,6 +1609,29 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.scheduledTasksRunNow, scheduledTasks.runNow(input), {
             "rpc.aggregate": "scheduledTasks",
             "scheduled_task.id": input.id,
+          }),
+        [WS_METHODS.openbotChannelsList]: (_input) =>
+          observeRpcEffect(WS_METHODS.openbotChannelsList, openbotChannels.list, {
+            "rpc.aggregate": "openbot",
+          }),
+        [WS_METHODS.openbotChannelsSubscribe]: (_input) =>
+          observeRpcStream(WS_METHODS.openbotChannelsSubscribe, openbotChannels.subscribeList, {
+            "rpc.aggregate": "openbot",
+          }),
+        [WS_METHODS.openbotChannelsCreate]: (input) =>
+          observeRpcEffect(WS_METHODS.openbotChannelsCreate, openbotChannels.create(input), {
+            "rpc.aggregate": "openbot",
+          }),
+        [WS_METHODS.openbotChannelSubscribe]: (input) =>
+          observeRpcStream(
+            WS_METHODS.openbotChannelSubscribe,
+            openbotChannels.subscribeView(input.channelId),
+            { "rpc.aggregate": "openbot", "openbot.channel_id": input.channelId },
+          ),
+        [WS_METHODS.openbotChannelSend]: (input) =>
+          observeRpcEffect(WS_METHODS.openbotChannelSend, openbotChannels.send(input), {
+            "rpc.aggregate": "openbot",
+            "openbot.channel_id": input.channelId,
           }),
         [WS_METHODS.serverProbe]: (_input) =>
           observeRpcEffect(WS_METHODS.serverProbe, Effect.succeed({}), {

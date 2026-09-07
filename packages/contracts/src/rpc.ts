@@ -134,6 +134,16 @@ import {
   OrchestrationV2ThreadLaunchError,
 } from "./orchestrationV2.ts";
 import {
+  OpenbotChannelCreateInput,
+  OpenbotChannel,
+  OpenbotChannelListResult,
+  OpenbotChannelSendInput,
+  OpenbotChannelSendResult,
+  OpenbotChannelSubscribeInput,
+  OpenbotChannelView,
+  OpenbotError,
+} from "./openbot.ts";
+import {
   ProjectListEntriesError,
   ProjectListEntriesInput,
   ProjectListEntriesResult,
@@ -353,6 +363,13 @@ export const WS_METHODS = {
   scheduledTasksSetEnabled: "scheduledTasks.setEnabled",
   scheduledTasksDelete: "scheduledTasks.delete",
   scheduledTasksRunNow: "scheduledTasks.runNow",
+
+  // OpenBot channels
+  openbotChannelsList: "openbot.channels.list",
+  openbotChannelsSubscribe: "openbot.channels.subscribe",
+  openbotChannelsCreate: "openbot.channels.create",
+  openbotChannelSubscribe: "openbot.channel.subscribe",
+  openbotChannelSend: "openbot.channel.send",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -1266,6 +1283,40 @@ export const WsScheduledTasksRunNowRpc = Rpc.make(WS_METHODS.scheduledTasksRunNo
   error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
 });
 
+export const WsOpenbotChannelsListRpc = Rpc.make(WS_METHODS.openbotChannelsList, {
+  payload: Schema.Struct({}),
+  success: OpenbotChannelListResult,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+
+/** Streams the full channel list: one snapshot on subscribe, then a fresh list after every change. */
+export const WsOpenbotChannelsSubscribeRpc = Rpc.make(WS_METHODS.openbotChannelsSubscribe, {
+  payload: Schema.Struct({}),
+  success: OpenbotChannelListResult,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+export const WsOpenbotChannelsCreateRpc = Rpc.make(WS_METHODS.openbotChannelsCreate, {
+  payload: OpenbotChannelCreateInput,
+  success: OpenbotChannel,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+
+/** Streams one channel's view: a snapshot on subscribe, then a fresh view after every change. */
+export const WsOpenbotChannelSubscribeRpc = Rpc.make(WS_METHODS.openbotChannelSubscribe, {
+  payload: OpenbotChannelSubscribeInput,
+  success: OpenbotChannelView,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+export const WsOpenbotChannelSendRpc = Rpc.make(WS_METHODS.openbotChannelSend, {
+  payload: OpenbotChannelSendInput,
+  success: OpenbotChannelSendResult,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+
 export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
   payload: Schema.Struct({}),
   success: AuthAccessStreamEvent,
@@ -1324,6 +1375,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksSetEnabledRpc,
   WsScheduledTasksDeleteRpc,
   WsScheduledTasksRunNowRpc,
+  WsOpenbotChannelsListRpc,
+  WsOpenbotChannelsSubscribeRpc,
+  WsOpenbotChannelsCreateRpc,
+  WsOpenbotChannelSubscribeRpc,
+  WsOpenbotChannelSendRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,

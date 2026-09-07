@@ -36,6 +36,10 @@ import {
   selectInheritedBackgroundTurnItems,
 } from "./RunExecutionService.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import {
+  ProviderTurnInstructionsV2,
+  providerMessageWithTurnInstructions,
+} from "./TurnInstructions.ts";
 
 export class ProviderTurnStartError extends Schema.TaggedErrorClass<ProviderTurnStartError>()(
   "ProviderTurnStartError",
@@ -87,6 +91,7 @@ export const layer: Layer.Layer<
     const providerSessions = yield* ProviderSessionManagerV2;
     const runExecution = yield* RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicyV2;
+    const turnInstructions = yield* ProviderTurnInstructionsV2;
 
     const start = Effect.fn("orchestrationV2.providerTurnStart.start")(function* (input: {
       readonly threadId: ThreadId;
@@ -618,6 +623,17 @@ export const layer: Layer.Layer<
       const routableSubagents = projection.subagents.filter((subagent) =>
         canRouteRelatedSubagent(subagent.status),
       );
+      const appInstructions = yield* turnInstructions.resolve({
+        threadId: projection.thread.id,
+        runOrdinal: run.ordinal,
+      });
+      const userText =
+        effectiveHandoffs.length === 0
+          ? message.text
+          : providerMessageWithContextHandoffs({
+              handoffs: effectiveHandoffs,
+              userText: message.text,
+            });
       yield* runExecution.startRootRun({
         commandId: CommandId.make(`command:effect:provider-turn.start:${run.id}`),
         appThread: projection.thread,
@@ -678,13 +694,7 @@ export const layer: Layer.Layer<
           ),
         message: {
           messageId: message.id,
-          text:
-            effectiveHandoffs.length === 0
-              ? message.text
-              : providerMessageWithContextHandoffs({
-                  handoffs: effectiveHandoffs,
-                  userText: message.text,
-                }),
+          text: providerMessageWithTurnInstructions({ instructions: appInstructions, userText }),
           attachments: message.attachments,
           createdBy: message.createdBy,
           creationSource: message.creationSource,

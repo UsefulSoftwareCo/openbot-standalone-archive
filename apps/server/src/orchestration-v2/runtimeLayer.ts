@@ -46,6 +46,11 @@ import { layer as threadLifecycleServiceLayer } from "./ThreadLifecycleService.t
 import { layer as threadForkServiceLayer } from "./ThreadForkService.ts";
 import { layer as turnItemPositionStoreLayer } from "./TurnItemPositionStore.ts";
 import { layer as scheduledTaskServiceLayer } from "../scheduledTasks/ScheduledTaskService.ts";
+import {
+  layer as openbotChannelServiceLayer,
+  turnInstructionsLayer as openbotTurnInstructionsLayer,
+} from "../openbot/OpenbotChannelService.ts";
+import { layer as openbotChannelStoreLayer } from "../openbot/OpenbotChannelStore.ts";
 
 const runtimePolicyProvided = runtimePolicyLayerFromProjectRepository.pipe(
   Layer.provide(ProjectionProjectRepositoryLive),
@@ -127,7 +132,12 @@ const runExecutionServiceProvided = runExecutionServiceLayer.pipe(
   ),
 );
 
+const openbotTurnInstructionsProvided = openbotTurnInstructionsLayer.pipe(
+  Layer.provide(openbotChannelStoreLayer),
+);
+
 const providerTurnStartServiceProvided = providerTurnStartServiceLayer.pipe(
+  Layer.provide(openbotTurnInstructionsProvided),
   Layer.provide(
     Layer.mergeAll(
       contextHandoffServiceProvided,
@@ -221,6 +231,16 @@ const threadLifecycleProvided = threadLifecycleServiceLayer.pipe(
 const scheduledTaskProvided = scheduledTaskServiceLayer.pipe(
   Layer.provide(Layer.mergeAll(threadLaunchProvided, threadManagementProvided)),
 );
+const openbotChannelProvided = openbotChannelServiceLayer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      openbotChannelStoreLayer,
+      ProjectServiceLayerLive,
+      threadManagementProvided,
+      idAllocatorLayer,
+    ),
+  ),
+);
 const providerContinuationWorkerProvided = providerContinuationWorkerLive.pipe(
   Layer.provide(
     Layer.mergeAll(providerContinuationRequestsLayer, threadManagementProvided, idAllocatorLayer),
@@ -278,5 +298,6 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   threadLaunchProvided,
   threadLifecycleProvided,
   scheduledTaskProvided,
+  openbotChannelProvided,
   providerContinuationWorkerProvided,
 );

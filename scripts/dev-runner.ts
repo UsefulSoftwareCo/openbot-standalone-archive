@@ -80,6 +80,14 @@ const MODE_ARGS = {
     "--parallel",
     "dev",
   ],
+  "dev:openbot": [
+    "run",
+    "--filter=@t3tools/contracts",
+    "--filter=@t3tools/openbot",
+    "--filter=t3",
+    "--parallel",
+    "dev",
+  ],
   "dev:server": ["run", "--filter=t3", "dev"],
   "dev:web": ["run", "--filter=@t3tools/web", "dev"],
   "dev:desktop": ["run", "--filter=@t3tools/desktop", "--filter=@t3tools/web", "dev"],
@@ -357,7 +365,7 @@ export function createDevRunnerEnv({
       // apps/web/vite.config.ts. Over a shared origin that is invisible: the
       // page loads and only HMR quietly dials the wrong machine.
       delete output.HOST;
-      if (mode === "dev" || mode === "dev:web") {
+      if (mode === "dev" || mode === "dev:web" || mode === "dev:openbot") {
         // Browser dev is single-origin: everything (including /ws) is proxied
         // through Vite, so the client must resolve its backend from
         // window.location.origin rather than a baked-in localhost URL. See
@@ -648,7 +656,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
     // broken" rather than "flag combination is unsupported". Reject it up
     // front instead. (dev:server and dev:desktop don't proxy — untouched.)
     if (
-      (input.mode === "dev" || input.mode === "dev:web") &&
+      (input.mode === "dev" || input.mode === "dev:web" || input.mode === "dev:openbot") &&
       input.host !== undefined &&
       !isProxiableBindHost(input.host)
     ) {

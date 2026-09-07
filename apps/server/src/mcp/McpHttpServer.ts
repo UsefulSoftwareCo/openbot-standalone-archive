@@ -15,6 +15,9 @@ import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import { OpenbotToolkitHandlersLive } from "./toolkits/openbot/handlers.ts";
+import * as OpenbotMcpService from "./toolkits/openbot/OpenbotMcpService.ts";
+import { OpenbotToolkit } from "./toolkits/openbot/tools.ts";
 import { OrchestratorToolkitHandlersLive } from "./toolkits/orchestrator/handlers.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import {
@@ -233,6 +236,11 @@ export const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit
   Layer.provide(WorktreeMcpService.layer),
 );
 
+export const OpenbotToolkitRegistrationLive = McpServer.toolkit(OpenbotToolkit).pipe(
+  Layer.provide(OpenbotToolkitHandlersLive),
+  Layer.provide(OpenbotMcpService.layer),
+);
+
 const McpTransportLive = McpServer.layerHttp({
   name: "T3 Code",
   version: packageJson.version,
@@ -244,4 +252,5 @@ export const layer = Layer.mergeAll(
   PreviewToolkitRegistrationLive,
   OrchestratorToolkitRegistrationLive,
   WorktreeToolkitRegistrationLive,
+  OpenbotToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));
