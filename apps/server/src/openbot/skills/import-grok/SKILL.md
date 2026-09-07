@@ -24,14 +24,23 @@ Each personal bot usually has its own directory containing a profile file with t
 
 That is the common shape, not a promise. Open the actual files, confirm what is there, and report what you found before importing. Where a field is missing or shaped differently, follow the files, not this document.
 
-## Map
+## Map into reviewed destinations
 
-| Grok                      | OpenBot                                                                                                             |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Bot                       | Project: name from the bot, `instructions` distilled from its system prompt, Phosphor icon guessed from its subject |
-| Memory or knowledge entry | Knowledge entry via `openbot_knowledge_write`, linked to that bot's project                                         |
-| Automation or routine     | `schedule_task` with `enabled: false` and `deliveryMode: "queue"`, targeting the project's main chat thread         |
-| Transcript                | Skipped entirely                                                                                                    |
+A bot is not a project. Bots were role identities; OpenBot organises work by
+project and focused chat. Decide the destination for each bot with the person
+before writing anything, using what already exists (`openbot_list_projects`,
+`openbot_list_threads`):
+
+| Grok                      | OpenBot destination                                                                                                                                                                      |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bot                       | An existing project when its work belongs there; a new project only when the person agrees the topic deserves one; a focused chat under a project's main chat for a narrow standing task |
+| System prompt             | Distilled standing preferences merged into the destination project's `instructions` (or the chat's private notes), never pasted whole                                                    |
+| Memory or knowledge entry | Knowledge entry via `openbot_knowledge_write`, linked to the destination project(s)                                                                                                      |
+| Automation or routine     | `schedule_task` with `enabled: false` and `deliveryMode: "queue"`, targeting the destination chat's thread                                                                               |
+| Transcript                | Skipped entirely                                                                                                                                                                         |
+
+Several bots can land in one project. A bot with no sensible home is reported
+under "needs a destination" rather than imported as a project of its own.
 
 Distil, do not paste. A Grok system prompt usually mixes real standing preferences with Grok-specific scaffolding; keep the preferences and drop the scaffolding.
 
@@ -57,14 +66,24 @@ Every imported routine gets `enabled: false`, without exception. An import must 
 
 Source metadata normally marks whether a bot belonged to a group chat rather than to this person alone. When it does, or when membership is not clearly just this person, do not import it. Flag it and let them decide. A group bot's memory can hold other people's information, and it is not yours to copy.
 
-## Make re-runs converge
+## Make re-runs converge without overwriting edits
 
-Before creating anything, call `openbot_list_projects` and `openbot_knowledge_list`, then match by project name and knowledge title:
+Before creating anything, read what exists (`openbot_list_projects`,
+`openbot_knowledge_list`, `list_scheduled_tasks`) and match by the source item,
+not by guesswork: knowledge entries by their `Source: Grok bot …` provenance
+line, routines by the `Imported from Grok bot …` first line of their prompt,
+projects by the destination the person chose.
 
-- Match found: update it, with `openbot_update_project`, or `openbot_knowledge_read` followed by `openbot_knowledge_write` carrying the id and revision.
-- No match: create it with a `clientRequestId` derived from the source item, such as `grok-import:garden-helper`.
+- No match: create it with a `clientRequestId` derived from the source item,
+  such as `grok-import:garden-helper:soil-notes`, so a retry cannot duplicate it.
+- Match found and unchanged since import: leave it alone.
+- Match found and edited by the person (title, body, instructions, schedule, or
+  enabled state differ from what the source would produce): keep their version.
+  Mention the difference in the final table and update only if they ask.
+- Never re-enable a routine, never replace a project's instructions wholesale,
+  and never delete anything on a re-run.
 
-Running the import twice must leave exactly the same projects, entries, and routines.
+Running the import twice must leave the same records and no new duplicates.
 
 ## Finish with a table
 
@@ -72,7 +91,7 @@ Send one `openbot_send_message` listing every source item and its outcome:
 
 | Item                                  | Type       | Outcome                                                    |
 | ------------------------------------- | ---------- | ---------------------------------------------------------- |
-| Garden Helper                         | bot        | Imported as project "Garden Helper"                        |
+| Garden Helper                         | bot        | Merged into existing project "Garden"                      |
 | Garden Helper / soil notes            | memory     | Imported as knowledge "Soil and beds"                      |
 | Garden Helper / weekly watering check | routine    | Imported disabled as cron `0 7 * * 1` UTC                  |
 | Garden Helper / hourly sweep          | routine    | Needs review: 6-field cron `0 */30 * * * *`, left disabled |

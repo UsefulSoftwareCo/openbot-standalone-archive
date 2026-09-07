@@ -46,9 +46,9 @@ Otherwise send a proposal with `openbot_send_message`: each project name with a 
 ## Create the set
 
 - New project: `openbot_create_project` with a stable `clientRequestId` such as `onboard:garden-planner`, the name, a Phosphor icon name, and an `instructions` body carrying the standing preferences for that project.
-- Existing project: `openbot_update_project` with its `projectId` and the `revision` from `openbot_list_projects`.
+- Existing project: change it only when the person asked for that change. Read its current `instructions` first and merge the new preference in with `openbot_update_project` and the `revision` from `openbot_list_projects`; never replace instructions they wrote, and never rename or re-icon a project that already fits.
 - New knowledge: `openbot_knowledge_write` with a title, a Markdown body, and `projectIds` linking it to the projects it is relevant to.
-- Existing knowledge: `openbot_knowledge_read`, merge into the body you read, then `openbot_knowledge_write` with that `knowledgeId` and `expectedRevision`.
+- Existing knowledge: read it, merge what is new into the body, and write it back with its `knowledgeId` and `expectedRevision`; keep facts the person added and drop nothing they wrote.
 
 Never store secrets, credentials, or anything the person asked you to keep out of durable storage.
 
