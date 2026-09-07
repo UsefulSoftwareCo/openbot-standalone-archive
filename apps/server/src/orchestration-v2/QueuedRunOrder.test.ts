@@ -1,6 +1,27 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
+import { dispatchWakesSnooze, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
+
+describe("dispatches that outrank a snooze", () => {
+  it("wakes for the user and for work already under way, and parks agent traffic", () => {
+    const decide = (createdBy: string, creationSource: string) =>
+      dispatchWakesSnooze({ createdBy, creationSource } as never);
+
+    // The user's own message, from any client.
+    expect(decide("user", "web")).toBe(true);
+    expect(decide("user", "mobile")).toBe(true);
+    // Server deliveries that continue work the user already started:
+    // delegated task completions, restart continuations, subagent results.
+    expect(decide("agent", "server")).toBe(true);
+    expect(decide("system", "server")).toBe(true);
+    // An adapter-buffered provider wake finishing its own turn.
+    expect(decide("agent", "provider")).toBe(true);
+    // Agent-initiated traffic: OpenBot peer requests and replies, MCP sends
+    // into someone else's thread.
+    expect(decide("agent", "mcp")).toBe(false);
+    expect(decide("agent", "web")).toBe(false);
+  });
+});
 
 describe("queued run delivery order", () => {
   it("keeps automatic completion delivery ahead of visible queued messages", () => {

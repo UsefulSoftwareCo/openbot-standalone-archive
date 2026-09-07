@@ -62,7 +62,12 @@ import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
 import { ProviderContinuationRequests } from "./ProviderContinuationRequests.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
-import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
+import {
+  dispatchWakesSnooze,
+  isAutomaticCompletionRun,
+  queuedRunsInDeliveryOrder,
+  threadIsSnoozed,
+} from "./QueuedRunOrder.ts";
 import { runMessagesInOrder } from "./TurnInstructions.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import {
@@ -837,7 +842,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (
         projection.thread.archivedAt !== null ||
         projection.thread.deletedAt !== null ||
-        projection.runs.some(isBlockingRun)
+        projection.runs.some(isBlockingRun) ||
+        // Run admission honours the snooze: work that arrived while the user
+        // was away stays queued until the thread wakes. Only dispatches that
+        // outrank a snooze clear it (see dispatchWakesSnooze), and clearing it
+        // is what re-opens this gate, so nothing that outranks the snooze is
+        // ever left sitting in the queue.
+        threadIsSnoozed(projection.thread, yield* DateTime.now)
       ) {
         return;
       }
@@ -1619,7 +1630,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Thread ${command.threadId} has a pending approval or user-input request and cannot be snoozed.`,
         });
       }
-      if (projection.runs.some((run) => run.status === "queued")) {
+      // A queued run is work about to start, and hiding that defeats the
+      // snooze. Runs this thread's own snooze already parked are the exception:
+      // they will not start while it holds, so changing the wake time stays
+      // possible instead of becoming a one-way door.
+      const snoozeAlreadyHeld = threadIsSnoozed(thread, now);
+      const runIsParked = (run: OrchestrationV2Run) => {
+        if (!snoozeAlreadyHeld) return false;
+        const message = projection.messages.find((candidate) => candidate.id === run.userMessageId);
+        return message !== undefined && !dispatchWakesSnooze(message);
+      };
+      if (projection.runs.some((run) => run.status === "queued" && !runIsParked(run))) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
@@ -2947,7 +2968,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
         projection = yield* getProjectionWithPendingEvents(command.threadId, events);
       }
-      if (projection.thread.snoozedUntil != null) {
+      // Read the snooze before it is cleared: a waking dispatch spends it here,
+      // and a parked one still has to know the thread was asleep when it
+      // arrived so it queues instead of starting.
+      const wakesSnooze = dispatchWakesSnooze(command);
+      const arrivedWhileSnoozed = threadIsSnoozed(projection.thread, yield* DateTime.now);
+      if (projection.thread.snoozedUntil != null && wakesSnooze) {
         const now = yield* DateTime.now;
         const thread: OrchestrationV2AppThread = {
           ...projection.thread,
@@ -3119,8 +3145,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       const activeRun = projection.runs.find(isBlockingRun);
       const pendingMergeBackTransfers = pendingMergeBackTransfersForThread(projection);
+      // A snoozed thread parks the work instead of starting it: the message is
+      // stored and a run is queued, but nothing runs until the thread wakes.
+      // The parked run is also the only way a thread can hold a queued run with
+      // nothing active, so a later waking message queues behind it rather than
+      // overtaking it — the transcript order and the run order stay the same.
+      const parkedQueuedRun = arrivedWhileSnoozed
+        ? queuedRunsInDeliveryOrder(projection).at(-1)
+        : undefined;
+      const queueAnchorRun = activeRun ?? parkedQueuedRun;
       const shouldQueue =
-        activeRun !== undefined &&
+        (activeRun !== undefined ||
+          parkedQueuedRun !== undefined ||
+          (arrivedWhileSnoozed && !wakesSnooze)) &&
         (dispatchMode.type === "defer_start" ||
           dispatchMode.type === "start_immediately" ||
           dispatchMode.type === "queue_after_active");
@@ -3200,16 +3237,68 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             cause: `Thread ${command.threadId} has a pending merge-back transfer; queued merge-back consumption is not implemented yet.`,
           });
         }
-        const queueProviderThread =
+        const now = yield* DateTime.now;
+        const ordinal = nextRunOrdinal(projection);
+        const runId = idAllocator.derive.run({ threadId: command.threadId, ordinal });
+        const anchorProviderThread =
           activeProviderThread ??
-          projection.providerThreads.find(
-            (candidate) => candidate.id === activeRun.providerThreadId,
-          );
-        if (queueProviderThread === undefined) {
+          (queueAnchorRun === undefined
+            ? undefined
+            : projection.providerThreads.find(
+                (candidate) => candidate.id === queueAnchorRun.providerThreadId,
+              ));
+        // A message parked by a snooze can be the first work a thread ever
+        // gets, so there may be no provider thread to queue behind. Create the
+        // same not-loaded row the immediate path would have created: nothing
+        // launches until startNextQueuedRun picks the run up after the wake.
+        const createdQueueProviderThread =
+          anchorProviderThread !== undefined
+            ? null
+            : yield* Effect.gen(function* () {
+                const adapter = yield* providerAdapters.get(modelSelection.instanceId).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestratorProviderAdapterError({
+                        commandId: command.commandId,
+                        providerInstanceId: modelSelection.instanceId,
+                        cause,
+                      }),
+                  ),
+                );
+                const providerSessionId = yield* mapDispatchError(command)(
+                  providerSessionIdFor({
+                    adapter,
+                    providerInstanceId: modelSelection.instanceId,
+                    threadId: command.threadId,
+                  }),
+                );
+                return {
+                  id: idAllocator.derive.providerThread({
+                    driver: adapter.driver,
+                    nativeThreadId: `pending:${runId}`,
+                  }),
+                  driver: adapter.driver,
+                  providerInstanceId: modelSelection.instanceId,
+                  providerSessionId,
+                  appThreadId: command.threadId,
+                  ownerNodeId: null,
+                  nativeThreadRef: null,
+                  nativeConversationHeadRef: null,
+                  status: "not_loaded",
+                  firstRunOrdinal: ordinal,
+                  lastRunOrdinal: ordinal,
+                  handoffIds: [],
+                  forkedFrom: null,
+                  createdAt: now,
+                  updatedAt: now,
+                } satisfies OrchestrationV2ProviderThread;
+              });
+        const queueProviderThread = anchorProviderThread ?? createdQueueProviderThread;
+        if (queueProviderThread == null) {
           return yield* new OrchestratorDispatchError({
             commandId: command.commandId,
             commandType: command.type,
-            cause: `Active run ${activeRun.id} has no provider thread for queued dispatch.`,
+            cause: `Thread ${command.threadId} has no provider thread for queued dispatch.`,
           });
         }
         if (modelSelection.instanceId !== queueProviderThread.providerInstanceId) {
@@ -3225,7 +3314,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             : projection.providerSessions.find(
                 (candidate) => candidate.id === queueProviderThread.providerSessionId,
               );
-        if (existingProviderSession !== undefined) {
+        // Queueing behind a live turn needs the provider to accept app-owned
+        // queued messages. A run parked by a snooze queues behind nothing: it
+        // starts as an ordinary first turn once the thread wakes, so the
+        // capability is irrelevant and must not reject the delivery.
+        if (existingProviderSession !== undefined && activeRun !== undefined) {
           yield* enforceCommandPolicy(command)(
             commandPolicy.ensureQueuedMessages({
               commandId: command.commandId,
@@ -3236,13 +3329,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           );
         }
 
-        const now = yield* DateTime.now;
-        const ordinal = nextRunOrdinal(projection);
-        const runId = idAllocator.derive.run({ threadId: command.threadId, ordinal });
         const attemptId = idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 });
         const rootNodeId = idAllocator.derive.rootNode({ runId });
         const checkpointScope =
-          activeRun.status === "preparing"
+          activeRun?.status === "preparing"
             ? null
             : yield* runtimePolicy.resolve({ thread: projection.thread, modelSelection }).pipe(
                 Effect.flatMap((resolvedRuntimePolicy) =>
@@ -3343,6 +3433,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.peerMessage === undefined ? {} : { peerMessage: command.peerMessage }),
         };
         const emitEvent = emit(events, command);
+        if (createdQueueProviderThread !== null) {
+          yield* emitEvent({
+            type: "provider-thread.updated",
+            threadId: command.threadId,
+            driver: createdQueueProviderThread.driver,
+            providerInstanceId: modelSelection.instanceId,
+            occurredAt: now,
+            payload: createdQueueProviderThread,
+          });
+        }
         yield* emitEvent({
           type: "run.created",
           threadId: command.threadId,
@@ -7541,6 +7641,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
     );
 
+  // Waking a thread releases whatever its snooze parked. Both events clear
+  // snoozedUntil (pinning spends the snooze the same way an unsnooze does), and
+  // startNextQueuedRun no-ops when the thread already has a live run, so a
+  // waking user message promotes nothing and simply runs its own turn.
+  const handleThreadWake = (stored: OrchestrationV2StoredEvent) =>
+    threadDispatch.withLock(stored.event.threadId, startNextQueuedRun(stored.event.threadId)).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Failed to start a queued V2 run after a thread wake", {
+          threadId: stored.event.threadId,
+          sequence: stored.sequence,
+          cause,
+        }),
+      ),
+    );
+
   // Historical terminal events are already represented by the projections
   // below. Replaying the full event table on every server start delays live
   // queue promotion in proportion to the lifetime size of the database.
@@ -7548,15 +7663,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   yield* eventSink.stream({ afterSequence: terminalEventsAfterSequence }).pipe(
     Stream.filter(
       (stored) =>
-        stored.event.type === "run.updated" &&
-        !String(stored.commandId).startsWith("command:runtime-reconcile:") &&
-        (stored.event.payload.status === "completed" ||
-          stored.event.payload.status === "interrupted" ||
-          stored.event.payload.status === "failed" ||
-          stored.event.payload.status === "cancelled" ||
-          stored.event.payload.status === "rolled_back"),
+        stored.event.type === "thread.unsnoozed" ||
+        stored.event.type === "thread.pinned" ||
+        (stored.event.type === "run.updated" &&
+          !String(stored.commandId).startsWith("command:runtime-reconcile:") &&
+          (stored.event.payload.status === "completed" ||
+            stored.event.payload.status === "interrupted" ||
+            stored.event.payload.status === "failed" ||
+            stored.event.payload.status === "cancelled" ||
+            stored.event.payload.status === "rolled_back")),
     ),
-    Stream.runForEach(handleTerminalRun),
+    Stream.runForEach((stored) =>
+      stored.event.type === "run.updated" ? handleTerminalRun(stored) : handleThreadWake(stored),
+    ),
     Effect.forkDetach,
   );
 

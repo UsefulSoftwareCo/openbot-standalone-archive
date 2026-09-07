@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Stream from "effect/Stream";
 
 import { ServerConfig } from "../config.ts";
 import { EventSinkV2 } from "../orchestration-v2/EventSink.ts";
@@ -346,6 +347,68 @@ it.layer(TestLayer)("OpenBot projects, child chats, and knowledge", (it) => {
         .pipe(Effect.flip);
       assert.equal(rejected.code, "peer_request_invalid");
       assert.match(rejected.message, /main chat/);
+    }),
+  );
+
+  it.effect("holds peer requests and replies until a snoozed chat wakes", () =>
+    Effect.gen(function* () {
+      const service = yield* OpenbotChannelService;
+      const orchestrator = yield* OrchestratorV2;
+      const until = "2099-07-25T09:00:00.000Z";
+      const sender = yield* service.create({ name: "Sender" });
+      const recipient = yield* service.createProject({
+        name: "Recipient",
+        commandId: CommandId.make("create-recipient"),
+      });
+      const recipientMain = (yield* service.getView(recipient.mainChannelId)).channel;
+
+      yield* service.snooze({ channelId: recipientMain.id, until });
+      const request = yield* service.requestThread(sender.threadId, {
+        channelId: recipientMain.id,
+        text: "Check the invoice.",
+        clientRequestId: "snoozed-invoice-1",
+      });
+
+      const parked = yield* orchestrator.getThreadProjection(recipientMain.threadId);
+      assert.equal(
+        (yield* service.getView(recipientMain.id)).snoozedUntil,
+        until,
+        "a peer request never spends the user's snooze",
+      );
+      assert.equal(parked.messages.at(-1)?.peerMessage?.requestId, request.requestId);
+      assert.deepEqual(
+        parked.runs.map((run) => run.status),
+        ["queued"],
+      );
+
+      yield* service.wake(recipientMain.id);
+      yield* orchestrator.streamStoredEventsFrom({ threadId: recipientMain.threadId }).pipe(
+        Stream.filter(
+          (stored) =>
+            stored.event.type === "run.updated" && stored.event.payload.status === "starting",
+        ),
+        Stream.runHead,
+      );
+      assert.deepEqual(
+        (yield* orchestrator.getThreadProjection(recipientMain.threadId)).runs.map(
+          (run) => run.status,
+        ),
+        ["starting"],
+      );
+
+      // The answer respects the original sender's snooze the same way.
+      yield* service.snooze({ channelId: sender.id, until });
+      yield* service.replyToThread(recipientMain.threadId, {
+        requestId: request.requestId,
+        text: "Already paid.",
+      });
+      const parkedReply = yield* orchestrator.getThreadProjection(sender.threadId);
+      assert.equal((yield* service.getView(sender.id)).snoozedUntil, until);
+      assert.equal(parkedReply.messages.at(-1)?.peerMessage?.type, "reply");
+      assert.deepEqual(
+        parkedReply.runs.map((run) => run.status),
+        ["queued"],
+      );
     }),
   );
 

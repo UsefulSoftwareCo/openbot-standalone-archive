@@ -1852,6 +1852,138 @@ it.layer(SharedApplicationDataPlaneTestLayer)("snooze projection", (it) => {
   );
 });
 
+it.layer(SharedApplicationDataPlaneTestLayer)("snoozed dispatch admission", (it) => {
+  const snoozedUntil = "2099-07-25T09:00:00.000Z";
+
+  const seedSnoozedThread = (slug: string) =>
+    Effect.gen(function* () {
+      const applicationEngine = yield* OrchestrationEngineService;
+      const orchestrator = yield* OrchestratorV2;
+      const projectId = ProjectId.make(`${slug}-project`);
+      const threadId = ThreadId.make(`${slug}-thread`);
+      yield* applicationEngine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make(`${slug}-project-create`),
+        projectId,
+        title: "Parked dispatch",
+        workspaceRoot: `/tmp/${slug}-project`,
+        defaultModelSelection: modelSelection,
+        scripts: [],
+        createdAt: "2026-07-24T00:00:00.000Z",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make(`${slug}-thread-create`),
+        threadId,
+        projectId,
+        title: "Parked dispatch",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.snooze",
+        commandId: CommandId.make(`${slug}-snooze`),
+        threadId,
+        snoozedUntil,
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "agent",
+        creationSource: "mcp",
+        commandId: CommandId.make(`${slug}-peer-message`),
+        threadId,
+        messageId: MessageId.make(`${slug}-peer-message`),
+        text: "Peer request from another chat.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "queue_after_active" },
+      });
+      return { orchestrator, threadId };
+    });
+
+  it.effect("parks an agent-authored message behind the snooze until the user wakes it", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId } = yield* seedSnoozedThread("parked-peer");
+
+      const parked = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(DateTime.formatIso(parked.thread.snoozedUntil!), snoozedUntil);
+      assert.isNotNull(parked.thread.snoozedAt);
+      assert.equal(parked.messages.at(-1)?.text, "Peer request from another chat.");
+      assert.deepEqual(
+        parked.runs.map((run) => run.status),
+        ["queued"],
+      );
+      assert.isNull(parked.runs[0]?.startedAt);
+
+      yield* orchestrator.dispatch({
+        type: "thread.unsnooze",
+        commandId: CommandId.make("parked-peer-unsnooze"),
+        threadId,
+        reason: "user",
+      });
+      yield* orchestrator.streamStoredEventsFrom({ threadId }).pipe(
+        Stream.filter(
+          (stored) =>
+            stored.event.type === "run.updated" && stored.event.payload.status === "starting",
+        ),
+        Stream.runHead,
+      );
+
+      const woken = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNull(woken.thread.snoozedUntil);
+      assert.deepEqual(
+        woken.runs.map((run) => run.status),
+        ["starting"],
+      );
+    }),
+  );
+
+  it.effect("queues a waking user message behind the run the snooze already parked", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId } = yield* seedSnoozedThread("parked-then-user");
+      const parkedRunId = (yield* orchestrator.getThreadProjection(threadId)).runs[0]?.id;
+
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("parked-then-user-message"),
+        threadId,
+        messageId: MessageId.make("parked-then-user-message"),
+        text: "Wake this thread.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+      yield* orchestrator.streamStoredEventsFrom({ threadId }).pipe(
+        Stream.filter(
+          (stored) =>
+            stored.event.type === "run.updated" && stored.event.payload.status === "starting",
+        ),
+        Stream.runHead,
+      );
+
+      const woken = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNull(woken.thread.snoozedUntil);
+      assert.isNull(woken.thread.snoozedAt);
+      // The peer request arrived first, so it runs first; the user's own
+      // message queues behind it instead of overtaking it.
+      assert.deepEqual(
+        woken.runs.map((run) => ({ id: run.id, status: run.status })),
+        [
+          { id: parkedRunId!, status: "starting" },
+          { id: woken.runs[1]!.id, status: "queued" },
+        ],
+      );
+    }),
+  );
+});
+
 it.layer(SharedApplicationDataPlaneTestLayer)("visited projection", (it) => {
   it.effect("carries the visited watermark through the V2 shell projection", () =>
     Effect.gen(function* () {
