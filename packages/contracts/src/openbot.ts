@@ -493,6 +493,36 @@ export const OpenbotThreadContext = Schema.Struct({
   revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 });
 export type OpenbotThreadContext = typeof OpenbotThreadContext.Type;
+/** Standalone chat creation and profile edits, so the assistant can do what the sidebar does. */
+export const OpenbotMcpCreateChatInput = Schema.Struct({
+  name: OpenbotChannelName,
+  description: Schema.optional(OpenbotDescription),
+  modelSelection: Schema.optional(ModelSelection),
+  clientRequestId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)).annotate({
+    description: "Stable idempotency key so a retry cannot create a duplicate chat.",
+  }),
+});
+export type OpenbotMcpCreateChatInput = typeof OpenbotMcpCreateChatInput.Type;
+export const OpenbotMcpUpdateChatInput = Schema.Struct({
+  channelId: Schema.optional(
+    OpenbotChannelId.annotate({ description: "Defaults to the calling chat." }),
+  ),
+  expectedRevision: Revision,
+  name: Schema.optional(OpenbotChannelName),
+  description: Schema.optional(OpenbotDescription),
+  modelSelection: Schema.optional(ModelSelection),
+});
+export type OpenbotMcpUpdateChatInput = typeof OpenbotMcpUpdateChatInput.Type;
+/** Standing instructions live in the chat's private context (openbot_thread_context), separate from knowledge. */
+export const OpenbotMcpUpdateInstructionsInput = Schema.Struct({
+  channelId: Schema.optional(
+    OpenbotChannelId.annotate({ description: "Defaults to the calling chat." }),
+  ),
+  expectedRevision: Revision,
+  instructions: OpenbotThreadInstructions,
+});
+export type OpenbotMcpUpdateInstructionsInput = typeof OpenbotMcpUpdateInstructionsInput.Type;
+
 export const OpenbotContextUpdateInput = Schema.Struct({
   channelId: OpenbotChannelId,
   expectedRevision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
