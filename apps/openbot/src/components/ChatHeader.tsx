@@ -18,7 +18,7 @@ import {
 } from "@t3tools/ui/dialog";
 import { Input } from "@t3tools/ui/input";
 import { AlarmClock, ArrowLeft, Menu, PanelRight, Plus, Square } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   cancelChannel,
@@ -32,6 +32,30 @@ import { ChatAvatar } from "./ChatProfileFields";
 import { ChatSettingsDialog } from "./ChatSettingsDialog";
 import { NewThreadDialog } from "./NewThreadDialog";
 import { ProjectIcon } from "./ProjectIcon";
+
+/**
+ * A snooze stays on the thread as a raw timestamp; T3 never emits a wake
+ * event when the deadline passes. Read it against the clock exactly like
+ * `effectiveSnoozed` in client-runtime, and rerender once the deadline lands
+ * so the banner does not outlive the snooze.
+ */
+export function snoozeActive(snoozedUntil: string | null, nowMs: number): boolean {
+  if (snoozedUntil === null) return false;
+  const wakeAtMs = Date.parse(snoozedUntil);
+  return Number.isFinite(wakeAtMs) && wakeAtMs > nowMs;
+}
+
+function useSnoozeActive(snoozedUntil: string | null): boolean {
+  const [, bump] = useState(0);
+  const active = snoozeActive(snoozedUntil, Date.now());
+  useEffect(() => {
+    if (!active || snoozedUntil === null) return;
+    const delay = Math.min(Math.max(0, Date.parse(snoozedUntil) - Date.now()) + 50, 2_147_483_647);
+    const id = window.setTimeout(() => bump((tick) => tick + 1), delay);
+    return () => window.clearTimeout(id);
+  }, [active, snoozedUntil]);
+  return active;
+}
 
 function formatSnoozedUntil(iso: string): string {
   const date = new Date(iso);
@@ -178,6 +202,7 @@ export function ChatHeader({
 
   const isThread = parent !== null;
   const { channel } = view;
+  const snoozed = useSnoozeActive(view.snoozedUntil);
 
   /** Runs one chat control and surfaces its failure next to the buttons. */
   const runControl = async (run: () => ReturnType<typeof cancel>) => {
@@ -263,7 +288,7 @@ export function ChatHeader({
             New thread
           </Button>
         )}
-        {view.snoozedUntil === null ? (
+        {!snoozed ? (
           <Button
             variant="ghost"
             size="xs"
@@ -308,7 +333,7 @@ export function ChatHeader({
           </span>
         )}
       </div>
-      {view.snoozedUntil !== null && (
+      {snoozed && view.snoozedUntil !== null && (
         <p className="shrink-0 bg-warning-surface px-4 py-1.5 text-warning-foreground text-xs">
           Snoozed until {formatSnoozedUntil(view.snoozedUntil)}
         </p>
