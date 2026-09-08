@@ -19,18 +19,19 @@ sudo apt-get install -y xvfb xdotool ffmpeg openbox x11-utils x11-xserver-utils
 Fedora and RHEL:
 
 ```sh
-sudo dnf install -y xorg-x11-server-Xvfb xdotool ffmpeg openbox xdpyinfo xrandr
+sudo dnf install -y xorg-x11-server-Xvfb xdotool ffmpeg openbox xdpyinfo xwininfo xrandr
 ```
 
 Arch:
 
 ```sh
-sudo pacman -S --needed xorg-server-xvfb xdotool ffmpeg openbox xorg-xdpyinfo xorg-xrandr
+sudo pacman -S --needed xorg-server-xvfb xdotool ffmpeg openbox xorg-xdpyinfo xorg-xwininfo xorg-xrandr
 ```
 
-`xdotool`, `ffmpeg`, and `xdpyinfo` are what a shared desktop needs. `Xvfb` and
-`openbox` are only needed for managed X sessions. `xrandr` is optional and adds
-one display per monitor instead of one for the whole screen.
+`xdotool`, `ffmpeg`, `xdpyinfo`, and `xwininfo` are what a shared desktop needs;
+on Debian and Ubuntu `xdpyinfo` and `xwininfo` both come from `x11-utils`.
+`Xvfb` and `openbox` are only needed for managed X sessions. `xrandr` is
+optional and adds one display per monitor instead of one for the whole screen.
 
 ## Your existing desktop
 
@@ -51,8 +52,11 @@ Two things are worth knowing:
 
 On a server with no desktop, add a **managed display** from the display picker.
 T3 Code starts an X server and a window manager for it, and agents can open apps
-onto it with the `computer_launch` tool. Managed displays are temporary: they and
-everything running on them stop when the T3 Code server stops.
+onto it with the `computer_launch` tool. The X server picks its own display
+number from the ones that are free, so a managed display is named `:60` on one
+machine and `:2` on another; the display picker shows the name it got. Managed
+displays are temporary: they and everything running on them stop when the T3
+Code server stops.
 
 ## Wayland
 

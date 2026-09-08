@@ -23,7 +23,9 @@ export interface SpawnedCommand {
 /** How the fake host answers one command. */
 export interface FakeProcess {
   readonly stdout?: string | Uint8Array | ReadonlyArray<Uint8Array> | undefined;
-  readonly stderr?: string | undefined;
+  /** A stream rather than a string when the test needs to see the reader keep
+      up with a chatty child. */
+  readonly stderr?: string | Stream.Stream<Uint8Array, PlatformError.PlatformError> | undefined;
   readonly exitCode?: number | undefined;
   /** Set to make the spawn itself fail, as a missing executable does. */
   readonly spawnError?: string | undefined;
@@ -59,6 +61,13 @@ const toStdout = (
   return Stream.fromIterable(value);
 };
 
+const toStderr = (
+  value: FakeProcess["stderr"],
+): Stream.Stream<Uint8Array, PlatformError.PlatformError> => {
+  if (value === undefined) return Stream.empty;
+  return typeof value === "string" ? Stream.make(encoder.encode(value)) : value;
+};
+
 /**
  * Builds the fake host. `respond` sees each command in spawn order and decides
  * what it does; returning `undefined` means "exit 0 with no output".
@@ -74,7 +83,10 @@ export function makeFakeHost(
     const parsed = command as unknown as {
       readonly command: string;
       readonly args: ReadonlyArray<string>;
-      readonly options: { readonly env?: Record<string, string | undefined> };
+      readonly options: {
+        readonly env?: Record<string, string | undefined>;
+        readonly killSignal?: string | undefined;
+      };
     };
     const spawned: SpawnedCommand = {
       command: parsed.command,
@@ -103,28 +115,34 @@ export function makeFakeHost(
         : Effect.succeed(ChildProcessSpawner.ExitCode(behavior.exitCode ?? 0)),
     );
 
-    return Effect.succeed(
-      ChildProcessSpawner.makeHandle({
-        pid: ChildProcessSpawner.ProcessId(record.pid),
-        exitCode,
-        isRunning: Effect.sync(() => behavior.runsUntilKilled === true && !killed),
-        kill: (options) =>
-          Effect.sync(() => {
-            killed = true;
-            record.kills.push(options?.killSignal ?? "SIGTERM");
-            killOrder.push(record.command);
-          }),
-        unref: Effect.succeed(Effect.void),
-        stdin: Sink.drain,
-        stdout: toStdout(behavior.stdout),
-        stderr:
-          behavior.stderr === undefined
-            ? Stream.empty
-            : Stream.make(encoder.encode(behavior.stderr)),
-        all: toStdout(behavior.stdout),
-        getInputFd: () => Sink.drain,
-        getOutputFd: () => Stream.empty,
-      }),
+    const kill = (options?: { readonly killSignal?: string | undefined }) =>
+      Effect.sync(() => {
+        killed = true;
+        record.kills.push(options?.killSignal ?? "SIGTERM");
+        killOrder.push(record.command);
+      });
+
+    const handle = ChildProcessSpawner.makeHandle({
+      pid: ChildProcessSpawner.ProcessId(record.pid),
+      exitCode,
+      isRunning: Effect.sync(() => behavior.runsUntilKilled === true && !killed),
+      kill,
+      unref: Effect.succeed(Effect.void),
+      stdin: Sink.drain,
+      stdout: toStdout(behavior.stdout),
+      stderr: toStderr(behavior.stderr),
+      all: toStdout(behavior.stdout),
+      getInputFd: () => Sink.drain,
+      getOutputFd: () => Stream.empty,
+    });
+
+    // The real spawner kills a child that is still running when the scope that
+    // acquired it closes, which is how an interrupted command stops. A fake
+    // that only killed on request would prove nothing about cancellation.
+    return Effect.acquireRelease(Effect.succeed(handle), () =>
+      behavior.runsUntilKilled === true && !killed
+        ? kill({ killSignal: parsed.options.killSignal })
+        : Effect.void,
     );
   });
 
@@ -182,6 +200,7 @@ export const INSTALLED_TOOL_PATHS = {
   ffmpeg: "/usr/bin/ffmpeg",
   openbox: "/usr/bin/openbox",
   xdpyinfo: "/usr/bin/xdpyinfo",
+  xwininfo: "/usr/bin/xwininfo",
   xrandr: "/usr/bin/xrandr",
   wmctrl: "/usr/bin/wmctrl",
 } as const;

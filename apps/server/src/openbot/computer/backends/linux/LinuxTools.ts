@@ -17,6 +17,7 @@ export const LINUX_COMPUTER_TOOLS = [
   "ffmpeg",
   "openbox",
   "xdpyinfo",
+  "xwininfo",
   "xrandr",
   "wmctrl",
 ] as const;
@@ -32,13 +33,20 @@ export const NO_LINUX_TOOLS: LinuxToolPaths = {
   ffmpeg: null,
   openbox: null,
   xdpyinfo: null,
+  xwininfo: null,
   xrandr: null,
   wmctrl: null,
 };
 
-/** Tools every X11 session needs: capture, input, and the screen geometry that
-    turns a client's coordinates into root-window ones. */
-export const SHARED_DESKTOP_TOOLS: ReadonlyArray<LinuxToolName> = ["xdotool", "ffmpeg", "xdpyinfo"];
+/** Tools every X11 session needs: capture, input, the screen geometry that
+    turns a client's coordinates into root-window ones, and the window geometry
+    that a reparenting window manager makes xdotool report wrongly. */
+export const SHARED_DESKTOP_TOOLS: ReadonlyArray<LinuxToolName> = [
+  "xdotool",
+  "ffmpeg",
+  "xdpyinfo",
+  "xwininfo",
+];
 
 /** A managed session additionally has to start a desktop of its own. */
 export const MANAGED_SESSION_TOOLS: ReadonlyArray<LinuxToolName> = [
@@ -73,6 +81,7 @@ const PACKAGES: Readonly<Record<LinuxPackageManager, Readonly<Record<LinuxToolNa
     ffmpeg: "ffmpeg",
     openbox: "openbox",
     xdpyinfo: "x11-utils",
+    xwininfo: "x11-utils",
     xrandr: "x11-xserver-utils",
     wmctrl: "wmctrl",
   },
@@ -82,6 +91,7 @@ const PACKAGES: Readonly<Record<LinuxPackageManager, Readonly<Record<LinuxToolNa
     ffmpeg: "ffmpeg",
     openbox: "openbox",
     xdpyinfo: "xdpyinfo",
+    xwininfo: "xwininfo",
     xrandr: "xrandr",
     wmctrl: "wmctrl",
   },
@@ -91,6 +101,7 @@ const PACKAGES: Readonly<Record<LinuxPackageManager, Readonly<Record<LinuxToolNa
     ffmpeg: "ffmpeg",
     openbox: "openbox",
     xdpyinfo: "xorg-xdpyinfo",
+    xwininfo: "xorg-xwininfo",
     xrandr: "xorg-xrandr",
     wmctrl: "wmctrl",
   },
@@ -137,8 +148,9 @@ export const detectPackageManager = (
  * Finds the tools on `PATH`.
  *
  * A `stat` per candidate rather than a `which` subprocess: this runs on every
- * status read, and seven processes to answer a question the filesystem already
- * knows is exactly the kind of cost that shows up as a laggy status card.
+ * status read, and one process per tool to answer a question the filesystem
+ * already knows is exactly the kind of cost that shows up as a laggy status
+ * card.
  */
 export const discoverLinuxTools = (input: {
   readonly fileSystem: FileSystem.FileSystem;
@@ -189,7 +201,7 @@ const OPTIONAL_NOTES: Readonly<Record<string, string>> = {
   xrandr:
     "xrandr is not installed, so a multi-monitor X screen is offered as one large display instead of one display per monitor.",
   wmctrl:
-    "wmctrl is not installed. Window listing and focus still work through xdotool; wmctrl only adds desktop-level details.",
+    "wmctrl is not installed. Window listing and focus still work without it; wmctrl only adds desktop-level details.",
 };
 
 /**

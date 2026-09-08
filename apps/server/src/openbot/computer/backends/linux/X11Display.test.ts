@@ -8,11 +8,12 @@ import {
   mjpegQuality,
   NO_X11_INPUT_HELD,
   parseDisplayName,
-  parseWindowGeometryShell,
   parseXdpyinfoScreen,
   parseXrandrMonitors,
+  parseXwininfoGeometry,
   scrollButton,
   scrollSteps,
+  splitTypedText,
   xdotoolArgs,
   xvfbArgs,
   type X11InputHeld,
@@ -45,9 +46,10 @@ const commandsOf = (result: ReturnType<typeof xdotoolArgs>) => {
 };
 
 describe("xvfbArgs", () => {
-  it("asks for a 24-bit screen with no TCP listener", () => {
-    expect(xvfbArgs(60, 1600, 1000)).toEqual([
-      ":60",
+  it("lets Xvfb claim a display and report it, on a 24-bit screen with no TCP listener", () => {
+    expect(xvfbArgs({ widthPx: 1600, heightPx: 1000, displayFd: 1 })).toEqual([
+      "-displayfd",
+      "1",
       "-screen",
       "0",
       "1600x1000x24",
@@ -321,6 +323,46 @@ describe("xdotoolArgs", () => {
       ["type", "--delay", "12", "--", "--version"],
     ]);
   });
+
+  it("types long text as several processes so a stop lands inside one of them", () => {
+    const text = "a".repeat(200);
+    const commands = commandsOf(plan({ type: "text", text }));
+    expect(commands.map((command) => command[4])).toEqual([
+      "a".repeat(64),
+      "a".repeat(64),
+      "a".repeat(64),
+      "a".repeat(8),
+    ]);
+    expect(
+      commands.every((command) => command.slice(0, 4).join(" ") === "type --delay 12 --"),
+    ).toBe(true);
+  });
+});
+
+describe("splitTypedText", () => {
+  it("leaves anything that fits in one process alone", () => {
+    expect(splitTypedText("hello")).toEqual(["hello"]);
+    expect(splitTypedText("x".repeat(64))).toEqual(["x".repeat(64)]);
+    expect(splitTypedText("")).toEqual([]);
+  });
+
+  it("splits into bounded chunks that rejoin to the original", () => {
+    const text = Array.from({ length: 500 }, (_, index) => String(index % 10)).join("");
+    const chunks = splitTypedText(text);
+    expect(chunks).toHaveLength(8);
+    expect(chunks.every((chunk) => chunk.length <= 64)).toBe(true);
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("never cuts a surrogate pair in half", () => {
+    // 31 emoji is 62 UTF-16 units; the 32nd would be the 63rd and 64th, and
+    // half of it would be a character xdotool cannot type.
+    const text = "😀".repeat(40);
+    const chunks = splitTypedText(text);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks[0]).toBe("😀".repeat(32));
+    expect(chunks.every((chunk) => !/[\uD800-\uDBFF]$/u.test(chunk))).toBe(true);
+  });
 });
 
 describe("parseDisplayName", () => {
@@ -383,20 +425,42 @@ describe("parseXrandrMonitors", () => {
   });
 });
 
-describe("parseWindowGeometryShell", () => {
-  it("reads the shell assignments xdotool prints", () => {
-    const output = "WINDOW=41943044\nX=100\nY=-24\nWIDTH=800\nHEIGHT=600\nSCREEN=0\n";
-    expect(parseWindowGeometryShell(output)).toEqual({
-      x: 100,
-      y: -24,
+describe("parseXwininfoGeometry", () => {
+  // A reparented Openbox window: the client sits 1,20 inside its frame, and
+  // xdotool reports 42,160 for this same window by adding that offset twice.
+  const OUTPUT = [
+    'xwininfo: Window id: 0x800005 "Terminal"',
+    "",
+    "  Absolute upper-left X:  41",
+    "  Absolute upper-left Y:  140",
+    "  Relative upper-left X:  1",
+    "  Relative upper-left Y:  20",
+    "  Width: 800",
+    "  Height: 600",
+    "  Depth: 24",
+    "  Border width: 0",
+    "  Map State: IsViewable",
+    "  Corners:  +41+140  -759+140  -759-260  +41-260",
+    "  -geometry 80x24+40+139",
+  ].join("\n");
+
+  it("reads the window's root-relative origin and size", () => {
+    expect(parseXwininfoGeometry(OUTPUT)).toEqual({
+      x: 41,
+      y: 140,
       widthPx: 800,
       heightPx: 600,
-      screen: 0,
     });
   });
 
+  it("reads a window on a monitor left of the origin", () => {
+    const output = OUTPUT.replace("Absolute upper-left X:  41", "Absolute upper-left X:  -1920");
+    expect(parseXwininfoGeometry(output)?.x).toBe(-1920);
+  });
+
   it("refuses a partial frame rather than reporting a wrong one", () => {
-    expect(parseWindowGeometryShell("WINDOW=1\nX=0\nY=0\n")).toBeNull();
-    expect(parseWindowGeometryShell("")).toBeNull();
+    expect(parseXwininfoGeometry("xwininfo: error: no such window")).toBeNull();
+    expect(parseXwininfoGeometry("  Absolute upper-left X:  41\n  Width: 800\n")).toBeNull();
+    expect(parseXwininfoGeometry("")).toBeNull();
   });
 });

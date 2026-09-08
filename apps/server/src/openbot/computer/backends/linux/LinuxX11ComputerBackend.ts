@@ -56,8 +56,8 @@ import {
   ffmpegFrameSize,
   NO_X11_INPUT_HELD,
   parseDisplayName,
-  parseWindowGeometryShell,
   parseXdpyinfoScreen,
+  parseXwininfoGeometry,
   parseXrandrMonitors,
   xdotoolArgs,
   type X11InputHeld,
@@ -225,6 +225,11 @@ export const make: Effect.Effect<
           stdin: "ignore",
           stdout: "pipe",
           stderr: "pipe",
+          // The scope closes on interruption, and closing it has to end the
+          // child: an interrupted `xdotool type` that keeps running would go on
+          // typing into someone's desktop after they stopped controlling it.
+          killSignal: "SIGTERM",
+          forceKillAfter: "3 seconds",
         }),
       );
       const [stdout, stderr, exitCode] = yield* Effect.all(
@@ -269,7 +274,7 @@ export const make: Effect.Effect<
   const capabilitiesFor = (tools: LinuxToolPaths): OpenbotComputerCapabilities => ({
     stream: tools.ffmpeg !== null,
     input: tools.xdotool !== null,
-    windows: tools.xdotool !== null,
+    windows: tools.xdotool !== null && tools.xwininfo !== null,
     focusWindow: tools.xdotool !== null,
     managedDisplays: tools.Xvfb !== null && tools.openbox !== null && tools.xdpyinfo !== null,
     launchApp: true,
@@ -663,6 +668,15 @@ export const make: Effect.Effect<
       });
     });
 
+  /** What one display is holding down, whoever pressed it: `release-all` is
+      answered from this and nothing else. */
+  const setHeld = (displayId: string, held: X11InputHeld) =>
+    Ref.update(heldRef, (current) => {
+      const next = new Map(current);
+      next.set(displayId, held);
+      return next;
+    });
+
   const input = (
     displayId: OpenbotComputerDisplayId,
     events: ReadonlyArray<OpenbotComputerInputEvent>,
@@ -701,14 +715,13 @@ export const make: Effect.Effect<
               continue;
             }
             held = plan.held;
+            // Recorded per event rather than once at the end: an interruption
+            // stops this loop wherever it is, and the `release-all` that
+            // follows can only let go of what was written down before it.
+            yield* setHeld(displayId, held);
             delivered += 1;
           }
 
-          yield* Ref.update(heldRef, (current) => {
-            const next = new Map(current);
-            next.set(displayId, held);
-            return next;
-          });
           return { delivered, rejected } satisfies OpenbotComputerInputResult;
         }),
       );
@@ -726,11 +739,12 @@ export const make: Effect.Effect<
     );
 
   const windowsOfTarget = (
-    xdotool: string,
+    tools: { readonly xdotool: string; readonly xwininfo: string },
     xDisplay: { readonly displayName: string; readonly env: Record<string, string | undefined> },
     displaysOnServer: ReadonlyArray<X11Target>,
   ) =>
     Effect.gen(function* () {
+      const { xdotool, xwininfo } = tools;
       const found = yield* runCommand(
         xdotool,
         ["search", "--onlyvisible", "--name", ".+"],
@@ -746,16 +760,19 @@ export const make: Effect.Effect<
 
       const windows: Array<OpenbotComputerWindow> = [];
       for (const xid of ids) {
+        // xwininfo for the frame, xdotool for everything else: only xwininfo
+        // reports a position in root coordinates that survives a reparenting
+        // window manager, and that position is what the capture shows.
         const [title, geometry, owningPid] = yield* Effect.all(
           [
             runCommand(xdotool, ["getwindowname", xid], xDisplay.env),
-            runCommand(xdotool, ["getwindowgeometry", "--shell", xid], xDisplay.env),
+            runCommand(xwininfo, ["-id", xid], xDisplay.env),
             runCommand(xdotool, ["getwindowpid", xid], xDisplay.env),
           ],
           { concurrency: "unbounded" },
         );
-        if (title.exitCode !== 0) continue;
-        const frame = parseWindowGeometryShell(geometry.stdout);
+        if (title.exitCode !== 0 || geometry.exitCode !== 0) continue;
+        const frame = parseXwininfoGeometry(geometry.stdout);
         if (frame === null) continue;
         const parsedPid = Number.parseInt(owningPid.stdout.trim(), 10);
         const pid = owningPid.exitCode === 0 && Number.isFinite(parsedPid) ? parsedPid : null;
@@ -790,7 +807,8 @@ export const make: Effect.Effect<
 
   const listWindows = Effect.gen(function* () {
     const { tools } = yield* readTools;
-    if (tools.xdotool === null) return [];
+    const { xdotool, xwininfo } = tools;
+    if (xdotool === null || xwininfo === null) return [];
     const targets = yield* readTargets();
     const byDisplayName = new Map<string, Array<X11Target>>();
     for (const target of targets) {
@@ -804,7 +822,7 @@ export const make: Effect.Effect<
       if (first === undefined) continue;
       windows.push(
         ...(yield* windowsOfTarget(
-          tools.xdotool,
+          { xdotool, xwininfo },
           { displayName, env: displayEnvironment(first) },
           group,
         )),
@@ -852,7 +870,7 @@ export const make: Effect.Effect<
       const { tools } = yield* readTools;
       const existing = yield* Ref.get(sessionsRef);
       const managed = yield* startManagedXSession(
-        { spawner, fileSystem, tools, baseEnvironment: baseEnvironment() },
+        { spawner, tools, baseEnvironment: baseEnvironment() },
         {
           widthPx: request.widthPx,
           heightPx: request.heightPx,

@@ -58,8 +58,22 @@ const TWO_MONITORS = [
   " 1: +HDMI-1 2560/597x1440/336+1920+0  HDMI-1",
 ].join("\n");
 
+/** xwininfo as a reparenting window manager makes it read: the absolute
+    corner is the client origin in the root window, which is what the capture
+    of that screen shows. */
 const WINDOW_GEOMETRY = (x: number, y: number) =>
-  `WINDOW=41943044\nX=${x}\nY=${y}\nWIDTH=800\nHEIGHT=600\nSCREEN=0\n`;
+  [
+    'xwininfo: Window id: 0x2800004 "T3 Code"',
+    "",
+    `  Absolute upper-left X:  ${x}`,
+    `  Absolute upper-left Y:  ${y}`,
+    "  Relative upper-left X:  1",
+    "  Relative upper-left Y:  20",
+    "  Width: 800",
+    "  Height: 600",
+    "  Map State: IsViewable",
+    "",
+  ].join("\n");
 
 interface HostOptions {
   readonly environment?: Readonly<Record<string, string | undefined>>;
@@ -162,6 +176,17 @@ describe("LinuxX11ComputerBackend", () => {
       expect(described.capabilities.managedDisplays).toBe(false);
       expect(described.setup?.notes.join("\n")).toContain("sudo apt-get install -y");
       expect(described.unavailableReason).toContain("ffmpeg");
+    }),
+  );
+
+  it.effect("cannot report windows on a host with no xwininfo", () =>
+    Effect.gen(function* () {
+      const { shape } = yield* backend({ missingTools: ["xwininfo"] });
+      const described = yield* shape.describe;
+      expect(described.capabilities.windows).toBe(false);
+      // Still capture and control the screen; only the window list is gone.
+      expect(described.capabilities.input).toBe(true);
+      expect(yield* shape.listWindows).toEqual([]);
     }),
   );
 
@@ -354,22 +379,94 @@ describe("LinuxX11ComputerBackend", () => {
     }),
   );
 
-  it.effect("remembers what is held so release-all lets go of all of it", () =>
+  it.effect("remembers what is held so release-all lets go of every key and button", () =>
     Effect.gen(function* () {
       const { shape, host } = yield* backend();
       yield* shape.input(displayId(":0"), [
-        { type: "key", key: "ShiftLeft", action: "down" },
+        { type: "key", key: "ControlLeft", action: "down" },
         { type: "button", button: "left", action: "down", point: { x: 4, y: 4 } },
       ]);
       const result = yield* shape.input(displayId(":0"), [{ type: "release-all" }]);
 
       expect(result).toEqual({ delivered: 1, rejected: [] });
       expect(linesFor(host, "xdotool")).toEqual([
-        "keydown -- Shift_L",
+        "keydown -- Control_L",
         "mousemove --sync 4 4 mousedown 1",
-        "keyup -- Shift_L",
+        "keyup -- Control_L",
         "mouseup 1",
       ]);
+    }),
+  );
+
+  it.effect("types long text as several xdotool runs", () =>
+    Effect.gen(function* () {
+      const { shape, host } = yield* backend();
+      const text = "t".repeat(200);
+      const result = yield* shape.input(displayId(":0"), [{ type: "text", text }]);
+
+      expect(result).toEqual({ delivered: 1, rejected: [] });
+      expect(linesFor(host, "xdotool")).toEqual([
+        `type --delay 12 -- ${"t".repeat(64)}`,
+        `type --delay 12 -- ${"t".repeat(64)}`,
+        `type --delay 12 -- ${"t".repeat(64)}`,
+        `type --delay 12 -- ${"t".repeat(8)}`,
+      ]);
+    }),
+  );
+
+  it.effect("stops typing within one chunk when the batch is interrupted", () =>
+    Effect.gen(function* () {
+      // The second chunk never finishes on its own, so the interrupt has to be
+      // what ends it.
+      let typed = 0;
+      const { shape, host } = yield* backend({
+        respond: (command) => {
+          if (command.command === toolPath("xdotool") && command.args[0] === "type") {
+            typed += 1;
+            return typed === 2 ? { runsUntilKilled: true } : {};
+          }
+          return defaultRespond(command);
+        },
+      });
+      const typing = yield* shape
+        .input(displayId(":0"), [{ type: "text", text: "t".repeat(200) }])
+        .pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      expect(typed).toBe(2);
+
+      yield* Fiber.interrupt(typing);
+
+      // The chunk in flight was killed, and nothing behind it was started.
+      expect(host.recordsFor(toolPath("xdotool"))).toHaveLength(2);
+      expect(host.recordsFor(toolPath("xdotool"))[1]?.kills).toEqual(["SIGTERM"]);
+    }),
+  );
+
+  it.effect("releases what an interrupted batch left held", () =>
+    Effect.gen(function* () {
+      let commands = 0;
+      const { shape, host } = yield* backend({
+        respond: (command) => {
+          if (command.command !== toolPath("xdotool")) return defaultRespond(command);
+          commands += 1;
+          // The text after the key press blocks; the key stays down.
+          return command.args[0] === "type" ? { runsUntilKilled: true } : {};
+        },
+      });
+      const batch = yield* shape
+        .input(displayId(":0"), [
+          { type: "key", key: "ControlLeft", action: "down" },
+          { type: "text", text: "t".repeat(200) },
+        ])
+        .pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      expect(commands).toBe(2);
+      yield* Fiber.interrupt(batch);
+
+      yield* shape.input(displayId(":0"), [{ type: "release-all" }]);
+      expect(linesFor(host, "xdotool").at(-1)).toBe("keyup -- Control_L");
     }),
   );
 
@@ -401,12 +498,15 @@ describe("LinuxX11ComputerBackend", () => {
       const { shape } = yield* backend({
         procNames: { "/proc/4242/comm": "firefox\n" },
         respond: (command) => {
+          if (command.command === toolPath("xwininfo")) {
+            expect(command.args).toEqual(["-id", "41943044"]);
+            return { stdout: WINDOW_GEOMETRY(100, 40) };
+          }
           if (command.command !== toolPath("xdotool")) return defaultRespond(command);
           const [verb, argument] = command.args;
           if (verb === "search") return { stdout: "41943044\n" };
           if (verb === "getactivewindow") return { stdout: "41943044\n" };
           if (verb === "getwindowname") return { stdout: "T3 Code — Mozilla Firefox\n" };
-          if (verb === "getwindowgeometry") return { stdout: WINDOW_GEOMETRY(100, 40) };
           if (verb === "getwindowpid") return { stdout: "4242\n" };
           return { exitCode: 1, stderr: `unexpected ${verb ?? ""} ${argument ?? ""}` };
         },
@@ -458,7 +558,9 @@ describe("LinuxX11ComputerBackend", () => {
         respond: (command) =>
           command.command === toolPath("xdpyinfo")
             ? { stdout: XDPYINFO_OUTPUT(1280, 720) }
-            : { runsUntilKilled: true },
+            : command.command === toolPath("Xvfb")
+              ? { runsUntilKilled: true, stdout: "60\n" }
+              : { runsUntilKilled: true },
       });
       const changes = yield* Stream.runCollect(shape.changes.pipe(Stream.take(2))).pipe(
         Effect.forkScoped,
@@ -482,7 +584,8 @@ describe("LinuxX11ComputerBackend", () => {
         main: true,
       });
       expect(yield* shape.listDisplays).toHaveLength(1);
-      expect(host.recordsFor("/usr/bin/Xvfb")[0]?.args[0]).toBe(":60");
+      // The display number is the one Xvfb reported, never one we picked.
+      expect(host.recordsFor("/usr/bin/Xvfb")[0]?.args.slice(0, 2)).toEqual(["-displayfd", "1"]);
 
       const destroying = yield* shape.destroyDisplay(displayId(":60")).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;

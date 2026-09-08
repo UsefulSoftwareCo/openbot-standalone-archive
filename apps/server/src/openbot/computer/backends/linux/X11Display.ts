@@ -25,18 +25,27 @@ export const DEFAULT_MANAGED_HEIGHT_PX = 1000;
 /**
  * Arguments for the headless X server backing one managed session.
  *
+ * The display number is Xvfb's to choose: with `-displayfd` it scans for a free
+ * number, binds it, and only then writes it back on that descriptor. Picking a
+ * number here instead would be a scan whose result another process can take
+ * between the check and the bind, and the loser of that race silently starts a
+ * window manager on the winner's desktop.
+ *
  * `-noreset` keeps the server alive when the last client disconnects, which
  * otherwise resets every X resource between two app launches. `-nolisten tcp`
  * keeps the display reachable only through its Unix socket: a managed session
  * is a local implementation detail, never a network service.
  */
-export function xvfbArgs(
-  displayNumber: number,
-  widthPx: number,
-  heightPx: number,
-): ReadonlyArray<string> {
+export function xvfbArgs(options: {
+  readonly widthPx: number;
+  readonly heightPx: number;
+  /** Descriptor Xvfb writes the display number to, as a decimal line. */
+  readonly displayFd: number;
+}): ReadonlyArray<string> {
+  const { widthPx, heightPx, displayFd } = options;
   return [
-    `:${displayNumber}`,
+    "-displayfd",
+    String(displayFd),
     "-screen",
     "0",
     `${widthPx}x${heightPx}x24`,
@@ -348,6 +357,40 @@ export function scrollButton(deltaX: number, deltaY: number): number | null {
   return deltaX > 0 ? 7 : 6;
 }
 
+/**
+ * Longest text one `xdotool type` process is given.
+ *
+ * Typing is paced (`--delay 12`), so the whole event is exactly as long as the
+ * string: a protocol-maximum 4096 characters is ~49 seconds in one process
+ * that only dies when it is killed. Splitting the string into separate
+ * processes makes the caller's interruption land within one chunk, which is
+ * what "stop controlling" has to feel like.
+ */
+export const TEXT_CHUNK_MAX_UNITS = 64;
+
+/**
+ * Splits text into `xdotool type` sized pieces on code point boundaries.
+ *
+ * Chunks are measured in UTF-16 units because that is what the protocol bounds,
+ * but a chunk never ends between the halves of a surrogate pair: half an emoji
+ * is not a character xdotool can type, and the other half would arrive as a
+ * second broken one.
+ */
+export function splitTypedText(text: string): ReadonlyArray<string> {
+  if (text.length <= TEXT_CHUNK_MAX_UNITS) return text.length === 0 ? [] : [text];
+  const chunks: Array<string> = [];
+  let current = "";
+  for (const codePoint of text) {
+    if (current.length + codePoint.length > TEXT_CHUNK_MAX_UNITS) {
+      chunks.push(current);
+      current = "";
+    }
+    current += codePoint;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
 function withoutLast<A>(values: ReadonlyArray<A>, value: A): ReadonlyArray<A> {
   const index = values.lastIndexOf(value);
   return index < 0 ? values : [...values.slice(0, index), ...values.slice(index + 1)];
@@ -465,9 +508,11 @@ export function xdotoolArgs(
       };
     }
     case "text":
+      // One process per chunk: the caller runs them in order and an interrupted
+      // batch stops at whichever chunk was in flight.
       return {
         _tag: "commands",
-        commands: [["type", "--delay", "12", "--", event.text]],
+        commands: splitTypedText(event.text).map((chunk) => ["type", "--delay", "12", "--", chunk]),
         held,
       };
     case "release-all":
@@ -581,34 +626,34 @@ export function parseXrandrMonitors(text: string): ReadonlyArray<X11Monitor> {
 }
 
 export interface X11WindowGeometry {
+  /** Root-window coordinates: what the capture of that screen actually shows. */
   readonly x: number;
   readonly y: number;
   readonly widthPx: number;
   readonly heightPx: number;
-  readonly screen: number;
 }
 
 /**
- * `xdotool getwindowgeometry --shell` output, which is shell assignments:
- * `WINDOW=`, `X=`, `Y=`, `WIDTH=`, `HEIGHT=`, `SCREEN=`. Null when the four
- * geometry keys are not all present, because a partial frame would be a lie
- * the UI cannot detect.
+ * `xwininfo -id <xid>` output, which reports a window's absolute upper-left
+ * corner in the root window plus its size.
+ *
+ * xwininfo rather than `xdotool getwindowgeometry --shell`: under a reparenting
+ * window manager xdotool adds the frame offset to a position that already
+ * includes it, so an Openbox window whose contents are at 41,140 is reported at
+ * 42,160 and every coordinate the UI derives from it is wrong (measured on a
+ * real Openbox session). Null when the four values are not all present, because
+ * a partial frame is a lie the UI cannot detect.
  */
-export function parseWindowGeometryShell(text: string): X11WindowGeometry | null {
-  const values = new Map<string, number>();
-  for (const raw of text.split("\n")) {
-    const separator = raw.indexOf("=");
-    if (separator <= 0) continue;
-    const key = raw.slice(0, separator).trim();
-    const parsed = Number.parseInt(raw.slice(separator + 1).trim(), 10);
-    if (Number.isFinite(parsed)) values.set(key, parsed);
-  }
-  const x = values.get("X");
-  const y = values.get("Y");
-  const widthPx = values.get("WIDTH");
-  const heightPx = values.get("HEIGHT");
-  if (x === undefined || y === undefined || widthPx === undefined || heightPx === undefined) {
-    return null;
-  }
-  return { x, y, widthPx, heightPx, screen: values.get("SCREEN") ?? 0 };
+export function parseXwininfoGeometry(text: string): X11WindowGeometry | null {
+  const read = (pattern: RegExp): number | null => {
+    const match = pattern.exec(text);
+    const parsed = Number.parseInt(match?.[1] ?? "", 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const x = read(/^\s*Absolute upper-left X:\s*(-?\d+)\s*$/mu);
+  const y = read(/^\s*Absolute upper-left Y:\s*(-?\d+)\s*$/mu);
+  const widthPx = read(/^\s*Width:\s*(\d+)\s*$/mu);
+  const heightPx = read(/^\s*Height:\s*(\d+)\s*$/mu);
+  if (x === null || y === null || widthPx === null || heightPx === null) return null;
+  return { x, y, widthPx, heightPx };
 }

@@ -54,6 +54,7 @@ const ALL_PRESENT = toolPaths({
   ffmpeg: "/usr/bin/ffmpeg",
   openbox: "/usr/bin/openbox",
   xdpyinfo: "/usr/bin/xdpyinfo",
+  xwininfo: "/usr/bin/xwininfo",
   xrandr: "/usr/bin/xrandr",
   wmctrl: "/usr/bin/wmctrl",
 });
@@ -105,16 +106,24 @@ describe("detectPackageManager", () => {
 
 describe("installCommand", () => {
   it("names the right package for each tool on each distribution", () => {
-    expect(
-      installCommand("apt", ["Xvfb", "xdotool", "ffmpeg", "openbox", "xdpyinfo", "xrandr"]),
-    ).toBe("sudo apt-get install -y xvfb xdotool ffmpeg openbox x11-utils x11-xserver-utils");
-    expect(
-      installCommand("dnf", ["Xvfb", "xdotool", "ffmpeg", "openbox", "xdpyinfo", "xrandr"]),
-    ).toBe("sudo dnf install -y xorg-x11-server-Xvfb xdotool ffmpeg openbox xdpyinfo xrandr");
-    expect(
-      installCommand("pacman", ["Xvfb", "xdotool", "ffmpeg", "openbox", "xdpyinfo", "xrandr"]),
-    ).toBe(
-      "sudo pacman -S --needed xorg-server-xvfb xdotool ffmpeg openbox xorg-xdpyinfo xorg-xrandr",
+    const tools = [
+      "Xvfb",
+      "xdotool",
+      "ffmpeg",
+      "openbox",
+      "xdpyinfo",
+      "xwininfo",
+      "xrandr",
+    ] as const;
+    // xdpyinfo and xwininfo are both x11-utils on Debian, and collapse to one.
+    expect(installCommand("apt", [...tools])).toBe(
+      "sudo apt-get install -y xvfb xdotool ffmpeg openbox x11-utils x11-xserver-utils",
+    );
+    expect(installCommand("dnf", [...tools])).toBe(
+      "sudo dnf install -y xorg-x11-server-Xvfb xdotool ffmpeg openbox xdpyinfo xwininfo xrandr",
+    );
+    expect(installCommand("pacman", [...tools])).toBe(
+      "sudo pacman -S --needed xorg-server-xvfb xdotool ffmpeg openbox xorg-xdpyinfo xorg-xwininfo xorg-xrandr",
     );
   });
 
@@ -137,6 +146,7 @@ describe("linuxComputerSetup", () => {
         xdotool: "/usr/bin/xdotool",
         ffmpeg: "/usr/bin/ffmpeg",
         xdpyinfo: "/usr/bin/xdpyinfo",
+        xwininfo: "/usr/bin/xwininfo",
         xrandr: "/usr/bin/xrandr",
         wmctrl: "/usr/bin/wmctrl",
       }),
@@ -152,6 +162,7 @@ describe("linuxComputerSetup", () => {
       xdotool: "/usr/bin/xdotool",
       ffmpeg: "/usr/bin/ffmpeg",
       xdpyinfo: "/usr/bin/xdpyinfo",
+      xwininfo: "/usr/bin/xwininfo",
       xrandr: "/usr/bin/xrandr",
       wmctrl: "/usr/bin/wmctrl",
     });
@@ -211,6 +222,7 @@ describe("linuxComputerSetup", () => {
         xdotool: "/usr/bin/xdotool",
         ffmpeg: "/usr/bin/ffmpeg",
         xdpyinfo: "/usr/bin/xdpyinfo",
+        xwininfo: "/usr/bin/xwininfo",
       }),
       packageManager: "apt",
       target: "shared-desktop",
