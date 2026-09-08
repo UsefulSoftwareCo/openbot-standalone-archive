@@ -203,20 +203,27 @@ export const make = Effect.gen(function* () {
   const desktopAppUpdate =
     serverSelfUpdate === "desktop-managed" && serverConfig.desktopTelemetryControlFd !== undefined;
 
+  const platform = {
+    os: platformOs(hostPlatform),
+    arch: platformArch(hostArchitecture),
+    ...(machine === null ? {} : { machine }),
+  } as const;
+  // Only these two have a real backend. The unsupported backend still answers
+  // honestly on every other host, but a client that hides the surface outright
+  // is a better answer than one that shows a permanent "cannot".
+  const openbotComputer = platform.os === "darwin" || platform.os === "linux";
+
   const descriptor: ExecutionEnvironmentDescriptor = {
     environmentId,
     label,
-    platform: {
-      os: platformOs(hostPlatform),
-      arch: platformArch(hostArchitecture),
-      ...(machine === null ? {} : { machine }),
-    },
+    platform,
     serverVersion: packageJson.version,
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
     capabilities: {
       repositoryIdentity: true,
       connectionProbe: true,
       attachmentUploads: true,
+      ...(openbotComputer ? { openbotComputer: true } : {}),
       fileAttachments: { maxUploadBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES },
       pullRequests: true,
       threadSettlement: true,

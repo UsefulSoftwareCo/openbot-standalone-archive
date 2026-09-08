@@ -51,7 +51,8 @@ import {
   turnInstructionsLayer as openbotTurnInstructionsLayer,
 } from "../openbot/OpenbotChannelService.ts";
 import { layer as openbotChannelStoreLayer } from "../openbot/OpenbotChannelStore.ts";
-import { layer as openbotComputerLayer } from "../openbot/OpenbotComputerService.ts";
+import { layer as computerBackendLayer } from "../openbot/computer/ComputerBackendLive.ts";
+import { layer as openbotComputerSessionLayer } from "../openbot/computer/OpenbotComputerSessionService.ts";
 import { layer as openbotQuestionServiceLayer } from "../openbot/OpenbotQuestionService.ts";
 
 const runtimePolicyProvided = runtimePolicyLayerFromProjectRepository.pipe(
@@ -296,6 +297,10 @@ export const OrchestrationV2LayerLive = Layer.mergeAll(
   legacyV1ThreadImporterProvided,
 );
 
+const openbotComputerProvided = openbotComputerSessionLayer.pipe(
+  Layer.provide(computerBackendLayer),
+);
+
 export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   OrchestrationLayerLive,
   OrchestrationV2LayerLive.pipe(Layer.provide(ProjectServiceLayerLive)),
@@ -304,7 +309,9 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   threadLifecycleProvided,
   scheduledTaskProvided,
   openbotChannelProvided,
-  openbotComputerLayer,
+  // The session owns viewers, the lease, and the input queue; the backend
+  // underneath it is chosen from the host platform and stays private to it.
+  openbotComputerProvided,
   openbotQuestionProvided,
   providerContinuationWorkerProvided,
 );

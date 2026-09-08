@@ -94,7 +94,7 @@ import { ProviderSessionManagerV2 } from "./orchestration-v2/ProviderSessionMana
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import { OpenbotChannelService } from "./openbot/OpenbotChannelService.ts";
-import { OpenbotComputerService } from "./openbot/OpenbotComputerService.ts";
+import { OpenbotComputerSession } from "./openbot/computer/OpenbotComputerSession.ts";
 import {
   archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
@@ -604,7 +604,15 @@ const makeWsRpcLayer = (
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const openbotChannels = yield* OpenbotChannelService;
-      const openbotComputer = yield* OpenbotComputerService;
+      const openbotComputer = yield* OpenbotComputerSession;
+      // Input and the lease from the typed socket belong to the human at
+      // this client, so they share one identity for as long as the socket
+      // lives: taking control in one tab and clicking in it is one viewer.
+      const computerViewer = {
+        kind: "viewer",
+        viewerId: `rpc:${currentSessionId}`,
+        label: clientOrigin.surface ?? "A client",
+      } as const;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const usage = yield* UsageService.UsageService;
       const projectService = yield* ProjectService.ProjectService;
@@ -1721,6 +1729,52 @@ const makeWsRpcLayer = (
           }),
         [WS_METHODS.openbotComputerSnapshot]: (input) =>
           observeRpcEffect(WS_METHODS.openbotComputerSnapshot, openbotComputer.snapshot(input), {
+            "rpc.aggregate": "openbot",
+          }),
+        [WS_METHODS.openbotComputerSubscribe]: (_input) =>
+          observeRpcStream(WS_METHODS.openbotComputerSubscribe, openbotComputer.statusChanges, {
+            "rpc.aggregate": "openbot",
+          }),
+        [WS_METHODS.openbotComputerWindowsList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.openbotComputerWindowsList,
+            openbotComputer
+              .listWindows(input.displayId)
+              .pipe(Effect.map((windows) => ({ windows }))),
+            { "rpc.aggregate": "openbot" },
+          ),
+        [WS_METHODS.openbotComputerWindowFocus]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.openbotComputerWindowFocus,
+            openbotComputer.focusWindow(input.windowId).pipe(Effect.as({})),
+            { "rpc.aggregate": "openbot" },
+          ),
+        [WS_METHODS.openbotComputerDisplayCreate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.openbotComputerDisplayCreate,
+            openbotComputer.createDisplay(input),
+            { "rpc.aggregate": "openbot" },
+          ),
+        [WS_METHODS.openbotComputerDisplayDestroy]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.openbotComputerDisplayDestroy,
+            openbotComputer.destroyDisplay(input.displayId).pipe(Effect.as({})),
+            { "rpc.aggregate": "openbot" },
+          ),
+        [WS_METHODS.openbotComputerInput]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.openbotComputerInput,
+            openbotComputer.viewerInput(computerViewer, input.displayId, input.events),
+            { "rpc.aggregate": "openbot" },
+          ),
+        [WS_METHODS.openbotComputerControl]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.openbotComputerControl,
+            openbotComputer.control(computerViewer, input.action),
+            { "rpc.aggregate": "openbot" },
+          ),
+        [WS_METHODS.openbotComputerLaunch]: (input) =>
+          observeRpcEffect(WS_METHODS.openbotComputerLaunch, openbotComputer.launch(input), {
             "rpc.aggregate": "openbot",
           }),
         [WS_METHODS.serverProbe]: (_input) =>
