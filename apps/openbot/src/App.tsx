@@ -185,6 +185,7 @@ export function App() {
         setProjectDialogOpen(true);
       }}
       onNewChat={() => openPage({ type: "new-chat" })}
+      onOpenComputer={() => openPage({ type: "computer" })}
       connectionLabel={connectionLabel}
     />
   );

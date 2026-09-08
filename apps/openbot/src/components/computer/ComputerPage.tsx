@@ -28,7 +28,7 @@ import {
   Plus,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 
 import { useAtomCommand } from "../../state/channels";
 import {
@@ -45,7 +45,13 @@ import {
   normalizeWheelDelta,
   stageToDisplayPoint,
 } from "./computerGeometry";
-import { keyDownInput, keyUpInput, releaseAllEvents, textEvents } from "./computerKeys";
+import {
+  hiddenViewerRelease,
+  keyDownInput,
+  keyUpInput,
+  releaseEvents,
+  textEvents,
+} from "./computerKeys";
 import {
   computerStatusView,
   controllerBadge,
@@ -53,7 +59,7 @@ import {
   sessionLabel,
   streamBanner,
 } from "./computerStatusView";
-import { useComputerStream, useElementSize } from "./useComputerStream";
+import { useComputerStream, useDocumentVisible, useElementSize } from "./useComputerStream";
 
 /** A viewer watching a desktop: full detail, and interactive rather than smooth. */
 const VIEWER_PROFILE = { maxWidthPx: 1920, fps: 12 } as const;
@@ -107,7 +113,9 @@ export function ComputerPage({
   const [actionError, setActionError] = useState<string | null>(null);
 
   const stageRef = useRef<HTMLDivElement | null>(null);
-  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  // Fullscreen covers this element and nothing else, so it has to hold the
+  // toolbar as well as the stage, and host the dialogs the toolbar opens.
+  const fullscreenRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const keyboardRef = useRef<HTMLTextAreaElement | null>(null);
   const heldKeysRef = useRef<ReadonlySet<string>>(new Set());
@@ -116,8 +124,11 @@ export function ComputerPage({
   const composingRef = useRef(false);
 
   const stage = useElementSize(stageRef);
+  // A hidden tab must not keep a developer's machine capturing and encoding a
+  // screen nobody is looking at, exactly as the thumbnail does not.
+  const visible = useDocumentVisible();
   const stream = useComputerStream({
-    enabled: view.canStream,
+    enabled: view.canStream && visible,
     displayId: activeDisplay?.id ?? null,
     profile: VIEWER_PROFILE,
     control: false,
@@ -142,7 +153,7 @@ export function ComputerPage({
   );
 
   const releaseEverything = useCallback(() => {
-    send(releaseAllEvents(heldKeysRef.current));
+    send(releaseEvents(heldKeysRef.current, heldButtonsRef.current));
     heldKeysRef.current = new Set();
     heldButtonsRef.current.clear();
   }, [send]);
@@ -158,9 +169,31 @@ export function ComputerPage({
 
   useEffect(() => releaseEverything, [releaseEverything]);
 
+  // Handled on the event rather than on the rendered `visible` flag: the flag
+  // also tears the socket down, and by the time that effect runs there is no
+  // socket left to say `release` on.
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      const owed = hiddenViewerRelease({
+        visible: document.visibilityState === "visible",
+        controlling,
+        heldKeys: heldKeysRef.current,
+        heldButtons: heldButtonsRef.current,
+      });
+      send(owed.events);
+      if (owed.releaseControl) setControl("release");
+      if (document.visibilityState !== "visible") {
+        heldKeysRef.current = new Set();
+        heldButtonsRef.current.clear();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [controlling, send, setControl]);
+
   const [fullscreen, setFullscreen] = useState(false);
   useEffect(() => {
-    const sync = () => setFullscreen(document.fullscreenElement === wrapperRef.current);
+    const sync = () => setFullscreen(document.fullscreenElement === fullscreenRef.current);
     document.addEventListener("fullscreenchange", sync);
     sync();
     return () => document.removeEventListener("fullscreenchange", sync);
@@ -216,9 +249,15 @@ export function ComputerPage({
   const canControl = status?.capabilities.input === true && view.canStream;
   const physical = displays.filter((display) => !display.managed);
   const managed = displays.filter((display) => display.managed);
+  // The browser paints only the fullscreen element's subtree, so a dialog
+  // portaled to `<body>` while fullscreen is simply not there.
+  const dialogContainer = fullscreen ? fullscreenRef : undefined;
 
   return (
-    <>
+    <div
+      ref={fullscreenRef}
+      className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground"
+    >
       <header className="flex h-12 shrink-0 items-center gap-1 border-b border-border px-2 pt-[env(safe-area-inset-top)] md:px-3">
         <Button
           variant="ghost"
@@ -377,14 +416,14 @@ export function ComputerPage({
           aria-label={fullscreen ? "Leave fullscreen" : "Fullscreen"}
           onClick={() => {
             if (fullscreen) void document.exitFullscreen().catch(() => undefined);
-            else void wrapperRef.current?.requestFullscreen().catch(() => undefined);
+            else void fullscreenRef.current?.requestFullscreen().catch(() => undefined);
           }}
         >
           {fullscreen ? <Minimize2 /> : <Maximize2 />}
         </Button>
       </header>
 
-      <div ref={wrapperRef} className="relative flex min-h-0 flex-1 flex-col bg-muted">
+      <div className="relative flex min-h-0 flex-1 flex-col bg-muted">
         <div
           ref={stageRef}
           className={`relative min-h-0 flex-1 overflow-hidden ${controlling ? "cursor-none" : ""}`}
@@ -528,7 +567,11 @@ export function ComputerPage({
       </div>
 
       <Dialog open={windowsOpen} onOpenChange={setWindowsOpen}>
-        <DialogPopup className="max-w-lg" bottomStickOnMobile={false}>
+        <DialogPopup
+          className="max-w-lg"
+          bottomStickOnMobile={false}
+          portalContainer={dialogContainer}
+        >
           <DialogHeader>
             <DialogTitle>Windows</DialogTitle>
           </DialogHeader>
@@ -539,8 +582,8 @@ export function ComputerPage({
               </p>
             ) : (
               <ul className="flex flex-col gap-0.5" aria-label="Open windows">
-                {windows.map((window) => (
-                  <li key={window.id}>
+                {windows.map((hostWindow) => (
+                  <li key={hostWindow.id}>
                     <button
                       type="button"
                       className="flex w-full items-baseline gap-2 rounded-md px-2 py-2 text-left hover:bg-accent"
@@ -548,18 +591,32 @@ export function ComputerPage({
                         setActionError(null);
                         const result = await runFocusWindow({
                           environmentId,
-                          input: { windowId: window.id },
+                          input: { windowId: hostWindow.id },
                         });
-                        if (result._tag === "Failure") setActionError(commandErrorText(result));
-                        else setWindowsOpen(false);
+                        if (result._tag === "Failure") {
+                          setActionError(commandErrorText(result));
+                          return;
+                        }
+                        setWindowsOpen(false);
+                        // Focusing a window on another screen without following
+                        // it leaves the stage pointed at the screen it left.
+                        if (
+                          hostWindow.displayId !== null &&
+                          hostWindow.displayId !== activeDisplay?.id
+                        ) {
+                          setChosenDisplayId(hostWindow.displayId);
+                        }
                       }}
                     >
                       <span className="min-w-0 flex-1 truncate text-sm">
-                        {window.title.length === 0 ? "Untitled window" : window.title}
+                        {hostWindow.title.length === 0 ? "Untitled window" : hostWindow.title}
                       </span>
-                      <span className="shrink-0 text-muted-foreground text-xs">{window.app}</span>
                       <span className="shrink-0 text-muted-foreground text-xs">
-                        {displays.find((display) => display.id === window.displayId)?.name ?? "—"}
+                        {hostWindow.app}
+                      </span>
+                      <span className="shrink-0 text-muted-foreground text-xs">
+                        {displays.find((display) => display.id === hostWindow.displayId)?.name ??
+                          "—"}
                       </span>
                     </button>
                   </li>
@@ -575,6 +632,7 @@ export function ComputerPage({
           open={newDisplayOpen}
           onOpenChange={setNewDisplayOpen}
           hiDpiAvailable={status?.host.platform === "darwin"}
+          portalContainer={dialogContainer}
           onCreate={async (input) => {
             setActionError(null);
             const result = await runCreateDisplay({ environmentId, input });
@@ -587,7 +645,7 @@ export function ComputerPage({
           }}
         />
       )}
-    </>
+    </div>
   );
 }
 
@@ -606,11 +664,14 @@ function NewDisplayDialog({
   open,
   onOpenChange,
   hiDpiAvailable,
+  portalContainer,
   onCreate,
 }: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly hiDpiAvailable: boolean;
+  /** Where to portal to, so the dialog survives the page going fullscreen. */
+  readonly portalContainer: RefObject<HTMLElement | null> | undefined;
   readonly onCreate: (input: NewDisplayInput) => Promise<void>;
 }) {
   const [name, setName] = useState("");
@@ -635,7 +696,11 @@ function NewDisplayDialog({
         if (!busy) onOpenChange(next);
       }}
     >
-      <DialogPopup className="max-w-sm" bottomStickOnMobile={false}>
+      <DialogPopup
+        className="max-w-sm"
+        bottomStickOnMobile={false}
+        portalContainer={portalContainer}
+      >
         <DialogHeader>
           <DialogTitle>New managed display</DialogTitle>
         </DialogHeader>

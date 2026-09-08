@@ -8,7 +8,7 @@ import { Button } from "@t3tools/ui/button";
 import { cn } from "@t3tools/ui/cn";
 import { Input } from "@t3tools/ui/input";
 import { ScrollArea } from "@t3tools/ui/scroll-area";
-import { Bot, Plus, Settings } from "lucide-react";
+import { Bot, Monitor, Plus, Settings } from "lucide-react";
 import { useMemo } from "react";
 
 import { buildSidebarGroups } from "../state/sidebar";
@@ -80,6 +80,7 @@ export function Sidebar({
   onOpenProjectSettings,
   onNewProject,
   onNewChat,
+  onOpenComputer,
   connectionLabel,
 }: {
   readonly projects: ReadonlyArray<OpenbotProject>;
@@ -92,6 +93,7 @@ export function Sidebar({
   readonly onOpenProjectSettings: (projectId: OpenbotProjectId) => void;
   readonly onNewProject: () => void;
   readonly onNewChat: () => void;
+  readonly onOpenComputer: () => void;
   readonly connectionLabel: string;
 }) {
   const groups = useMemo(
@@ -227,8 +229,18 @@ export function Sidebar({
           )}
         </nav>
       </ScrollArea>
-      <div className="border-t border-sidebar-border px-3 py-2 text-[11px] text-sidebar-muted-foreground">
-        {connectionLabel}
+      {/* The host's screen is reachable before any chat exists: a fresh server
+          with no agent CLI can still be set up by looking at it. */}
+      <div className="flex items-center justify-between gap-2 border-t border-sidebar-border px-3 py-2 text-[11px] text-sidebar-muted-foreground">
+        <button
+          type="button"
+          onClick={onOpenComputer}
+          className="-mx-1 flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 hover:bg-sidebar-row-hover hover:text-foreground"
+        >
+          <Monitor className="size-3.5 shrink-0" />
+          Computer
+        </button>
+        <span className="truncate">{connectionLabel}</span>
       </div>
     </aside>
   );

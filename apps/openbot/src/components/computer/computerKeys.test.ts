@@ -1,14 +1,19 @@
 import { describe, expect, it } from "@effect/vitest";
 
+import type { OpenbotComputerMouseButton } from "@t3tools/contracts";
+
 import {
   type ComputerKeyboardEvent,
   eventModifiers,
   handledAsKey,
+  hiddenViewerRelease,
   keyDownInput,
   keyUpInput,
-  releaseAllEvents,
+  releaseEvents,
   textEvents,
 } from "./computerKeys";
+
+const NOTHING_HELD: ReadonlySet<OpenbotComputerMouseButton> = new Set();
 
 function press(overrides: Partial<ComputerKeyboardEvent>): ComputerKeyboardEvent {
   return {
@@ -106,12 +111,75 @@ describe("keyUpInput", () => {
   });
 });
 
-describe("releaseAllEvents", () => {
+describe("releaseEvents", () => {
   it("lets go of everything only when something is held", () => {
-    expect(releaseAllEvents(new Set(["MetaLeft"]))).toEqual([{ type: "release-all" }]);
-    expect(releaseAllEvents(new Set())).toEqual([]);
+    expect(releaseEvents(new Set(["MetaLeft"]), NOTHING_HELD)).toEqual([{ type: "release-all" }]);
+    expect(releaseEvents(new Set(), NOTHING_HELD)).toEqual([]);
+  });
+
+  it("releases a mouse-only drag, which holds no keys at all", () => {
+    expect(releaseEvents(new Set(), new Set<OpenbotComputerMouseButton>(["left"]))).toEqual([
+      { type: "release-all" },
+    ]);
   });
 });
+
+describe("hiddenViewerRelease", () => {
+  it("owes the host nothing while the page is visible", () => {
+    expect(
+      hiddenViewerRelease({
+        visible: true,
+        controlling: true,
+        heldKeys: new Set(["ShiftLeft"]),
+        heldButtons: new Set<OpenbotComputerMouseButton>(["left"]),
+      }),
+    ).toEqual({ events: [], releaseControl: false });
+  });
+
+  it("gives back the lease and what it was holding when the page hides", () => {
+    expect(
+      hiddenViewerRelease({
+        visible: false,
+        controlling: true,
+        heldKeys: new Set(),
+        heldButtons: new Set<OpenbotComputerMouseButton>(["left"]),
+      }),
+    ).toEqual({ events: [{ type: "release-all" }], releaseControl: true });
+  });
+
+  it("does not release a lease it never held", () => {
+    expect(
+      hiddenViewerRelease({
+        visible: false,
+        controlling: false,
+        heldKeys: new Set(),
+        heldButtons: NOTHING_HELD,
+      }),
+    ).toEqual({ events: [], releaseControl: false });
+  });
+});
+
+/** The text each event carries, failing loudly if anything else was produced. */
+function textChunks(data: string): ReadonlyArray<string> {
+  return textEvents(data).map((event) => {
+    if (event.type !== "text") throw new Error(`textEvents produced a ${event.type} event`);
+    return event.text;
+  });
+}
+
+/** True when a chunk begins or ends with half of an astral character. */
+function hasLoneSurrogate(text: string): boolean {
+  for (let index = 0; index < text.length; index += 1) {
+    const unit = text.charCodeAt(index);
+    if (unit >= 0xdc00 && unit <= 0xdfff) return true;
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = text.charCodeAt(index + 1);
+      if (Number.isNaN(next) || next < 0xdc00 || next > 0xdfff) return true;
+      index += 1;
+    }
+  }
+  return false;
+}
 
 describe("textEvents", () => {
   it("carries typed characters", () => {
@@ -123,9 +191,24 @@ describe("textEvents", () => {
     expect(textEvents("")).toEqual([]);
   });
 
-  it("stays inside the contract's length limit", () => {
-    const events = textEvents("x".repeat(5000));
-    expect(events[0]).toMatchObject({ type: "text" });
-    expect(events[0]?.type === "text" ? events[0].text.length : 0).toBe(4096);
+  it("splits a long paste into bounded events instead of losing the rest", () => {
+    const pasted = "x".repeat(10_000);
+    const chunks = textChunks(pasted);
+    expect(chunks).toHaveLength(3);
+    expect(chunks.map((chunk) => chunk.length)).toEqual([4096, 4096, 1808]);
+    expect(chunks.join("")).toBe(pasted);
+  });
+
+  it("never cuts a surrogate pair in half", () => {
+    // One leading code unit puts the 4096 boundary between the two halves of
+    // an emoji, which is the only case the naive slice gets wrong.
+    const pasted = `a${"😀".repeat(2050)}`;
+    const chunks = textChunks(pasted);
+    expect(chunks.join("")).toBe(pasted);
+    expect(chunks[0]?.length).toBe(4095);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(4096);
+      expect(hasLoneSurrogate(chunk)).toBe(false);
+    }
   });
 });

@@ -1,4 +1,5 @@
 import {
+  MAX_COMPUTER_INPUT_BATCH,
   OPENBOT_COMPUTER_STREAM_PATH,
   type OpenbotComputerController,
   type OpenbotComputerDisplay,
@@ -191,6 +192,12 @@ export interface ComputerStreamClientOptions {
   readonly url?: string;
   /** Production seam for the socket, so a caller can supply its own transport. */
   readonly createSocket?: (url: string) => WebSocket;
+  /** Production seam for JPEG decoding, which needs no canvas to be exercised. */
+  readonly decodeFrame?: (data: ArrayBuffer) => Promise<ImageBitmap>;
+}
+
+function decodeJpegFrame(data: ArrayBuffer): Promise<ImageBitmap> {
+  return createImageBitmap(new Blob([data], { type: "image/jpeg" }));
 }
 
 interface OpenRequest {
@@ -210,23 +217,33 @@ export class ComputerStreamClient {
   readonly #handlers: ComputerStreamHandlers;
   readonly #url: string;
   readonly #createSocket: (url: string) => WebSocket;
+  readonly #decodeFrame: (data: ArrayBuffer) => Promise<ImageBitmap>;
   #socket: WebSocket | null = null;
   #listeners: AbortController | null = null;
   #request: OpenRequest | null = null;
   #state: ComputerStreamState = INITIAL_STREAM_STATE;
   #attempt = 0;
-  #retryTimer: number | null = null;
-  #pingTimer: number | null = null;
+  #retryTimer: ReturnType<typeof setTimeout> | null = null;
+  #pingTimer: ReturnType<typeof setInterval> | null = null;
   #seq = 0;
   #closed = false;
   /** A frame is being decoded; newer frames replace `#pendingFrame` instead of queuing. */
   #decoding = false;
   #pendingFrame: ArrayBuffer | null = null;
+  /**
+   * Bumped whenever every frame in flight stops being worth painting: a
+   * display switch and a close. A decode that finishes with an older
+   * generation closes its bitmap instead of handing it to the canvas.
+   */
+  #generation = 0;
+  /** The display the server last said it is capturing, null until it says so. */
+  #streamDisplayId: OpenbotComputerDisplayId | null = null;
 
   constructor(handlers: ComputerStreamHandlers, options: ComputerStreamClientOptions = {}) {
     this.#handlers = handlers;
     this.#url = options.url ?? computerStreamUrl(window.location);
     this.#createSocket = options.createSocket ?? ((url) => new WebSocket(url));
+    this.#decodeFrame = options.decodeFrame ?? decodeJpegFrame;
   }
 
   get state(): ComputerStreamState {
@@ -243,15 +260,26 @@ export class ComputerStreamClient {
     this.#request = { displayId, profile, control };
     this.#state = INITIAL_STREAM_STATE;
     this.#attempt = 0;
+    this.#invalidateFrames();
     this.#teardownSocket();
     this.#connect(false);
   }
 
-  /** Sends input; dropped when the socket is down, because stale input is worse than none. */
+  /**
+   * Sends input; dropped when the socket is down, because stale input is worse
+   * than none. The contract bounds one batch, and a long paste is many `text`
+   * events, so more than a batch's worth goes as ordered messages rather than
+   * as one message the server has to reject whole.
+   */
   input(events: ReadonlyArray<OpenbotComputerInputEvent>): void {
-    if (events.length === 0) return;
-    this.#seq += 1;
-    this.#send({ type: "input", seq: this.#seq, events });
+    for (let start = 0; start < events.length; start += MAX_COMPUTER_INPUT_BATCH) {
+      this.#seq += 1;
+      this.#send({
+        type: "input",
+        seq: this.#seq,
+        events: events.slice(start, start + MAX_COMPUTER_INPUT_BATCH),
+      });
+    }
   }
 
   control(action: "take" | "release"): void {
@@ -262,13 +290,27 @@ export class ComputerStreamClient {
     if (this.#closed) return;
     this.#closed = true;
     this.#send({ type: "close" });
+    this.#invalidateFrames();
     this.#teardownSocket();
     this.#apply({ type: "closed", willRetry: false });
+  }
+
+  /**
+   * Everything already decoded or queued belongs to the display this client
+   * has just stopped showing, so it is dropped rather than painted late.
+   */
+  #invalidateFrames(): void {
+    this.#generation += 1;
+    this.#pendingFrame = null;
+    this.#streamDisplayId = null;
   }
 
   #connect(retry: boolean): void {
     const request = this.#request;
     if (request === null || this.#closed) return;
+    // A new socket has said nothing yet, so nothing it sends is trusted to be
+    // the requested display until its `hello` arrives.
+    this.#streamDisplayId = null;
     this.#apply({ type: "connecting", retry });
     const socket = this.#createSocket(this.#url);
     socket.binaryType = "arraybuffer";
@@ -301,6 +343,9 @@ export class ComputerStreamClient {
           const message = parseServerMessage(event.data);
           if (message !== undefined) {
             if (message.type === "hello") this.#attempt = 0;
+            if (message.type === "hello" || message.type === "geometry") {
+              this.#streamDisplayId = message.display.id;
+            }
             this.#apply({ type: "server", message });
           }
           return;
@@ -325,7 +370,7 @@ export class ComputerStreamClient {
         const willRetry = !this.#closed && this.#request !== null && shouldReconnect(this.#state);
         this.#apply({ type: "closed", willRetry });
         if (willRetry) {
-          this.#retryTimer = window.setTimeout(() => {
+          this.#retryTimer = setTimeout(() => {
             this.#retryTimer = null;
             this.#connect(true);
           }, reconnectDelayMs(this.#attempt));
@@ -338,21 +383,21 @@ export class ComputerStreamClient {
 
   #startPings(): void {
     this.#stopPings();
-    this.#pingTimer = window.setInterval(() => {
+    this.#pingTimer = setInterval(() => {
       this.#send({ type: "ping", t: Date.now() });
     }, PING_INTERVAL_MS);
   }
 
   #stopPings(): void {
     if (this.#pingTimer !== null) {
-      window.clearInterval(this.#pingTimer);
+      clearInterval(this.#pingTimer);
       this.#pingTimer = null;
     }
   }
 
   #teardownSocket(): void {
     if (this.#retryTimer !== null) {
-      window.clearTimeout(this.#retryTimer);
+      clearTimeout(this.#retryTimer);
       this.#retryTimer = null;
     }
     this.#stopPings();
@@ -372,16 +417,23 @@ export class ComputerStreamClient {
   /**
    * Newest frame wins. A slow decoder must never build a queue: a viewer that
    * is one second behind is showing a screen the user is already clicking on.
+   *
+   * Frames the server sent before it acknowledged the requested display still
+   * show the previous one, and the switch may land mid-decode, so both the
+   * arrival and the completion are checked against what is wanted now.
    */
   #acceptFrame(data: ArrayBuffer): void {
+    const request = this.#request;
+    if (request === null || this.#streamDisplayId !== request.displayId) return;
     if (this.#decoding) {
       this.#pendingFrame = data;
       return;
     }
     this.#decoding = true;
-    void createImageBitmap(new Blob([data], { type: "image/jpeg" }))
+    const generation = this.#generation;
+    void this.#decodeFrame(data)
       .then((bitmap) => {
-        if (this.#closed) {
+        if (this.#closed || generation !== this.#generation) {
           bitmap.close();
           return;
         }
@@ -392,6 +444,8 @@ export class ComputerStreamClient {
       })
       .finally(() => {
         this.#decoding = false;
+        // Anything still pending arrived after the last invalidation, and
+        // `#acceptFrame` checks the display again before decoding it.
         const pending = this.#pendingFrame;
         this.#pendingFrame = null;
         if (pending !== null && !this.#closed) this.#acceptFrame(pending);

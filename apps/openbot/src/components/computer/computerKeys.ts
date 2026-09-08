@@ -1,4 +1,8 @@
-import type { OpenbotComputerInputEvent, OpenbotComputerModifier } from "@t3tools/contracts";
+import type {
+  OpenbotComputerInputEvent,
+  OpenbotComputerModifier,
+  OpenbotComputerMouseButton,
+} from "@t3tools/contracts";
 
 /**
  * Browser keyboard events translated into host input.
@@ -104,26 +108,77 @@ export function keyUpInput(
 }
 
 /**
- * Let go of everything. Sent on blur, on disconnect and when control is lost,
- * so a modifier the browser stopped reporting does not stay down on a desktop
- * the user can no longer see.
+ * Let go of everything. Sent on blur, on lost pointer capture, on disconnect
+ * and when control is lost, so neither a modifier the browser stopped
+ * reporting nor a button held through a drag stays down on a desktop the user
+ * can no longer see. Buttons count: a mouse-only drag holds nothing on the
+ * keyboard and still leaves the host with a button pressed.
  */
-export function releaseAllEvents(
-  held: ReadonlySet<string>,
+export function releaseEvents(
+  heldKeys: ReadonlySet<string>,
+  heldButtons: ReadonlySet<OpenbotComputerMouseButton>,
 ): ReadonlyArray<OpenbotComputerInputEvent> {
-  return held.size === 0 ? [] : [{ type: "release-all" }];
+  return heldKeys.size === 0 && heldButtons.size === 0 ? [] : [{ type: "release-all" }];
+}
+
+/** What this client is holding down on the host right now. */
+export interface HeldInput {
+  readonly heldKeys: ReadonlySet<string>;
+  readonly heldButtons: ReadonlySet<OpenbotComputerMouseButton>;
+}
+
+/** What a viewer must do about the host when the page's visibility changes. */
+export interface ViewerRelease {
+  readonly events: ReadonlyArray<OpenbotComputerInputEvent>;
+  /** Whether to hand the input lease back so somebody else can take it. */
+  readonly releaseControl: boolean;
+}
+
+/**
+ * What a viewer owes the host when the page stops being visible. A hidden tab
+ * holding the lease locks everyone else out of a desktop nobody is watching,
+ * so it gives the lease back and releases anything it was holding down. A
+ * visible page owes nothing.
+ */
+export function hiddenViewerRelease(
+  viewer: HeldInput & { readonly visible: boolean; readonly controlling: boolean },
+): ViewerRelease {
+  if (viewer.visible) return { events: [], releaseControl: false };
+  return {
+    events: releaseEvents(viewer.heldKeys, viewer.heldButtons),
+    releaseControl: viewer.controlling,
+  };
 }
 
 /** The maximum a single `text` event carries, per the contract. */
 const MAX_TEXT_LENGTH = 4096;
 
+/** Whether cutting `text` at `index` would split an astral character in half. */
+function splitsSurrogatePair(text: string, index: number): boolean {
+  const high = text.charCodeAt(index - 1);
+  const low = text.charCodeAt(index);
+  return high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff;
+}
+
 /**
  * Characters from the hidden textarea's `input` or `compositionend`. A
  * deletion reports no data, and has already travelled as a Backspace key.
+ *
+ * A paste is as long as the user's clipboard, so this chunks rather than
+ * truncates: the contract caps one `text` event at 4096 UTF-16 code units,
+ * and half a surrogate pair is not a character, so a chunk that would end
+ * between the two halves ends one unit earlier instead.
  */
 export function textEvents(
   data: string | null | undefined,
 ): ReadonlyArray<OpenbotComputerInputEvent> {
   if (data === null || data === undefined || data.length === 0) return [];
-  return [{ type: "text", text: data.slice(0, MAX_TEXT_LENGTH) }];
+  const events: Array<OpenbotComputerInputEvent> = [];
+  for (let start = 0; start < data.length;) {
+    let end = Math.min(start + MAX_TEXT_LENGTH, data.length);
+    if (end < data.length && splitsSurrogatePair(data, end)) end -= 1;
+    events.push({ type: "text", text: data.slice(start, end) });
+    start = end;
+  }
+  return events;
 }

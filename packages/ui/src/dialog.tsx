@@ -54,13 +54,21 @@ function DialogPopup({
   children,
   showCloseButton = true,
   bottomStickOnMobile = true,
+  portalContainer,
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean;
   bottomStickOnMobile?: boolean;
+  /**
+   * Where the dialog is portaled to. `<body>` by default, which is right
+   * everywhere except inside a fullscreen element: the browser paints only
+   * that element's subtree, so a dialog outside it is invisible. Pass the
+   * fullscreen element (or a ref to it) while it is fullscreen.
+   */
+  portalContainer?: DialogPrimitive.Portal.Props["container"];
 }) {
   return (
-    <DialogPortal>
+    <DialogPortal container={portalContainer}>
       <DialogBackdrop />
       <DialogViewport
         className={cn(bottomStickOnMobile && "max-sm:grid-rows-[1fr_auto] max-sm:p-0 max-sm:pt-12")}
