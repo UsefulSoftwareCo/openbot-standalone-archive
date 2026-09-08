@@ -165,10 +165,21 @@ import {
   OpenbotThreadStartResult,
 } from "./openbot.ts";
 import {
+  OpenbotComputerControlInput,
+  OpenbotComputerDisplay,
+  OpenbotComputerDisplayCreateInput,
+  OpenbotComputerDisplayDestroyInput,
   OpenbotComputerError,
+  OpenbotComputerInputBatch,
+  OpenbotComputerInputResult,
+  OpenbotComputerLaunchInput,
+  OpenbotComputerLaunchResult,
   OpenbotComputerSnapshot,
   OpenbotComputerSnapshotInput,
   OpenbotComputerStatus,
+  OpenbotComputerWindowFocusInput,
+  OpenbotComputerWindowsListInput,
+  OpenbotComputerWindowsListResult,
 } from "./openbotComputer.ts";
 import {
   ProjectListEntriesError,
@@ -419,6 +430,14 @@ export const WS_METHODS = {
   openbotKnowledgeDelete: "openbot.knowledge.delete",
   openbotComputerStatus: "openbot.computer.status",
   openbotComputerSnapshot: "openbot.computer.snapshot",
+  openbotComputerSubscribe: "openbot.computer.subscribe",
+  openbotComputerWindowsList: "openbot.computer.windows.list",
+  openbotComputerWindowFocus: "openbot.computer.window.focus",
+  openbotComputerDisplayCreate: "openbot.computer.display.create",
+  openbotComputerDisplayDestroy: "openbot.computer.display.destroy",
+  openbotComputerInput: "openbot.computer.input",
+  openbotComputerControl: "openbot.computer.control",
+  openbotComputerLaunch: "openbot.computer.launch",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -1492,6 +1511,54 @@ export const WsOpenbotComputerSnapshotRpc = Rpc.make(WS_METHODS.openbotComputerS
   success: OpenbotComputerSnapshot,
   error: Schema.Union([OpenbotComputerError, EnvironmentAuthorizationError]),
 });
+const OpenbotComputerRpcError = Schema.Union([OpenbotComputerError, EnvironmentAuthorizationError]);
+/** The status, pushed on every change (displays, windows, permissions, controller). */
+export const WsOpenbotComputerSubscribeRpc = Rpc.make(WS_METHODS.openbotComputerSubscribe, {
+  payload: Schema.Struct({}),
+  success: OpenbotComputerStatus,
+  error: OpenbotComputerRpcError,
+  stream: true,
+});
+export const WsOpenbotComputerWindowsListRpc = Rpc.make(WS_METHODS.openbotComputerWindowsList, {
+  payload: OpenbotComputerWindowsListInput,
+  success: OpenbotComputerWindowsListResult,
+  error: OpenbotComputerRpcError,
+});
+export const WsOpenbotComputerWindowFocusRpc = Rpc.make(WS_METHODS.openbotComputerWindowFocus, {
+  payload: OpenbotComputerWindowFocusInput,
+  success: Schema.Struct({}),
+  error: OpenbotComputerRpcError,
+});
+export const WsOpenbotComputerDisplayCreateRpc = Rpc.make(WS_METHODS.openbotComputerDisplayCreate, {
+  payload: OpenbotComputerDisplayCreateInput,
+  success: OpenbotComputerDisplay,
+  error: OpenbotComputerRpcError,
+});
+export const WsOpenbotComputerDisplayDestroyRpc = Rpc.make(
+  WS_METHODS.openbotComputerDisplayDestroy,
+  {
+    payload: OpenbotComputerDisplayDestroyInput,
+    success: Schema.Struct({}),
+    error: OpenbotComputerRpcError,
+  },
+);
+/** Ordered input on the shared desktop. Rejected while another controller
+    holds the lease. */
+export const WsOpenbotComputerInputRpc = Rpc.make(WS_METHODS.openbotComputerInput, {
+  payload: OpenbotComputerInputBatch,
+  success: OpenbotComputerInputResult,
+  error: OpenbotComputerRpcError,
+});
+export const WsOpenbotComputerControlRpc = Rpc.make(WS_METHODS.openbotComputerControl, {
+  payload: OpenbotComputerControlInput,
+  success: OpenbotComputerStatus,
+  error: OpenbotComputerRpcError,
+});
+export const WsOpenbotComputerLaunchRpc = Rpc.make(WS_METHODS.openbotComputerLaunch, {
+  payload: OpenbotComputerLaunchInput,
+  success: OpenbotComputerLaunchResult,
+  error: OpenbotComputerRpcError,
+});
 
 export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
   payload: Schema.Struct({}),
@@ -1578,6 +1645,14 @@ export const WsRpcGroup = RpcGroup.make(
   WsOpenbotKnowledgeDeleteRpc,
   WsOpenbotComputerStatusRpc,
   WsOpenbotComputerSnapshotRpc,
+  WsOpenbotComputerSubscribeRpc,
+  WsOpenbotComputerWindowsListRpc,
+  WsOpenbotComputerWindowFocusRpc,
+  WsOpenbotComputerDisplayCreateRpc,
+  WsOpenbotComputerDisplayDestroyRpc,
+  WsOpenbotComputerInputRpc,
+  WsOpenbotComputerControlRpc,
+  WsOpenbotComputerLaunchRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,

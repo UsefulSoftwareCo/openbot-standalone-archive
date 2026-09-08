@@ -884,6 +884,12 @@ export const ServerSettings = Schema.Struct({
    * between a desktop window and a phone attached to the same server.
    */
   enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /**
+   * Whether agents get the `computer_*` tools that see and drive the host's
+   * shared desktop. Same server-authoritative reasoning as
+   * `enableAgentBrowserAccess`; the human's own computer view is unaffected.
+   */
+  enableAgentComputerAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
@@ -1142,6 +1148,7 @@ export const ServerSettingsPatch = Schema.Struct({
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
+  enableAgentComputerAccess: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(

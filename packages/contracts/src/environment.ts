@@ -85,6 +85,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   connectionProbe: Schema.optionalKey(Schema.Boolean),
   /** Missing on older servers, which still accept inline image attachments. */
   attachmentUploads: Schema.optionalKey(Schema.Boolean),
+  /** Server can stream and drive the host desktop for OpenBot (status,
+      frames, input). Absent on servers without a computer backend, so
+      clients hide the computer surface instead of probing. */
+  openbotComputer: Schema.optionalKey(Schema.Boolean),
   /** Missing on servers that only accept image attachments. */
   fileAttachments: Schema.optionalKey(
     Schema.Struct({
