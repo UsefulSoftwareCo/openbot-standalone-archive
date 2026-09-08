@@ -188,6 +188,115 @@ describe("OpenbotComputerSessionService", () => {
     ),
   );
 
+  it.effect(
+    "closing a view-only connection from the same session leaves the controller in control",
+    () =>
+      Effect.gen(function* () {
+        const { host, session: computer } = yield* session();
+        const controlling = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-rhys",
+          canControl: true,
+        });
+        yield* controlling.open(MAIN_DISPLAY.id, PROFILE);
+        yield* controlling.takeControl;
+
+        // The same person's second window, watching the same desktop.
+        const watchingScope = yield* Scope.make();
+        const watching = yield* computer
+          .attachViewer({ label: "Rhys (phone)", sessionId: "session-rhys", canControl: false })
+          .pipe(Scope.provide(watchingScope));
+        yield* watching.open(MAIN_DISPLAY.id, PROFILE);
+        yield* Scope.close(watchingScope, Exit.void);
+
+        expect(yield* controlling.input([clickAt(7, 7)])).toEqual({ delivered: 1, rejected: [] });
+        expect((yield* host.delivered).at(-1)).toEqual({
+          displayId: MAIN_DISPLAY.id,
+          events: [clickAt(7, 7)],
+        });
+        expect(yield* computer.controller).toMatchObject({ kind: "viewer", label: "Rhys" });
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("a second connection of the same session can stop control explicitly", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { host, session: computer } = yield* session();
+        const controlling = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-rhys",
+          canControl: true,
+        });
+        yield* controlling.open(MAIN_DISPLAY.id, PROFILE);
+        yield* controlling.takeControl;
+        yield* controlling.input([{ type: "key", key: "ShiftLeft", action: "down" }]);
+        const other = yield* computer.attachViewer({
+          label: "Rhys (phone)",
+          sessionId: "session-rhys",
+          canControl: true,
+        });
+        yield* other.open(MAIN_DISPLAY.id, PROFILE);
+
+        yield* other.releaseControl;
+
+        expect(yield* computer.controller).toBeNull();
+        expect((yield* host.delivered).at(-1)).toEqual({
+          displayId: MAIN_DISPLAY.id,
+          events: [{ type: "key", key: "ShiftLeft", action: "up" }],
+        });
+      }),
+    ),
+  );
+
+  it.effect("closing the controlling connection frees the lease", () =>
+    Effect.gen(function* () {
+      const { session: computer } = yield* session();
+      const scope = yield* Scope.make();
+      const controlling = yield* computer
+        .attachViewer({ label: "Rhys", sessionId: "session-rhys", canControl: true })
+        .pipe(Scope.provide(scope));
+      yield* controlling.open(MAIN_DISPLAY.id, PROFILE);
+      yield* controlling.takeControl;
+      const watching = yield* computer.attachViewer({
+        label: "Rhys (phone)",
+        sessionId: "session-rhys",
+        canControl: true,
+      });
+      yield* watching.open(MAIN_DISPLAY.id, PROFILE);
+
+      yield* Scope.close(scope, Exit.void);
+      expect(yield* computer.controller).toBeNull();
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("hands control to whichever connection of a session took it last", () =>
+    Effect.gen(function* () {
+      const { session: computer } = yield* session();
+      const scope = yield* Scope.make();
+      const first = yield* computer
+        .attachViewer({ label: "Rhys", sessionId: "session-rhys", canControl: true })
+        .pipe(Scope.provide(scope));
+      yield* first.open(MAIN_DISPLAY.id, PROFILE);
+      yield* first.takeControl;
+      const second = yield* computer.attachViewer({
+        label: "Rhys (phone)",
+        sessionId: "session-rhys",
+        canControl: true,
+      });
+      yield* second.open(MAIN_DISPLAY.id, PROFILE);
+      yield* second.takeControl;
+
+      // The connection that took it last is the one whose closing ends it.
+      yield* Scope.close(scope, Exit.void);
+      expect(yield* computer.controller).toMatchObject({
+        kind: "viewer",
+        label: "Rhys (phone)",
+      });
+      yield* second.releaseControl;
+      expect(yield* computer.controller).toBeNull();
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("refuses control to a connection that may only watch", () =>
     Effect.scoped(
       Effect.gen(function* () {

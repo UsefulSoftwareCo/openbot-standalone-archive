@@ -235,9 +235,14 @@ export function computerAvailability(input: {
     who has control keeps it while they move between screens. */
 interface Lease {
   readonly source: ComputerInputSource;
-  /** `leaseKey(source)`, kept so ownership survives the source's other fields
-      changing between connections of the same person. */
+  /** `leaseKey(source)`, kept so authorization survives the source's other
+      fields changing between connections of the same person. */
   readonly key: string;
+  /** `sourceKey` of the connection that took it. Every connection of the same
+      session is authorized by `key`, but only this one's disconnect is that
+      person letting go: a second tab or a view-only socket closing must not
+      take control away from the connection that is using it. */
+  readonly ownerConnection: string;
   readonly since: string;
 }
 
@@ -293,8 +298,16 @@ const controllerOf = (lease: Lease | null): OpenbotComputerController | null =>
     ? null
     : { kind: lease.source.kind, label: lease.source.label, since: lease.since };
 
+/** Whether this source may act under the lease: true for every connection of
+    the session that holds it. */
 const heldBy = (lease: Lease | null, source: ComputerInputSource): boolean =>
   lease !== null && lease.key === leaseKey(source);
+
+/** Whether this connection is the one that took the lease. Only used where a
+    connection going away decides the lease's fate; asking anything else is
+    authorization, which is `heldBy`. */
+const ownedByConnection = (lease: Lease | null, key: string): boolean =>
+  lease !== null && lease.ownerConnection === key;
 
 const rejectEvery = (
   events: ReadonlyArray<OpenbotComputerInputEvent>,
@@ -673,8 +686,15 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const since = yield* nowIso;
       const taken = yield* Ref.modify(lease, (current) => {
-        if (current === null) return [null, { source, key: leaseKey(source), since }];
-        if (current.key === leaseKey(source)) return [null, current];
+        const owner = sourceKey(source);
+        if (current === null)
+          return [null, { source, key: leaseKey(source), ownerConnection: owner, since }];
+        // The same person on another of their connections: hand ownership to
+        // whichever one is driving now, so that connection's disconnect is
+        // what ends control. Nothing anyone is holding moves with it, and the
+        // clock keeps running from when they first took it.
+        if (current.key === leaseKey(source))
+          return [null, { ...current, source, ownerConnection: owner }];
         return [current.source.label, current];
       });
       if (taken !== null) return yield* notControlling(taken);
@@ -695,7 +715,9 @@ export const make = Effect.gen(function* () {
     });
 
   /** Gives the lease back promptly: whatever the controller has in flight is
-      interrupted first, so this does not wait out a long batch. */
+      interrupted first, so this does not wait out a long batch. Asking to stop
+      is authorization, not ownership: Stop from either socket of the
+      controlling session ends control, whichever of them took it. */
   const releaseControlFor = (source: ComputerInputSource) =>
     Effect.gen(function* () {
       const current = yield* Ref.get(lease);
@@ -754,10 +776,13 @@ export const make = Effect.gen(function* () {
       // globally still has them down after the screen it was aimed at leaves.
       yield* releaseDisplayHoldsLocked(displayId);
       const current = yield* Ref.get(lease);
+      // Only the controlling connection's own screen leaving ends control. A
+      // second connection of the same session losing its display is not that
+      // person letting go of the desktop they are still driving elsewhere.
       if (
         current !== null &&
-        (holders.some((source) => leaseKey(source) === current.key) ||
-          affected.some((record) => heldBy(current, toViewerSource(record))))
+        (holders.some((source) => ownedByConnection(current, sourceKey(source))) ||
+          affected.some((record) => ownedByConnection(current, sourceKey(toViewerSource(record)))))
       ) {
         yield* releaseLeaseLocked(current.source);
       }
@@ -1060,11 +1085,24 @@ export const make = Effect.gen(function* () {
 
   // ---------------------------------------------------------------- viewers
 
+  /**
+   * A closing connection takes only its own work away. When it is the one that
+   * took the lease, that is the person letting go, so control ends and every
+   * connection of theirs is cancelled and released with it; when it is another
+   * connection of the same session, only its own in-flight batch is
+   * interrupted and only its own holds come back up, leaving the controller's
+   * lease and whatever it has mid-flight untouched.
+   */
   const detachViewer = (viewerId: string) =>
     Effect.gen(function* () {
       const key = `viewer:${viewerId}`;
+      const before = yield* Ref.get(lease);
+      const keys =
+        before !== null && before.ownerConnection === key
+          ? yield* connectionsOfLease(before.key)
+          : [key];
       yield* withHostCancellation(
-        [key],
+        keys,
         Effect.gen(function* () {
           const removed = yield* Ref.modify(viewers, (map) => {
             const record = map.get(viewerId);
@@ -1074,7 +1112,11 @@ export const make = Effect.gen(function* () {
             return [record, next];
           });
           if (removed === null) return;
-          yield* releaseLeaseLocked(toViewerSource(removed));
+          // Rechecked under the lock: ownership can have moved to another of
+          // this person's connections since the keys above were chosen.
+          if (ownedByConnection(yield* Ref.get(lease), key)) {
+            yield* releaseLeaseLocked(toViewerSource(removed));
+          }
           yield* releaseHoldsLocked([key]);
           if (removed.displayId !== null) yield* reconcileCaptureLocked(removed.displayId);
           yield* Queue.end(removed.control);
