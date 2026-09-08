@@ -263,6 +263,7 @@ export function App() {
             projects={projects}
             disabled={phase !== "ready"}
             onOpenSidebar={() => setSidebarOpen(true)}
+            onStart={() => setPage({ type: "new-chat" })}
             onCreated={openChannel}
           />
         ) : view === null || activeChannel === null ? (

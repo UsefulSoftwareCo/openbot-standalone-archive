@@ -36,12 +36,15 @@ export function NewChatPage({
   projects,
   disabled,
   onOpenSidebar,
+  onStart,
   onCreated,
 }: {
   readonly environmentId: EnvironmentId;
   readonly projects: ReadonlyArray<OpenbotProject>;
   readonly disabled: boolean;
   readonly onOpenSidebar: () => void;
+  /** Pins the draft route before creation updates the channel list. */
+  readonly onStart: () => void;
   /** Called once the first message has landed, with the chat that now owns it. */
   readonly onCreated: (channelId: OpenbotChannelId) => void;
 }) {
@@ -73,6 +76,7 @@ export function NewChatPage({
    * second one; returning false leaves the draft and its files in the composer.
    */
   const sendFirstMessage: ComponentProps<typeof Composer>["onSend"] = async (message) => {
+    onStart();
     setError(null);
     let target = channelId;
     if (target === null) {
@@ -128,17 +132,14 @@ export function NewChatPage({
           <Menu />
         </Button>
       </header>
-      <div className="flex min-h-0 flex-1 flex-col justify-center overflow-y-auto">
+      <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col justify-center overflow-y-auto">
         <div className="mx-auto w-full max-w-3xl px-4 pb-5 text-center">
           <h1 className="font-medium text-xl tracking-tight">What are we working on?</h1>
-          <p className="mt-1 text-muted-foreground text-sm">
-            Send a message to start a chat. Pick a project to keep it with that work.
-          </p>
         </div>
         <Composer
           channelName="OpenBot"
           environmentId={environmentId}
-          disabled={disabled}
+          disabled={disabled || modelSelection?.model.trim() === ""}
           autoFocus
           onSend={sendFirstMessage}
         />
