@@ -1,11 +1,13 @@
 import { expect, it } from "@effect/vitest";
 import {
   OpenbotComputerError,
+  OpenbotComputerWindowId,
   type OpenbotComputerInputEvent,
   type OpenbotComputerStreamServerMessage,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -16,6 +18,8 @@ import type { ComputerFrame } from "./ComputerBackend.ts";
 import {
   computerAvailability,
   captureFrameSize,
+  ACCESSIBILITY_DENIED_DETAIL,
+  INPUT_CANCELLED_REASON,
   NOT_CONTROLLING_REASON,
   NOT_TRIED_DETAIL,
   PERMISSION_CAVEAT,
@@ -60,7 +64,11 @@ describe("OpenbotComputerSessionService", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { host, session: computer } = yield* session();
-        const viewer = yield* computer.attachViewer({ label: "Rhys", canControl: true });
+        const viewer = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-rhys",
+          canControl: true,
+        });
         yield* viewer.open(MAIN_DISPLAY.id, PROFILE);
 
         const [hello, capturing] = serverMessages(yield* take(viewer, 2));
@@ -85,9 +93,17 @@ describe("OpenbotComputerSessionService", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { host, session: computer } = yield* session();
-        const modest = yield* computer.attachViewer({ label: "Phone", canControl: false });
+        const modest = yield* computer.attachViewer({
+          label: "Phone",
+          sessionId: "session-phone",
+          canControl: false,
+        });
         yield* modest.open(MAIN_DISPLAY.id, PROFILE);
-        const greedy = yield* computer.attachViewer({ label: "Desktop", canControl: true });
+        const greedy = yield* computer.attachViewer({
+          label: "Desktop",
+          sessionId: "session-desktop",
+          canControl: true,
+        });
         yield* greedy.open(MAIN_DISPLAY.id, BIG_PROFILE);
 
         expect(yield* host.started).toEqual([
@@ -110,7 +126,7 @@ describe("OpenbotComputerSessionService", () => {
       const { host, session: computer } = yield* session();
       const scope = yield* Scope.make();
       const viewer = yield* computer
-        .attachViewer({ label: "Rhys", canControl: true })
+        .attachViewer({ label: "Rhys", sessionId: "session-rhys", canControl: true })
         .pipe(Scope.provide(scope));
       yield* viewer.open(MAIN_DISPLAY.id, PROFILE);
       expect(yield* host.stopped).toEqual([]);
@@ -124,7 +140,11 @@ describe("OpenbotComputerSessionService", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { host, session: computer } = yield* session();
-        const viewer = yield* computer.attachViewer({ label: "Rhys", canControl: true });
+        const viewer = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-rhys",
+          canControl: true,
+        });
         yield* viewer.open(MAIN_DISPLAY.id, PROFILE);
         yield* viewer.takeControl;
         expect(yield* computer.controller).not.toBeNull();
@@ -143,9 +163,17 @@ describe("OpenbotComputerSessionService", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { session: computer } = yield* session();
-        const first = yield* computer.attachViewer({ label: "Rhys", canControl: true });
+        const first = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-rhys",
+          canControl: true,
+        });
         yield* first.open(MAIN_DISPLAY.id, PROFILE);
-        const second = yield* computer.attachViewer({ label: "Theo", canControl: true });
+        const second = yield* computer.attachViewer({
+          label: "Theo",
+          sessionId: "session-theo",
+          canControl: true,
+        });
         yield* second.open(MAIN_DISPLAY.id, PROFILE);
 
         yield* first.takeControl;
@@ -164,7 +192,11 @@ describe("OpenbotComputerSessionService", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { session: computer } = yield* session();
-        const viewer = yield* computer.attachViewer({ label: "Read-only", canControl: false });
+        const viewer = yield* computer.attachViewer({
+          label: "Read-only",
+          sessionId: "session-read-only",
+          canControl: false,
+        });
         yield* viewer.open(MAIN_DISPLAY.id, PROFILE);
         const refused = yield* Effect.flip(viewer.takeControl);
         expect(refused.code).toBe("not_controlling");
@@ -178,7 +210,11 @@ describe("OpenbotComputerSessionService", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { host, session: computer } = yield* session();
-        const viewer = yield* computer.attachViewer({ label: "Rhys", canControl: true });
+        const viewer = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-rhys",
+          canControl: true,
+        });
         yield* viewer.open(MAIN_DISPLAY.id, PROFILE);
 
         const result = yield* viewer.input([clickAt(1, 1), clickAt(2, 2)]);
@@ -198,7 +234,11 @@ describe("OpenbotComputerSessionService", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { host, session: computer } = yield* session();
-        const viewer = yield* computer.attachViewer({ label: "Rhys", canControl: true });
+        const viewer = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-rhys",
+          canControl: true,
+        });
         yield* viewer.open(MAIN_DISPLAY.id, PROFILE);
         yield* viewer.takeControl;
 
@@ -219,7 +259,7 @@ describe("OpenbotComputerSessionService", () => {
       const { host, session: computer } = yield* session();
       const scope = yield* Scope.make();
       const viewer = yield* computer
-        .attachViewer({ label: "Rhys", canControl: true })
+        .attachViewer({ label: "Rhys", sessionId: "session-rhys", canControl: true })
         .pipe(Scope.provide(scope));
       yield* viewer.open(MAIN_DISPLAY.id, PROFILE);
       yield* viewer.takeControl;
@@ -282,7 +322,11 @@ describe("OpenbotComputerSessionService", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { host, session: computer } = yield* session();
-        const viewer = yield* computer.attachViewer({ label: "Rhys", canControl: true });
+        const viewer = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-rhys",
+          canControl: true,
+        });
         yield* viewer.open(MAIN_DISPLAY.id, PROFILE);
         yield* viewer.takeControl;
 
@@ -334,7 +378,11 @@ describe("OpenbotComputerSessionService", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { host, session: computer } = yield* session();
-        const viewer = yield* computer.attachViewer({ label: "Slow", canControl: false });
+        const viewer = yield* computer.attachViewer({
+          label: "Slow",
+          sessionId: "session-slow",
+          canControl: false,
+        });
         yield* viewer.open(MAIN_DISPLAY.id, PROFILE);
         // Drain the control messages so only frames are left on the stream.
         yield* take(viewer, 2);
@@ -358,7 +406,11 @@ describe("OpenbotComputerSessionService", () => {
         expect(before.detail).toBe(NOT_TRIED_DETAIL);
         expect(before.capabilities).toEqual(ALL_CAPABILITIES);
 
-        const viewer = yield* computer.attachViewer({ label: "Rhys", canControl: false });
+        const viewer = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-rhys",
+          canControl: false,
+        });
         yield* viewer.open(MAIN_DISPLAY.id, PROFILE);
         yield* host.emitFrame(frame(MAIN_DISPLAY.id, 5_000));
         yield* take(viewer, 3);
@@ -457,7 +509,11 @@ describe("OpenbotComputerSessionService", () => {
       Effect.gen(function* () {
         const { host, session: computer } = yield* session();
         const created = yield* computer.createDisplay({ widthPx: 1280, heightPx: 800 });
-        const viewer = yield* computer.attachViewer({ label: "Rhys", canControl: true });
+        const viewer = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-rhys",
+          canControl: true,
+        });
         yield* viewer.open(created.id, { maxWidthPx: 1280, fps: 5 });
         yield* take(viewer, 2);
 
@@ -474,7 +530,12 @@ describe("OpenbotComputerSessionService", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { host, session: computer } = yield* session();
-        const client = { kind: "viewer", viewerId: "rpc:session-1", label: "web" } as const;
+        const client = {
+          kind: "viewer",
+          viewerId: "rpc:session-1",
+          sessionId: "session-1",
+          label: "web",
+        } as const;
         const events = [clickAt(3, 3)];
 
         const refused = yield* computer.viewerInput(client, MAIN_DISPLAY.id, events);
@@ -496,9 +557,211 @@ describe("OpenbotComputerSessionService", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { session: computer } = yield* session();
-        const viewer = yield* computer.attachViewer({ label: "Rhys", canControl: true });
+        const viewer = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-rhys",
+          canControl: true,
+        });
         const failure = yield* Effect.flip(viewer.open("ghost" as typeof MAIN_DISPLAY.id, PROFILE));
         expect(failure.code).toBe("display_not_found");
+      }),
+    ),
+  );
+
+  it.effect("cannot let a batch that was cut short land after the control it was sent under", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const blocked = yield* Deferred.make<void>();
+      const { host, session: computer } = yield* session({
+        onInput: (batch) =>
+          batch.events[0]?.type === "button"
+            ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(blocked)))
+            : Effect.void,
+      });
+      const scope = yield* Scope.make();
+      const viewer = yield* computer
+        .attachViewer({ label: "Rhys", sessionId: "session-rhys", canControl: true })
+        .pipe(Scope.provide(scope));
+      yield* viewer.open(MAIN_DISPLAY.id, PROFILE);
+      yield* viewer.takeControl;
+      const sending = yield* Effect.forkChild(
+        viewer.input([{ type: "button", button: "left", action: "down", point: { x: 4, y: 4 } }]),
+      );
+      yield* Deferred.await(entered);
+
+      // The socket goes away with the press still inside the backend.
+      yield* Scope.close(scope, Exit.void);
+      expect(yield* Fiber.join(sending)).toEqual({
+        delivered: 0,
+        rejected: [{ index: 0, reason: INPUT_CANCELLED_REASON }],
+      });
+
+      // The cleanup follows the delivery it interrupted rather than racing it,
+      // and asks for release-all because half a batch cannot be named.
+      const batches = yield* host.delivered;
+      expect(batches).toHaveLength(2);
+      expect(batches[1]).toEqual({ displayId: MAIN_DISPLAY.id, events: [{ type: "release-all" }] });
+      expect(yield* computer.controller).toBeNull();
+
+      const stale = yield* viewer.input([clickAt(5, 5)]);
+      expect(stale.rejected).toEqual([{ index: 0, reason: NOT_CONTROLLING_REASON }]);
+      expect(yield* host.delivered).toHaveLength(2);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("stops controlling promptly instead of waiting out a long batch", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        // Never resolved anywhere in this test: releasing control has to
+        // interrupt the typing rather than wait for it to finish.
+        const blocked = yield* Deferred.make<void>();
+        const { host, session: computer } = yield* session({
+          onInput: (batch) =>
+            batch.events[0]?.type === "text"
+              ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(blocked)))
+              : Effect.void,
+        });
+        const viewer = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-rhys",
+          canControl: true,
+        });
+        yield* viewer.open(MAIN_DISPLAY.id, PROFILE);
+        yield* viewer.takeControl;
+        const typing = yield* Effect.forkChild(
+          viewer.input([{ type: "text", text: "x".repeat(4096) }]),
+        );
+        yield* Deferred.await(entered);
+
+        yield* viewer.releaseControl;
+        expect(yield* Fiber.join(typing)).toEqual({
+          delivered: 0,
+          rejected: [{ index: 0, reason: INPUT_CANCELLED_REASON }],
+        });
+        expect((yield* host.delivered).at(-1)).toEqual({
+          displayId: MAIN_DISPLAY.id,
+          events: [{ type: "release-all" }],
+        });
+        expect(yield* computer.controller).toBeNull();
+
+        const agent = yield* computer.agentInput(
+          { kind: "agent", threadId: "t", label: "Codex" },
+          MAIN_DISPLAY.id,
+          [clickAt(1, 1)],
+        );
+        expect(agent).toEqual({ delivered: 1, rejected: [] });
+      }),
+    ),
+  );
+
+  it.effect("releases what an RPC controller pressed on the display it pressed it on", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { host, session: computer } = yield* session();
+        const client = {
+          kind: "viewer",
+          viewerId: "rpc:session-1",
+          sessionId: "session-1",
+          label: "web",
+        } as const;
+
+        yield* computer.control(client, "take");
+        yield* computer.viewerInput(client, SIDE_DISPLAY.id, [
+          { type: "key", key: "ShiftLeft", action: "down" },
+        ]);
+        yield* computer.control(client, "release");
+
+        // Taking control never named a display; the one the input landed on is
+        // the one the modifier has to come back up on.
+        expect((yield* host.delivered).at(-1)).toEqual({
+          displayId: SIDE_DISPLAY.id,
+          events: [{ type: "key", key: "ShiftLeft", action: "up" }],
+        });
+      }),
+    ),
+  );
+
+  it.effect(
+    "lets go of the display a viewer leaves, keeps its lease, and drops its old frames",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { host, session: computer } = yield* session();
+          const viewer = yield* computer.attachViewer({
+            label: "Rhys",
+            sessionId: "session-rhys",
+            canControl: true,
+          });
+          yield* viewer.open(MAIN_DISPLAY.id, PROFILE);
+          yield* viewer.takeControl;
+          yield* viewer.input([
+            { type: "button", button: "left", action: "down", point: { x: 40, y: 40 } },
+          ]);
+          // hello, capturing, controller.
+          yield* take(viewer, 3);
+          yield* host.emitFrame(frame(MAIN_DISPLAY.id, 1));
+
+          yield* viewer.open(SIDE_DISPLAY.id, PROFILE);
+          yield* host.emitFrame(frame(SIDE_DISPLAY.id, 2));
+
+          expect((yield* host.delivered).at(-1)).toEqual({
+            displayId: MAIN_DISPLAY.id,
+            events: [{ type: "button", button: "left", action: "up", point: { x: 40, y: 40 } }],
+          });
+          // The lease belongs to the person, not the screen they are looking at.
+          expect(yield* computer.controller).toMatchObject({ kind: "viewer", label: "Rhys" });
+
+          const seen = yield* take(viewer, 3);
+          expect(serverMessages(seen).map((message) => message.type)).toEqual([
+            "geometry",
+            "status",
+          ]);
+          expect(seen.filter(isFrame).map((captured) => captured.displayId)).toEqual([
+            SIDE_DISPLAY.id,
+          ]);
+        }),
+      ),
+  );
+
+  it.effect("keeps window focus and launching with whoever holds control", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { host, session: computer } = yield* session();
+        const viewer = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-1",
+          canControl: true,
+        });
+        yield* viewer.open(MAIN_DISPLAY.id, PROFILE);
+        yield* viewer.takeControl;
+        const window = OpenbotComputerWindowId.make("window-1");
+        const agent = { kind: "agent", threadId: "t", label: "Codex" } as const;
+
+        const refused = yield* Effect.flip(computer.focusWindow(agent, window));
+        expect(refused.code).toBe("not_controlling");
+        expect(yield* host.focused).toEqual([]);
+
+        // The same person's RPC socket: another connection, one lease.
+        yield* computer.focusWindow(
+          { kind: "viewer", viewerId: "rpc:session-1", sessionId: "session-1", label: "web" },
+          window,
+        );
+        expect(yield* host.focused).toEqual([window]);
+
+        const stranger = yield* Effect.flip(
+          computer.focusWindow(
+            { kind: "viewer", viewerId: "rpc:session-2", sessionId: "session-2", label: "iPad" },
+            window,
+          ),
+        );
+        expect(stranger.code).toBe("not_controlling");
+
+        yield* viewer.releaseControl;
+        // Nobody is controlling, so the agent borrows the lease for the call.
+        yield* computer.launch(agent, { app: "Safari", displayId: MAIN_DISPLAY.id });
+        expect(yield* host.launched).toEqual(["Safari"]);
+        expect(yield* computer.controller).toBeNull();
       }),
     ),
   );
@@ -577,7 +840,7 @@ describe("computerAvailability", () => {
     ).toEqual({ availability: "unavailable", detail: "Ask again." });
   });
 
-  it("stays ready but says so when only input is blocked", () => {
+  it("stays ready but names the helper to grant when only input is blocked", () => {
     expect(
       computerAvailability({
         platform: "darwin",
@@ -588,6 +851,47 @@ describe("computerAvailability", () => {
           permissions: { screenCapture: "granted", accessibility: "denied", detail: null },
         },
       }),
-    ).toMatchObject({ availability: "ready" });
+    ).toEqual({ availability: "ready", detail: ACCESSIBILITY_DENIED_DETAIL });
+    expect(ACCESSIBILITY_DENIED_DETAIL).toContain("T3 Computer Helper");
+    expect(ACCESSIBILITY_DENIED_DETAIL).not.toContain("restart");
+  });
+
+  it("prefers the backend's own words over the fallback accessibility copy", () => {
+    expect(
+      computerAvailability({
+        platform: "darwin",
+        describeError: null,
+        outcome: { lastCaptureAt: "2026-09-08T00:00:00.000Z", lastError: null },
+        description: {
+          ...description,
+          permissions: {
+            screenCapture: "granted",
+            accessibility: "denied",
+            detail: "Grant Accessibility to T3 Computer Helper, then retry.",
+          },
+        },
+      }),
+    ).toEqual({
+      availability: "ready",
+      detail: "Grant Accessibility to T3 Computer Helper, then retry.",
+    });
+  });
+
+  it("says nothing about permissions on a platform that has no such gate", () => {
+    expect(
+      computerAvailability({
+        platform: "linux",
+        describeError: null,
+        outcome: { lastCaptureAt: "2026-09-08T00:00:00.000Z", lastError: null },
+        description: {
+          ...description,
+          permissions: {
+            screenCapture: "not-applicable",
+            accessibility: "not-applicable",
+            detail: null,
+          },
+        },
+      }),
+    ).toEqual({ availability: "ready", detail: null });
   });
 });

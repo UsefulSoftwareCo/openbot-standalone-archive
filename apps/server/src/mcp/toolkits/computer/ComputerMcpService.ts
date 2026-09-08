@@ -52,8 +52,11 @@ export class ComputerMcpService extends Context.Service<
       input: ComputerListWindowsInput,
     ) => Effect.Effect<ComputerListWindowsResult, OpenbotComputerMcpFailure>;
     /** Returns the window list after the change, which is the only honest
-        confirmation that focus landed where it was asked to. */
+        confirmation that focus landed where it was asked to. Takes the calling
+        scope because raising a window moves focus on the shared desktop: it
+        goes through the lease, so it fails while a person is controlling. */
     readonly focusWindow: (
+      scope: McpInvocationScope,
       input: ComputerFocusWindowInput,
     ) => Effect.Effect<ComputerListWindowsResult, OpenbotComputerMcpFailure>;
     /** Takes the calling scope because input is attributed: the thread becomes
@@ -65,7 +68,10 @@ export class ComputerMcpService extends Context.Service<
     readonly manageDisplay: (
       input: ComputerManageDisplayInput,
     ) => Effect.Effect<ComputerManageDisplayResult, OpenbotComputerMcpFailure>;
+    /** Also lease-bound: launching activates the new app on the one screen the
+        person may be using. */
     readonly launch: (
+      scope: McpInvocationScope,
       input: ComputerLaunchInput,
     ) => Effect.Effect<ComputerLaunchResult, OpenbotComputerMcpFailure>;
   }
@@ -169,6 +175,16 @@ const summarizeStatus = (status: OpenbotComputerStatus): ComputerStatusResult =>
   controller: status.controller,
 });
 
+/** The lease identity of one thread's tool call. Focus, launch, and input all
+    answer to it, so an agent cannot move a window out from under the person
+    who is controlling. */
+const agentSource = (scope: McpInvocationScope) =>
+  ({
+    kind: "agent",
+    threadId: scope.threadId,
+    label: agentControllerLabel(scope.threadId),
+  }) as const;
+
 const make = Effect.gen(function* () {
   const session = yield* OpenbotComputerSession;
 
@@ -241,18 +257,15 @@ const make = Effect.gen(function* () {
       } as const;
     }),
     listWindows,
-    focusWindow: Effect.fn("ComputerMcpService.focusWindow")(function* (input) {
-      yield* session.focusWindow(input.windowId).pipe(Effect.mapError(toComputerMcpFailure));
+    focusWindow: Effect.fn("ComputerMcpService.focusWindow")(function* (scope, input) {
+      yield* session
+        .focusWindow(agentSource(scope), input.windowId)
+        .pipe(Effect.mapError(toComputerMcpFailure));
       return yield* listWindows({});
     }),
     input: Effect.fn("ComputerMcpService.input")(function* (scope, batch) {
-      const source = {
-        kind: "agent",
-        threadId: scope.threadId,
-        label: agentControllerLabel(scope.threadId),
-      } as const;
       return yield* session
-        .agentInput(source, batch.displayId, batch.events)
+        .agentInput(agentSource(scope), batch.displayId, batch.events)
         .pipe(Effect.mapError(toComputerMcpFailure));
     }),
     manageDisplay: Effect.fn("ComputerMcpService.manageDisplay")(function* (input) {
@@ -273,10 +286,10 @@ const make = Effect.gen(function* () {
       const displays = yield* session.listDisplays.pipe(Effect.mapError(toComputerMcpFailure));
       return { action: request.action, display, displays };
     }),
-    launch: Effect.fn("ComputerMcpService.launch")(function* (input) {
+    launch: Effect.fn("ComputerMcpService.launch")(function* (scope, input) {
       const target = yield* resolveDisplay(input.displayId);
       const launched = yield* session
-        .launch({
+        .launch(agentSource(scope), {
           app: input.app,
           ...(input.args === undefined ? {} : { args: input.args }),
           displayId: target.id,

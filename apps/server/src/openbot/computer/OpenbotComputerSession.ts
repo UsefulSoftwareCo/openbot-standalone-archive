@@ -34,9 +34,20 @@ import type { ComputerFrame } from "./ComputerBackend.ts";
 
 /** Who an input or lease request comes from. Viewers are humans at a client
     connection; agents are thread tool calls. The label is what other viewers
-    see in the controller badge. */
+    see in the controller badge.
+ *
+ * A viewer carries two identities because one person uses two sockets at once:
+ * `viewerId` is this connection, and `sessionId` is the authenticated browser
+ * session behind it. The lease belongs to the person (`sessionId`), so the
+ * frame socket's lease authorizes the window picker and input the same page
+ * sends over RPC; what a connection left pressed belongs to the connection. */
 export type ComputerInputSource =
-  | { readonly kind: "viewer"; readonly viewerId: string; readonly label: string }
+  | {
+      readonly kind: "viewer";
+      readonly viewerId: string;
+      readonly sessionId: string;
+      readonly label: string;
+    }
   | { readonly kind: "agent"; readonly threadId: string; readonly label: string };
 
 /** A viewer's attachment to one display. Everything a viewer receives (frames
@@ -52,6 +63,11 @@ export interface ComputerViewer {
     profile: OpenbotComputerStreamProfile,
   ) => Effect.Effect<void, OpenbotComputerError>;
   readonly takeControl: Effect.Effect<void, OpenbotComputerError>;
+  /**
+   * Gives the lease back promptly: any input this viewer still has in flight
+   * is cancelled rather than waited for, and everything it left pressed is
+   * released on the host before the lease is free for someone else.
+   */
   readonly releaseControl: Effect.Effect<void>;
   /** Only accepted while this viewer holds the lease; otherwise every event is
       rejected with `not_controlling` in the result and nothing is delivered. */
@@ -68,7 +84,15 @@ export interface OpenbotComputerSessionShape {
   readonly listWindows: (
     displayId?: OpenbotComputerDisplayId,
   ) => Effect.Effect<ReadonlyArray<OpenbotComputerWindow>, OpenbotComputerError>;
-  readonly focusWindow: (id: OpenbotComputerWindowId) => Effect.Effect<void, OpenbotComputerError>;
+  /**
+   * Raising a window moves focus on the one shared desktop, so it goes through
+   * the lease like input does: it fails with `not_controlling` while a
+   * different source holds control. Listing windows stays read-only and free.
+   */
+  readonly focusWindow: (
+    source: ComputerInputSource,
+    id: OpenbotComputerWindowId,
+  ) => Effect.Effect<void, OpenbotComputerError>;
   readonly snapshot: (
     input: OpenbotComputerSnapshotInput,
   ) => Effect.Effect<OpenbotComputerSnapshot, OpenbotComputerError>;
@@ -79,6 +103,10 @@ export interface OpenbotComputerSessionShape {
    */
   readonly attachViewer: (input: {
     readonly label: string;
+    /** The authenticated session behind this socket. Two connections that share
+        it are one person, so a lease taken here also authorizes their RPC
+        focus, launch, and input. */
+    readonly sessionId: string;
     /** Whether this connection is allowed to control at all (operate scope). */
     readonly canControl: boolean;
   }) => Effect.Effect<ComputerViewer, OpenbotComputerError, Scope.Scope>;
@@ -114,7 +142,10 @@ export interface OpenbotComputerSessionShape {
   readonly destroyDisplay: (
     id: OpenbotComputerDisplayId,
   ) => Effect.Effect<void, OpenbotComputerError>;
+  /** Launching activates the new app, so it follows the same lease rule as
+      `focusWindow`. */
   readonly launch: (
+    source: ComputerInputSource,
     input: OpenbotComputerLaunchInput,
   ) => Effect.Effect<OpenbotComputerLaunchResult, OpenbotComputerError>;
 }

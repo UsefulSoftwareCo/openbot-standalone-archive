@@ -10,9 +10,12 @@ import {
 } from "@t3tools/contracts";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { HttpRouter } from "effect/unstable/http";
 import { describe } from "vite-plus/test";
@@ -24,7 +27,8 @@ import {
   viewerLabelFromUrl,
   type ComputerStreamFrame,
 } from "./ComputerStreamRoute.ts";
-import { OpenbotComputerSession } from "./OpenbotComputerSession.ts";
+import type { ComputerFrame } from "./ComputerBackend.ts";
+import { OpenbotComputerSession, type ComputerViewer } from "./OpenbotComputerSession.ts";
 import { MAIN_DISPLAY, frame, makeTestSession } from "./OpenbotComputerSessionService.testkit.ts";
 
 const parse = (frame: ComputerStreamFrame): OpenbotComputerStreamServerMessage => {
@@ -55,6 +59,7 @@ const converse = (
     const { host, session: computer } = yield* makeTestSession();
     const viewer = yield* computer.attachViewer({
       label: "Rhys",
+      sessionId: "session-rhys",
       canControl: options.canControl ?? true,
     });
     const inbound = yield* Queue.make<ComputerStreamFrame, Cause.Done>();
@@ -189,7 +194,11 @@ describe("handleViewerSocket", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { host, session: computer } = yield* makeTestSession();
-        const viewer = yield* computer.attachViewer({ label: "Rhys", canControl: false });
+        const viewer = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-rhys",
+          canControl: false,
+        });
         const inbound = yield* Queue.make<ComputerStreamFrame, Cause.Done>();
         const outbound = handleViewerSocket(viewer, Stream.fromQueue(inbound));
         yield* Queue.offer(inbound, send(OPEN_MAIN));
@@ -205,11 +214,117 @@ describe("handleViewerSocket", () => {
     ),
   );
 
+  it.effect(
+    "keeps every control message but only the newest picture for a client that stalls",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // A stub viewer, because what is under test is this route's own two
+          // outbound lanes rather than the session that feeds them.
+          const pumped = yield* Deferred.make<void>();
+          const pictures = Array.from({ length: 50 }, (_, index) =>
+            frame(MAIN_DISPLAY.id, index + 1),
+          );
+          const produced: ReadonlyArray<OpenbotComputerStreamServerMessage | ComputerFrame> = [
+            { type: "status", state: "capturing", message: null },
+            ...pictures,
+            { type: "pong", t: 1 },
+            { type: "pong", t: 2 },
+            { type: "pong", t: 3 },
+          ];
+          const viewer: ComputerViewer = {
+            viewerId: "viewer-1",
+            messages: Stream.fromIterable(produced).pipe(
+              Stream.concat(Stream.drain(Stream.fromEffect(Deferred.succeed(pumped, undefined)))),
+              Stream.concat(Stream.never),
+            ),
+            open: () => Effect.void,
+            takeControl: Effect.void,
+            releaseControl: Effect.void,
+            input: () => Effect.succeed({ delivered: 0, rejected: [] }),
+          };
+          const inbound = yield* Queue.make<ComputerStreamFrame, Cause.Done>();
+          // The client reads one frame and then stops until everything has been
+          // produced, which is what a stalled socket looks like from in here.
+          const stalled = yield* Ref.make(true);
+          const seen = yield* handleViewerSocket(viewer, Stream.fromQueue(inbound)).pipe(
+            Stream.mapEffect((value) =>
+              Ref.getAndSet(stalled, false).pipe(
+                Effect.flatMap((wasFirst) =>
+                  wasFirst ? Deferred.await(pumped).pipe(Effect.as(value)) : Effect.succeed(value),
+                ),
+              ),
+            ),
+            Stream.take(5),
+            Stream.runCollect,
+          );
+
+          const texts = seen.filter((value): value is string => typeof value === "string");
+          expect(texts.map(parse)).toEqual([
+            { type: "status", state: "capturing", message: null },
+            { type: "pong", t: 1 },
+            { type: "pong", t: 2 },
+            { type: "pong", t: 3 },
+          ]);
+          const bytes = seen.filter((value) => typeof value !== "string");
+          expect(bytes).toEqual([frame(MAIN_DISPLAY.id, 50).jpeg]);
+        }),
+      ),
+  );
+
+  it.effect("answers a release while the input it is stopping is still in the host", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        // Never resolved: the release has to cancel the batch, not wait for it.
+        const blocked = yield* Deferred.make<void>();
+        const { session: computer } = yield* makeTestSession({
+          onInput: (batch) =>
+            batch.events[0]?.type === "text"
+              ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(blocked)))
+              : Effect.void,
+        });
+        const viewer = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-rhys",
+          canControl: true,
+        });
+        const inbound = yield* Queue.make<ComputerStreamFrame, Cause.Done>();
+        const reading = yield* Effect.forkChild(
+          handleViewerSocket(viewer, Stream.fromQueue(inbound)).pipe(
+            Stream.take(5),
+            Stream.runCollect,
+          ),
+        );
+        yield* Queue.offer(inbound, send({ ...OPEN_MAIN, control: true }));
+        yield* Queue.offer(
+          inbound,
+          send({ type: "input", seq: 1, events: [{ type: "text", text: "x".repeat(4096) }] }),
+        );
+        yield* Deferred.await(entered);
+        yield* Queue.offer(inbound, send({ type: "control", action: "release" }));
+
+        const messages = (yield* Fiber.join(reading)).map(parse);
+        expect(messages.findLast((message) => message.type === "controller")).toMatchObject({
+          controlling: false,
+        });
+        expect(messages.find((message) => message.type === "input-ack")).toMatchObject({
+          seq: 1,
+          result: { delivered: 0 },
+        });
+      }),
+    ),
+  );
+
   it.effect("ends the conversation when the client says close", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { session: computer } = yield* makeTestSession();
-        const viewer = yield* computer.attachViewer({ label: "Rhys", canControl: true });
+        const viewer = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-rhys",
+          canControl: true,
+        });
         const inbound = yield* Queue.make<ComputerStreamFrame, Cause.Done>();
         yield* Queue.offer(inbound, send({ type: "ping", t: 1 }));
         yield* Queue.offer(inbound, send({ type: "close" }));
@@ -226,7 +341,11 @@ describe("handleViewerSocket", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { session: computer } = yield* makeTestSession();
-        const viewer = yield* computer.attachViewer({ label: "Rhys", canControl: true });
+        const viewer = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-rhys",
+          canControl: true,
+        });
         const inbound = yield* Queue.make<ComputerStreamFrame, Cause.Done>();
         yield* Queue.offer(inbound, send({ type: "ping", t: 2 }));
         yield* Queue.end(inbound);

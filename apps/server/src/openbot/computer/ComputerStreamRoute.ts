@@ -2,6 +2,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   OPENBOT_COMPUTER_STREAM_PATH,
+  type OpenbotComputerInputEvent,
   OpenbotComputerStreamClientMessage,
   OpenbotComputerStreamServerMessage,
 } from "@t3tools/contracts";
@@ -63,8 +64,23 @@ const toStreamFrame = (
 const statusFrame = (message: string) => toStreamFrame({ type: "status", state: "error", message });
 
 /**
+ * How many control messages may wait for a socket that has stopped reading.
+ * Acks, controller changes, and status lines are small and must arrive in
+ * order, so they are queued rather than dropped; a client this far behind is
+ * not coming back, and the connection is better lost than the process grown.
+ */
+const OUTBOUND_CONTROL_LIMIT = 256;
+
+/**
  * Runs one viewer's conversation: every message the session produces goes out,
  * and every text frame the client sends is applied to that viewer.
+ *
+ * Two things keep a slow client from turning into a backlog. Outbound is two
+ * lanes, not one queue: control messages keep their order, while frames live
+ * in a single latest-frame slot, so a picture that arrives during a write
+ * replaces the one waiting instead of joining a queue of JPEGs. Inbound,
+ * `input` runs on its own ordered fiber, so stopping control, closing, or a
+ * ping is answered while a batch is still being typed rather than behind it.
  *
  * Exposed without a socket so the protocol is testable on its own. The
  * returned stream ends when `inbound` ends or the client says `close`, which
@@ -76,11 +92,38 @@ export const handleViewerSocket = (
 ): Stream.Stream<ComputerStreamFrame> =>
   Stream.unwrap(
     Effect.gen(function* () {
-      const outbound = yield* Queue.make<ComputerStreamFrame, Cause.Done>();
+      const control = yield* Queue.dropping<ComputerStreamFrame, Cause.Done>(
+        OUTBOUND_CONTROL_LIMIT,
+      );
+      const latestFrame = yield* Queue.sliding<ComputerStreamFrame, Cause.Done>(1);
+      const finish = Queue.end(control).pipe(Effect.andThen(Queue.end(latestFrame)), Effect.asVoid);
+
       const send = (frame: Effect.Effect<ComputerStreamFrame>) =>
         frame.pipe(
-          Effect.flatMap((value) => Queue.offer(outbound, value)),
-          Effect.asVoid,
+          Effect.flatMap((value) => Queue.offer(control, value)),
+          Effect.flatMap((accepted) =>
+            accepted
+              ? Effect.void
+              : Effect.logWarning("openbot computer stream dropped a control message", {
+                  viewerId: viewer.viewerId,
+                }),
+          ),
+        );
+
+      const inputs = yield* Queue.make<{
+        readonly seq: number;
+        readonly events: ReadonlyArray<OpenbotComputerInputEvent>;
+      }>();
+
+      const deliver = (batch: {
+        readonly seq: number;
+        readonly events: ReadonlyArray<OpenbotComputerInputEvent>;
+      }) =>
+        viewer.input(batch.events).pipe(
+          Effect.flatMap((result) =>
+            send(toStreamFrame({ type: "input-ack", seq: batch.seq, result })),
+          ),
+          Effect.catch((error) => send(statusFrame(error.message))),
         );
 
       const apply = (message: OpenbotComputerStreamClientMessage) => {
@@ -97,20 +140,19 @@ export const handleViewerSocket = (
                 Effect.catch((error) => send(statusFrame(error.message))),
               );
           case "control":
+            // Never queued behind input: releasing is what cancels the batch
+            // that is running, so waiting for it would defeat the point.
             return (message.action === "take" ? viewer.takeControl : viewer.releaseControl).pipe(
               Effect.catch((error) => send(statusFrame(error.message))),
             );
           case "input":
-            return viewer.input(message.events).pipe(
-              Effect.flatMap((result) =>
-                send(toStreamFrame({ type: "input-ack", seq: message.seq, result })),
-              ),
-              Effect.catch((error) => send(statusFrame(error.message))),
+            return Queue.offer(inputs, { seq: message.seq, events: message.events }).pipe(
+              Effect.asVoid,
             );
           case "ping":
             return send(toStreamFrame({ type: "pong", t: message.t }));
           case "close":
-            return Queue.end(outbound).pipe(Effect.asVoid);
+            return finish;
         }
       };
 
@@ -128,17 +170,29 @@ export const handleViewerSocket = (
             // ignoring it is what keeps a stray frame from killing a session.
             Effect.void;
 
+      yield* Queue.take(inputs).pipe(Effect.flatMap(deliver), Effect.forever, Effect.forkScoped);
       yield* viewer.messages.pipe(
-        Stream.runForEach((message) => send(toStreamFrame(message))),
-        Effect.andThen(Queue.end(outbound)),
+        Stream.runForEach((message) =>
+          isComputerFrame(message)
+            ? Queue.offer(latestFrame, message.jpeg).pipe(Effect.asVoid)
+            : send(toStreamFrame(message)),
+        ),
+        Effect.andThen(finish),
         Effect.forkScoped,
       );
-      yield* inbound.pipe(
-        Stream.runForEach(handle),
-        Effect.andThen(Queue.end(outbound)),
-        Effect.forkScoped,
-      );
-      return Stream.fromQueue(outbound);
+      yield* inbound.pipe(Stream.runForEach(handle), Effect.andThen(finish), Effect.forkScoped);
+
+      // The writer prefers control: a frame only goes out when nothing ordered
+      // is waiting, and the slot it comes from holds the newest picture only.
+      // Racing takes rather than the whole lane, so a lane that has already
+      // finished cannot end the conversation while the other still has
+      // something to say; the stream ends when both are drained and done.
+      const next = Effect.gen(function* () {
+        const pending = yield* Queue.poll(control);
+        if (Option.isSome(pending)) return [pending.value] as const;
+        return [yield* Effect.race(Queue.take(control), Queue.take(latestFrame))] as const;
+      });
+      return Stream.fromPull(Effect.succeed(next));
     }),
   );
 
@@ -184,6 +238,9 @@ export const openbotComputerStreamRouteLayer = HttpRouter.add(
         const write = yield* socket.writer;
         const viewer = yield* computer.attachViewer({
           label: viewerLabelFromUrl(Option.getOrNull(HttpServerRequest.toURL(request))),
+          // The lease follows the authenticated person, so the control this
+          // socket takes also covers the RPC calls their page makes.
+          sessionId: session.sessionId,
           // Watching needs read; driving the shared desktop needs operate.
           canControl: session.scopes.includes(AuthOrchestrationOperateScope),
         });

@@ -87,6 +87,13 @@ export interface ComputerBackendShape {
    * Delivers events in order. A backend reports per-event rejections (unknown
    * key, point off the display) in the result instead of failing the batch,
    * so one bad event does not lose the ones behind it.
+   *
+   * Interruption is the cancel signal: when the effect is interrupted the
+   * backend stops delivering promptly (a long `text` event stops mid-string)
+   * and delivers nothing further from that batch. It does not release what
+   * is held; the session follows with `release-all`, which a backend answers
+   * by releasing every button, key, and modifier it currently holds down on
+   * that display, whoever pressed them.
    */
   readonly input: (
     displayId: OpenbotComputerDisplayId,

@@ -9,6 +9,7 @@ import {
   type OpenbotComputerInputEvent,
   type OpenbotComputerPermissions,
   type OpenbotComputerWindow,
+  type OpenbotComputerWindowId,
 } from "@t3tools/contracts";
 import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -95,6 +96,10 @@ export interface FakeComputerHost {
   readonly shape: ComputerBackendShape;
   /** Every batch the backend was handed, in delivery order. */
   readonly delivered: Effect.Effect<ReadonlyArray<DeliveredBatch>>;
+  /** Every window the backend was asked to raise, in order. */
+  readonly focused: Effect.Effect<ReadonlyArray<OpenbotComputerWindowId>>;
+  /** Every app the backend was asked to launch, in order. */
+  readonly launched: Effect.Effect<ReadonlyArray<string>>;
   /** Every capture that was started, in order, including restarts. */
   readonly started: Effect.Effect<ReadonlyArray<StartedCapture>>;
   /** Displays whose capture scope has been closed. */
@@ -139,6 +144,8 @@ export const makeFakeHost = (options: FakeHostOptions = {}) =>
     const delivered = yield* Ref.make<ReadonlyArray<DeliveredBatch>>([]);
     const started = yield* Ref.make<ReadonlyArray<StartedCapture>>([]);
     const stopped = yield* Ref.make<ReadonlyArray<OpenbotComputerDisplayId>>([]);
+    const focused = yield* Ref.make<ReadonlyArray<OpenbotComputerWindowId>>([]);
+    const launched = yield* Ref.make<ReadonlyArray<string>>([]);
     const running = yield* Ref.make<
       ReadonlyMap<string, Queue.Queue<ComputerFrame, OpenbotComputerError | Cause.Done>>
     >(new Map());
@@ -164,7 +171,7 @@ export const makeFakeHost = (options: FakeHostOptions = {}) =>
       ),
       listDisplays: Ref.get(displays),
       listWindows: Effect.succeed(options.windows ?? []),
-      focusWindow: () => Effect.void,
+      focusWindow: (id) => Ref.update(focused, (all) => [...all, id]),
       screenshot: (id) => options.screenshot?.(id) ?? Effect.succeed(frame(id, 1_000)),
       capture: (id, profile) =>
         Effect.gen(function* () {
@@ -205,13 +212,16 @@ export const makeFakeHost = (options: FakeHostOptions = {}) =>
         }),
       destroyDisplay: (id) =>
         Ref.update(displays, (all) => all.filter((display) => display.id !== id)),
-      launch: () => Effect.succeed({ pid: 4321 }),
+      launch: (input) =>
+        Ref.update(launched, (all) => [...all, input.app]).pipe(Effect.as({ pid: 4321 })),
       changes: Stream.fromPubSub(changes),
     };
 
     return {
       shape,
       delivered: Ref.get(delivered),
+      focused: Ref.get(focused),
+      launched: Ref.get(launched),
       started: Ref.get(started),
       stopped: Ref.get(stopped),
       emitFrame: (value) =>

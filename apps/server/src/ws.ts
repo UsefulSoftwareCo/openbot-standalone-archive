@@ -608,9 +608,13 @@ const makeWsRpcLayer = (
       // Input and the lease from the typed socket belong to the human at
       // this client, so they share one identity for as long as the socket
       // lives: taking control in one tab and clicking in it is one viewer.
+      // The session id is what ties this socket to the frame socket of the
+      // same paired browser, so the lease taken on the live view authorizes
+      // the window picker and input that arrive here.
       const computerViewer = {
         kind: "viewer",
         viewerId: `rpc:${currentSessionId}`,
+        sessionId: currentSessionId,
         label: clientOrigin.surface ?? "A client",
       } as const;
       const pullRequests = yield* PullRequestService.PullRequestService;
@@ -1746,7 +1750,7 @@ const makeWsRpcLayer = (
         [WS_METHODS.openbotComputerWindowFocus]: (input) =>
           observeRpcEffect(
             WS_METHODS.openbotComputerWindowFocus,
-            openbotComputer.focusWindow(input.windowId).pipe(Effect.as({})),
+            openbotComputer.focusWindow(computerViewer, input.windowId).pipe(Effect.as({})),
             { "rpc.aggregate": "openbot" },
           ),
         [WS_METHODS.openbotComputerDisplayCreate]: (input) =>
@@ -1774,9 +1778,11 @@ const makeWsRpcLayer = (
             { "rpc.aggregate": "openbot" },
           ),
         [WS_METHODS.openbotComputerLaunch]: (input) =>
-          observeRpcEffect(WS_METHODS.openbotComputerLaunch, openbotComputer.launch(input), {
-            "rpc.aggregate": "openbot",
-          }),
+          observeRpcEffect(
+            WS_METHODS.openbotComputerLaunch,
+            openbotComputer.launch(computerViewer, input),
+            { "rpc.aggregate": "openbot" },
+          ),
         [WS_METHODS.serverProbe]: (_input) =>
           observeRpcEffect(WS_METHODS.serverProbe, Effect.succeed({}), {
             "rpc.aggregate": "server",
