@@ -52,6 +52,7 @@ import {
   releaseEvents,
   textEvents,
 } from "./computerKeys";
+import { type MaximizeEvent, NOT_MAXIMIZED, nextMaximizeState } from "./computerMaximize";
 import {
   computerStatusView,
   controllerBadge,
@@ -77,6 +78,17 @@ const BUTTONS: Record<number, OpenbotComputerMouseButton> = {
 };
 
 const fieldClass = "rounded-md border border-border bg-background px-3 py-2 text-sm";
+
+/**
+ * Leaves the browser's own fullscreen if this document is in it. Safe to call
+ * from either tier: when only the in-app overlay is up there is nothing to
+ * leave, and a browser that never offered the API cannot be asked to exit.
+ */
+function leaveNativeFullscreen() {
+  if (document.fullscreenElement === null) return;
+  if (typeof document.exitFullscreen !== "function") return;
+  void document.exitFullscreen().catch(() => undefined);
+}
 
 /**
  * The host's screen, full pane.
@@ -113,9 +125,9 @@ export function ComputerPage({
   const [actionError, setActionError] = useState<string | null>(null);
 
   const stageRef = useRef<HTMLDivElement | null>(null);
-  // Fullscreen covers this element and nothing else, so it has to hold the
+  // Maximizing covers this element and nothing else, so it has to hold the
   // toolbar as well as the stage, and host the dialogs the toolbar opens.
-  const fullscreenRef = useRef<HTMLDivElement | null>(null);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const keyboardRef = useRef<HTMLTextAreaElement | null>(null);
   const heldKeysRef = useRef<ReadonlySet<string>>(new Set());
@@ -191,13 +203,60 @@ export function ComputerPage({
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
   }, [controlling, send, setControl]);
 
-  const [fullscreen, setFullscreen] = useState(false);
-  useEffect(() => {
-    const sync = () => setFullscreen(document.fullscreenElement === fullscreenRef.current);
-    document.addEventListener("fullscreenchange", sync);
-    sync();
-    return () => document.removeEventListener("fullscreenchange", sync);
+  const [maximize, setMaximize] = useState(NOT_MAXIMIZED);
+  const dispatchMaximize = useCallback((event: MaximizeEvent) => {
+    setMaximize((current) => nextMaximizeState(current, event));
   }, []);
+
+  // The browser is the authority on its own fullscreen: it can hand the element
+  // back at any time, and Escape at the browser level arrives only here.
+  useEffect(() => {
+    const sync = () => {
+      const element = wrapperRef.current;
+      dispatchMaximize(
+        element !== null && document.fullscreenElement === element
+          ? { type: "nativeGranted" }
+          : { type: "nativeExited" },
+      );
+    };
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, [dispatchMaximize]);
+
+  // The overlay goes up first and stays up; native fullscreen is the upgrade.
+  const enterMaximize = useCallback(() => {
+    dispatchMaximize({ type: "clickMaximize" });
+    const element = wrapperRef.current;
+    if (element === null) return;
+    if (typeof element.requestFullscreen !== "function") {
+      dispatchMaximize({ type: "nativeDenied", reason: "unsupported" });
+      return;
+    }
+    void element.requestFullscreen().then(
+      () => dispatchMaximize({ type: "nativeGranted" }),
+      () => dispatchMaximize({ type: "nativeDenied", reason: "declined" }),
+    );
+  }, [dispatchMaximize]);
+
+  const exitMaximize = useCallback(() => {
+    dispatchMaximize({ type: "clickExit" });
+    leaveNativeFullscreen();
+  }, [dispatchMaximize]);
+
+  // Escape means "leave the host alone" only when the host is not listening.
+  // While controlling, every keystroke including Escape is being forwarded to a
+  // desktop that has its own use for it, so the toolbar's exit button is the way
+  // out; the browser may still cancel its own fullscreen, which arrives above.
+  useEffect(() => {
+    if (!maximize.maximized) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      dispatchMaximize({ type: "escape", controlling });
+      if (!controlling) leaveNativeFullscreen();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [controlling, dispatchMaximize, maximize.maximized]);
 
   // Wheel has to be a non-passive listener to keep the page from scrolling
   // under the stage, which React's own onWheel cannot promise.
@@ -250,13 +309,18 @@ export function ComputerPage({
   const physical = displays.filter((display) => !display.managed);
   const managed = displays.filter((display) => display.managed);
   // The browser paints only the fullscreen element's subtree, so a dialog
-  // portaled to `<body>` while fullscreen is simply not there.
-  const dialogContainer = fullscreen ? fullscreenRef : undefined;
+  // portaled to `<body>` while fullscreen is simply not there. The in-app
+  // overlay has the same problem for a different reason: `<body>` is behind it.
+  const dialogContainer = maximize.maximized ? wrapperRef : undefined;
 
   return (
     <div
-      ref={fullscreenRef}
-      className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground"
+      ref={wrapperRef}
+      className={`flex min-h-0 min-w-0 flex-col bg-background text-foreground ${
+        // The app shell is itself fixed, so filling the pane is not enough to
+        // cover the sidebar and the details rail; only the viewport will do.
+        maximize.maximized ? "fixed inset-0 z-50" : "flex-1"
+      }`}
     >
       <header className="flex h-12 shrink-0 items-center gap-1 border-b border-border px-2 pt-[env(safe-area-inset-top)] md:px-3">
         <Button
@@ -413,13 +477,10 @@ export function ComputerPage({
         <Button
           variant="ghost"
           size="icon-xs"
-          aria-label={fullscreen ? "Leave fullscreen" : "Fullscreen"}
-          onClick={() => {
-            if (fullscreen) void document.exitFullscreen().catch(() => undefined);
-            else void fullscreenRef.current?.requestFullscreen().catch(() => undefined);
-          }}
+          aria-label={maximize.maximized ? "Exit maximize" : "Maximize"}
+          onClick={maximize.maximized ? exitMaximize : enterMaximize}
         >
-          {fullscreen ? <Minimize2 /> : <Maximize2 />}
+          {maximize.maximized ? <Minimize2 /> : <Maximize2 />}
         </Button>
       </header>
 
@@ -562,6 +623,7 @@ export function ComputerPage({
             : otherController
               ? `${badge ?? "Someone else is controlling"}. You can watch until they stop.`
               : "Take control to interact with this screen."}
+          {maximize.hint !== null && <span> {maximize.hint}</span>}
           {actionError !== null && <span className="text-error-foreground"> {actionError}</span>}
         </p>
       </div>
