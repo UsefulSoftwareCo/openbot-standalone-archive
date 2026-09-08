@@ -1,8 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
 import { OpenbotComputerDisplayId, OpenbotComputerWindowId } from "@t3tools/contracts";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Path from "effect/Path";
@@ -398,72 +400,93 @@ describe("LinuxX11ComputerBackend", () => {
     }),
   );
 
-  it.effect("types long text as several xdotool runs", () =>
+  it.effect("types long text as several bounded xdotool runs", () =>
     Effect.gen(function* () {
       const { shape, host } = yield* backend();
-      const text = "t".repeat(200);
+      const text = "t".repeat(40);
       const result = yield* shape.input(displayId(":0"), [{ type: "text", text }]);
 
       expect(result).toEqual({ delivered: 1, rejected: [] });
       expect(linesFor(host, "xdotool")).toEqual([
-        `type --delay 12 -- ${"t".repeat(64)}`,
-        `type --delay 12 -- ${"t".repeat(64)}`,
-        `type --delay 12 -- ${"t".repeat(64)}`,
+        `type --delay 12 -- ${"t".repeat(16)}`,
+        `type --delay 12 -- ${"t".repeat(16)}`,
         `type --delay 12 -- ${"t".repeat(8)}`,
       ]);
     }),
   );
 
-  it.effect("stops typing within one chunk when the batch is interrupted", () =>
+  it.effect("never kills an xdotool run mid-flight: an interrupt lands between units", () =>
     Effect.gen(function* () {
-      // The second chunk never finishes on its own, so the interrupt has to be
-      // what ends it.
+      // Killing `xdotool type` between a character's press and its release
+      // leaves that key down in the X server and outside every held set, and
+      // autorepeat then types it forever (measured on a real display: 985
+      // characters after the stop was acknowledged). So a unit in flight is
+      // waited for, never signalled.
+      const gate = yield* Deferred.make<void>();
       let typed = 0;
       const { shape, host } = yield* backend({
         respond: (command) => {
           if (command.command === toolPath("xdotool") && command.args[0] === "type") {
             typed += 1;
-            return typed === 2 ? { runsUntilKilled: true } : {};
+            return typed === 2 ? { exitsAfter: Deferred.await(gate) } : {};
           }
           return defaultRespond(command);
         },
       });
+      // 40 characters is three units of at most sixteen.
       const typing = yield* shape
-        .input(displayId(":0"), [{ type: "text", text: "t".repeat(200) }])
+        .input(displayId(":0"), [{ type: "text", text: "t".repeat(40) }])
         .pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
       yield* Effect.yieldNow;
       expect(typed).toBe(2);
 
-      yield* Fiber.interrupt(typing);
+      const stopping = yield* Effect.forkScoped(Fiber.interrupt(typing));
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      const runs = host.recordsFor(toolPath("xdotool"));
+      expect(runs).toHaveLength(2);
+      expect(runs[1]?.kills).toEqual([]);
 
-      // The chunk in flight was killed, and nothing behind it was started.
+      // Once that second unit finishes on its own, the interrupt is what the
+      // fiber sees next: the third unit is never spawned.
+      yield* Deferred.succeed(gate, undefined);
+      yield* Fiber.await(stopping);
       expect(host.recordsFor(toolPath("xdotool"))).toHaveLength(2);
-      expect(host.recordsFor(toolPath("xdotool"))[1]?.kills).toEqual(["SIGTERM"]);
+      expect(runs[1]?.kills).toEqual([]);
+      expect(Exit.hasInterrupts(yield* Fiber.await(typing))).toBe(true);
     }),
   );
 
-  it.effect("releases what an interrupted batch left held", () =>
+  it.effect("tracks an explicit key down even when the interrupt lands on that unit", () =>
     Effect.gen(function* () {
-      let commands = 0;
+      // The gap between a process exiting and the held-state write is its own
+      // hazard: a key pressed there would be down and untracked forever.
+      const gate = yield* Deferred.make<void>();
       const { shape, host } = yield* backend({
-        respond: (command) => {
-          if (command.command !== toolPath("xdotool")) return defaultRespond(command);
-          commands += 1;
-          // The text after the key press blocks; the key stays down.
-          return command.args[0] === "type" ? { runsUntilKilled: true } : {};
-        },
+        respond: (command) =>
+          command.command === toolPath("xdotool") && command.args[0] === "keydown"
+            ? { exitsAfter: Deferred.await(gate) }
+            : defaultRespond(command),
       });
       const batch = yield* shape
         .input(displayId(":0"), [
           { type: "key", key: "ControlLeft", action: "down" },
-          { type: "text", text: "t".repeat(200) },
+          { type: "text", text: "t".repeat(40) },
         ])
         .pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
       yield* Effect.yieldNow;
-      expect(commands).toBe(2);
-      yield* Fiber.interrupt(batch);
+      expect(linesFor(host, "xdotool")).toEqual(["keydown -- Control_L"]);
+
+      const stopping = yield* Effect.forkScoped(Fiber.interrupt(batch));
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(gate, undefined);
+      yield* Fiber.await(stopping);
+      expect(Exit.hasInterrupts(yield* Fiber.await(batch))).toBe(true);
+      // Nothing was typed, and the key the interrupted batch left down is
+      // exactly what release-all lets go of.
+      expect(linesFor(host, "xdotool")).toEqual(["keydown -- Control_L"]);
 
       yield* shape.input(displayId(":0"), [{ type: "release-all" }]);
       expect(linesFor(host, "xdotool").at(-1)).toBe("keyup -- Control_L");

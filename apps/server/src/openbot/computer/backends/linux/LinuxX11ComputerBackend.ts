@@ -59,9 +59,10 @@ import {
   parseXdpyinfoScreen,
   parseXwininfoGeometry,
   parseXrandrMonitors,
-  xdotoolArgs,
+  xdotoolUnits,
   type X11InputHeld,
   type X11InputSurface,
+  type X11InputUnit,
 } from "./X11Display.ts";
 
 /**
@@ -69,10 +70,11 @@ import {
  * headless X sessions this server started.
  *
  * Everything here is process mechanics over the pure builders and parsers in
- * this directory. The one piece of policy it owns is that input for a display
- * is serialized: every event is its own `xdotool` process, and two overlapping
- * runs race inside the X server (measured on a real host: "wsok" typed,
- * "wosk" received).
+ * this directory. The one piece of policy it owns is how input runs: one
+ * `xdotool` process at a time per display, because two overlapping runs race
+ * inside the X server (measured on a real host: "wsok" typed, "wosk"
+ * received), and each of those processes runs to completion because a killed
+ * one leaves keys down that nothing can release.
  */
 
 /** X11 has no capture or input gate to ask about. */
@@ -225,9 +227,10 @@ export const make: Effect.Effect<
           stdin: "ignore",
           stdout: "pipe",
           stderr: "pipe",
-          // The scope closes on interruption, and closing it has to end the
-          // child: an interrupted `xdotool type` that keeps running would go on
-          // typing into someone's desktop after they stopped controlling it.
+          // Closing the scope has to end the child, which is how a capture
+          // stops. Input never reaches this path: an `xdotool` run that applies
+          // input is wrapped uninterruptibly by its unit, precisely so it is
+          // never the process being killed here.
           killSignal: "SIGTERM",
           forceKillAfter: "3 seconds",
         }),
@@ -690,6 +693,26 @@ export const make: Effect.Effect<
       const env = displayEnvironment(target);
       const surface = surfaceOf(target);
 
+      /**
+       * Runs one unit and folds in what it left held, as one indivisible step.
+       *
+       * This is the whole cancellation design. Killing an xdotool run mid-way
+       * leaves keys down that nothing knows about, and folding the held state
+       * after the process is a second place a cancellation can land, so the
+       * process and its fold are uninterruptible together. Interruption is
+       * observed where it is safe to observe it: the fiber notices the pending
+       * interrupt as this region restores interruptibility, which stops the
+       * loop before the next unit is spawned.
+       */
+      const runUnit = (unit: X11InputUnit) =>
+        Effect.uninterruptible(
+          Effect.gen(function* () {
+            const result = yield* runCommand(xdotool, unit.args, env);
+            if (result.exitCode === 0) yield* setHeld(displayId, unit.held);
+            return result;
+          }),
+        );
+
       return yield* lock.withPermits(1)(
         Effect.gen(function* () {
           let held = (yield* Ref.get(heldRef)).get(displayId) ?? NO_X11_INPUT_HELD;
@@ -697,15 +720,18 @@ export const make: Effect.Effect<
           let delivered = 0;
 
           for (const [index, event] of events.entries()) {
-            const plan = xdotoolArgs(event, { surface, held });
+            const plan = xdotoolUnits(event, { surface, held });
             if (plan._tag === "rejected") {
               rejected.push({ index, reason: plan.reason });
               continue;
             }
             let failure: string | null = null;
-            for (const args of plan.commands) {
-              const result = yield* runCommand(xdotool, args, env);
-              if (result.exitCode === 0) continue;
+            for (const unit of plan.units) {
+              const result = yield* runUnit(unit);
+              if (result.exitCode === 0) {
+                held = unit.held;
+                continue;
+              }
               const detail = result.stderr.trim().split("\n")[0] ?? "";
               failure = detail.length > 0 ? detail : `xdotool exited ${result.exitCode}`;
               break;
@@ -714,11 +740,6 @@ export const make: Effect.Effect<
               rejected.push({ index, reason: failure });
               continue;
             }
-            held = plan.held;
-            // Recorded per event rather than once at the end: an interruption
-            // stops this loop wherever it is, and the `release-all` that
-            // follows can only let go of what was written down before it.
-            yield* setHeld(displayId, held);
             delivered += 1;
           }
 

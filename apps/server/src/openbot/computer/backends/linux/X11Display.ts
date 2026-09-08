@@ -313,14 +313,36 @@ export interface X11InputHeld {
 
 export const NO_X11_INPUT_HELD: X11InputHeld = { keys: [], buttons: [] };
 
-/** Either the xdotool invocations one event becomes, or why it cannot become
-    any. Every command is the argument list after the `xdotool` executable. */
+/**
+ * One xdotool invocation and the held state the display is in once it exits.
+ *
+ * A unit is the smallest thing the backend runs, and it runs it whole: spawn,
+ * wait for exit, write this `held` down, with no interruption in between.
+ *
+ * That indivisibility is the point. `xdotool type` presses and releases each
+ * character itself, so killing it between a press and its release leaves that
+ * key down inside the X server and outside every held set anything tracks.
+ * Measured on a real display: a killed `type` chunk left keycode 53 down, and
+ * X11 autorepeat then typed 985 more characters after the stop was
+ * acknowledged. The same gap exists inside `key` (a press and a release in one
+ * process) and inside a modified click (modifiers pressed and released around
+ * it), and between any process finishing and its held-state fold.
+ *
+ * So cancellation is only ever observed between units, and every unit is kept
+ * short enough that waiting for one is not a hang: `type` is capped at
+ * {@link TEXT_CHUNK_MAX_UNITS} characters at `--delay 12`, a click repeats at
+ * most three times at 60 ms, a scroll at most ten times at 10 ms, and
+ * everything else is a single keystroke or button transition.
+ */
+export interface X11InputUnit {
+  readonly args: ReadonlyArray<string>;
+  readonly held: X11InputHeld;
+}
+
+/** Either the units one event becomes, or why it cannot become any. Each
+    unit's `args` is the argument list after the `xdotool` executable. */
 export type X11InputPlan =
-  | {
-      readonly _tag: "commands";
-      readonly commands: ReadonlyArray<ReadonlyArray<string>>;
-      readonly held: X11InputHeld;
-    }
+  | { readonly _tag: "units"; readonly units: ReadonlyArray<X11InputUnit> }
   | { readonly _tag: "rejected"; readonly reason: string };
 
 function clamp(value: number, minimum: number, maximum: number): number {
@@ -358,15 +380,16 @@ export function scrollButton(deltaX: number, deltaY: number): number | null {
 }
 
 /**
- * Longest text one `xdotool type` process is given.
+ * Longest text one `xdotool type` process is given, in UTF-16 units.
  *
- * Typing is paced (`--delay 12`), so the whole event is exactly as long as the
- * string: a protocol-maximum 4096 characters is ~49 seconds in one process
- * that only dies when it is killed. Splitting the string into separate
- * processes makes the caller's interruption land within one chunk, which is
- * what "stop controlling" has to feel like.
+ * Typing is paced (`--delay 12`), so a chunk costs about `12 ms` per character
+ * and this bound is what a stop waits for: sixteen characters is under 200 ms
+ * of typing, roughly a quarter second once the process has started. A
+ * protocol-maximum 4096-character event is ~49 seconds, so it has to be split
+ * either way; the size is set by how long a cancellation may take to land,
+ * because the chunk in flight is never killed.
  */
-export const TEXT_CHUNK_MAX_UNITS = 64;
+export const TEXT_CHUNK_MAX_UNITS = 16;
 
 /**
  * Splits text into `xdotool type` sized pieces on code point boundaries.
@@ -397,13 +420,19 @@ function withoutLast<A>(values: ReadonlyArray<A>, value: A): ReadonlyArray<A> {
 }
 
 /**
- * The xdotool invocations that apply one input event, plus the held state they
- * leave behind.
+ * The units that apply one input event, each carrying the held state the
+ * display is left in once that unit's process has exited.
  *
- * One process per event, run in order by the caller: two overlapping xdotool
+ * One process at a time, run in order by the caller: two overlapping xdotool
  * runs race inside the X server (measured: "wsok" typed, "wosk" received). A
  * warp and the click that follows it stay together by being one invocation,
  * `mousemove X Y click ...`, which xdotool applies in the order written.
+ *
+ * An event that needs several processes hands back several units, and every
+ * one of them says what is held afterwards. A modified click therefore holds
+ * its own modifiers between its `keydown` and its `keyup`: they are only
+ * transient to the event, but a cancellation can land between those two units,
+ * and `release-all` can only let go of what somebody wrote down.
  *
  * `mousemove` never takes `--sync`. That flag waits for a pointer-motion event
  * confirming the new position, and when the pointer is already at X,Y the X
@@ -412,33 +441,42 @@ function withoutLast<A>(values: ReadonlyArray<A>, value: A): ReadonlyArray<A> {
  * 700,230). A hover followed by a click on the same point is the ordinary case,
  * and it would wedge the whole ordered input path behind the session lock.
  */
-export function xdotoolArgs(
+export function xdotoolUnits(
   event: OpenbotComputerInputEvent,
   options: { readonly surface: X11InputSurface; readonly held: X11InputHeld },
 ): X11InputPlan {
   const { surface, held } = options;
+  /** A unit that changes nothing about what is held. */
+  const passive = (args: ReadonlyArray<string>): X11InputUnit => ({ args, held });
   switch (event.type) {
     case "move": {
       const [x, y] = rootPoint(surface, event.point);
-      return { _tag: "commands", commands: [["mousemove", x, y]], held };
+      return { _tag: "units", units: [passive(["mousemove", x, y])] };
     }
     case "button": {
       const [x, y] = rootPoint(surface, event.point);
       const button = BUTTON_NUMBERS[event.button];
       const action = event.action === "down" ? "mousedown" : "mouseup";
       return {
-        _tag: "commands",
-        commands: [["mousemove", x, y, action, String(button)]],
-        held: {
-          keys: held.keys,
-          buttons:
-            event.action === "down" ? [...held.buttons, button] : withoutLast(held.buttons, button),
-        },
+        _tag: "units",
+        units: [
+          {
+            args: ["mousemove", x, y, action, String(button)],
+            held: {
+              keys: held.keys,
+              buttons:
+                event.action === "down"
+                  ? [...held.buttons, button]
+                  : withoutLast(held.buttons, button),
+            },
+          },
+        ],
       };
     }
     case "click": {
       const [x, y] = rootPoint(surface, event.point);
       const button = String(BUTTON_NUMBERS[event.button]);
+      // At most three repeats 60 ms apart: the whole click is under 200 ms.
       const click = [
         "mousemove",
         x,
@@ -451,29 +489,47 @@ export function xdotoolArgs(
         button,
       ];
       const modifiers = event.modifiers ?? [];
-      if (modifiers.length === 0) return { _tag: "commands", commands: [click], held };
+      if (modifiers.length === 0) return { _tag: "units", units: [passive(click)] };
       // A modified click brackets its own modifiers: they belong to this event
-      // and must not survive it, so they never enter the held set.
+      // and are gone by the end of it, so the held state before and after is
+      // the caller's. In between they are down, and tracked as such.
       const combination = modifiers.map((modifier) => MODIFIER_KEYSYMS[modifier]).join("+");
+      const pressed: X11InputHeld = {
+        keys: [...held.keys, combination],
+        buttons: held.buttons,
+      };
       return {
-        _tag: "commands",
-        commands: [["keydown", "--", combination], click, ["keyup", "--", combination]],
-        held,
+        _tag: "units",
+        units: [
+          { args: ["keydown", "--", combination], held: pressed },
+          { args: click, held: pressed },
+          { args: ["keyup", "--", combination], held },
+        ],
       };
     }
     case "scroll": {
       const button = scrollButton(event.deltaX, event.deltaY);
       if (button === null) return { _tag: "rejected", reason: "scroll had no delta" };
       const [x, y] = rootPoint(surface, event.point);
+      // `scrollSteps` caps at ten, 10 ms apart: the whole wheel run is ~100 ms.
       const steps = scrollSteps(
         Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX,
       );
       return {
-        _tag: "commands",
-        commands: [
-          ["mousemove", x, y, "click", "--repeat", String(steps), "--delay", "10", String(button)],
+        _tag: "units",
+        units: [
+          passive([
+            "mousemove",
+            x,
+            y,
+            "click",
+            "--repeat",
+            String(steps),
+            "--delay",
+            "10",
+            String(button),
+          ]),
         ],
-        held,
       };
     }
     case "key": {
@@ -482,43 +538,56 @@ export function xdotoolArgs(
       const combination = keyCombination(keysym, event.modifiers ?? []);
       const action = event.action === "down" ? "keydown" : "keyup";
       return {
-        _tag: "commands",
-        commands: [[action, "--", combination]],
-        held: {
-          keys:
-            event.action === "down"
-              ? [...held.keys, combination]
-              : withoutLast(held.keys, combination),
-          buttons: held.buttons,
-        },
+        _tag: "units",
+        units: [
+          {
+            args: [action, "--", combination],
+            held: {
+              keys:
+                event.action === "down"
+                  ? [...held.keys, combination]
+                  : withoutLast(held.keys, combination),
+              buttons: held.buttons,
+            },
+          },
+        ],
       };
     }
     case "key-press": {
       const keysym = keysymForCode(event.key);
       if (keysym === null) return { _tag: "rejected", reason: `unknown key ${event.key}` };
+      // `key` presses and releases inside the one process, which is safe only
+      // because that process is never cut short.
       return {
-        _tag: "commands",
-        commands: [["key", "--", keyCombination(keysym, event.modifiers ?? [])]],
-        held,
+        _tag: "units",
+        units: [passive(["key", "--", keyCombination(keysym, event.modifiers ?? [])])],
       };
     }
     case "text":
-      // One process per chunk: the caller runs them in order and an interrupted
-      // batch stops at whichever chunk was in flight.
+      // One unit per chunk: the caller runs them in order, and a cancellation
+      // lands between two of them rather than inside a character.
       return {
-        _tag: "commands",
-        commands: splitTypedText(event.text).map((chunk) => ["type", "--delay", "12", "--", chunk]),
-        held,
+        _tag: "units",
+        units: splitTypedText(event.text).map((chunk) =>
+          passive(["type", "--delay", "12", "--", chunk]),
+        ),
       };
-    case "release-all":
-      return {
-        _tag: "commands",
-        commands: [
-          ...held.keys.toReversed().map((combination) => ["keyup", "--", combination]),
-          ...held.buttons.toReversed().map((button) => ["mouseup", String(button)]),
-        ],
-        held: NO_X11_INPUT_HELD,
-      };
+    case "release-all": {
+      // One release per unit, each folding off exactly what it let go of, so
+      // an interrupted release-all leaves the rest still tracked and a later
+      // one finishes the job.
+      const units: Array<X11InputUnit> = [];
+      let remaining = held;
+      for (const combination of held.keys.toReversed()) {
+        remaining = { keys: withoutLast(remaining.keys, combination), buttons: remaining.buttons };
+        units.push({ args: ["keyup", "--", combination], held: remaining });
+      }
+      for (const button of held.buttons.toReversed()) {
+        remaining = { keys: remaining.keys, buttons: withoutLast(remaining.buttons, button) };
+        units.push({ args: ["mouseup", String(button)], held: remaining });
+      }
+      return { _tag: "units", units };
+    }
   }
 }
 

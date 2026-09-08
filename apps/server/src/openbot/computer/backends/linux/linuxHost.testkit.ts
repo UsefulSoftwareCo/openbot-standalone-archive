@@ -31,6 +31,13 @@ export interface FakeProcess {
   readonly spawnError?: string | undefined;
   /** Set to leave the process running until it is killed. */
   readonly runsUntilKilled?: boolean | undefined;
+  /**
+   * Set to hold the process open until this effect completes, then exit
+   * normally. A child gated this way is running for as long as the gate is: it
+   * reports `isRunning`, and the scope that acquired it kills it on close,
+   * exactly as a real child that had not exited yet would be.
+   */
+  readonly exitsAfter?: Effect.Effect<void> | undefined;
 }
 
 export interface SpawnRecord extends SpawnedCommand {
@@ -109,11 +116,18 @@ export function makeFakeHost(
     records.push(record);
 
     let killed = false;
-    const exitCode = Effect.suspend(() =>
-      behavior.runsUntilKilled === true && !killed
-        ? Effect.never
-        : Effect.succeed(ChildProcessSpawner.ExitCode(behavior.exitCode ?? 0)),
-    );
+    let exited = false;
+    const gate = behavior.exitsAfter;
+    const running = () =>
+      !killed && (behavior.runsUntilKilled === true || (gate !== undefined && !exited));
+    const exitCode = Effect.suspend(() => {
+      if (behavior.runsUntilKilled === true && !killed) return Effect.never;
+      const exit = Effect.sync(() => {
+        exited = true;
+        return ChildProcessSpawner.ExitCode(behavior.exitCode ?? 0);
+      });
+      return gate === undefined ? exit : Effect.flatMap(gate, () => exit);
+    });
 
     const kill = (options?: { readonly killSignal?: string | undefined }) =>
       Effect.sync(() => {
@@ -125,7 +139,7 @@ export function makeFakeHost(
     const handle = ChildProcessSpawner.makeHandle({
       pid: ChildProcessSpawner.ProcessId(record.pid),
       exitCode,
-      isRunning: Effect.sync(() => behavior.runsUntilKilled === true && !killed),
+      isRunning: Effect.sync(running),
       kill,
       unref: Effect.succeed(Effect.void),
       stdin: Sink.drain,
@@ -140,9 +154,7 @@ export function makeFakeHost(
     // acquired it closes, which is how an interrupted command stops. A fake
     // that only killed on request would prove nothing about cancellation.
     return Effect.acquireRelease(Effect.succeed(handle), () =>
-      behavior.runsUntilKilled === true && !killed
-        ? kill({ killSignal: parsed.options.killSignal })
-        : Effect.void,
+      running() ? kill({ killSignal: parsed.options.killSignal }) : Effect.void,
     );
   });
 

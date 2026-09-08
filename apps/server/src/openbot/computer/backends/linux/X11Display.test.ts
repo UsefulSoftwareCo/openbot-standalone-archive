@@ -14,7 +14,7 @@ import {
   scrollButton,
   scrollSteps,
   splitTypedText,
-  xdotoolArgs,
+  xdotoolUnits,
   xvfbArgs,
   type X11InputHeld,
   type X11InputSurface,
@@ -35,15 +35,23 @@ const SECOND_MONITOR: X11InputSurface = {
 };
 
 const plan = (
-  event: Parameters<typeof xdotoolArgs>[0],
+  event: Parameters<typeof xdotoolUnits>[0],
   surface: X11InputSurface = WHOLE_SCREEN,
   held: X11InputHeld = NO_X11_INPUT_HELD,
-) => xdotoolArgs(event, { surface, held });
+) => xdotoolUnits(event, { surface, held });
 
-const commandsOf = (result: ReturnType<typeof xdotoolArgs>) => {
-  if (result._tag !== "commands") throw new Error(`rejected: ${result.reason}`);
-  return result.commands;
+const unitsOf = (result: ReturnType<typeof xdotoolUnits>) => {
+  if (result._tag !== "units") throw new Error(`rejected: ${result.reason}`);
+  return result.units;
 };
+
+/** Just the argv of each unit, for the cases where held state is not the point. */
+const commandsOf = (result: ReturnType<typeof xdotoolUnits>) =>
+  unitsOf(result).map((unit) => unit.args);
+
+/** What the display is holding once every unit of a plan has run. */
+const finalHeld = (result: ReturnType<typeof xdotoolUnits>) =>
+  unitsOf(result).at(-1)?.held ?? NO_X11_INPUT_HELD;
 
 describe("xvfbArgs", () => {
   it("lets Xvfb claim a display and report it, on a 24-bit screen with no TCP listener", () => {
@@ -189,7 +197,7 @@ describe("keysymForCode", () => {
   });
 });
 
-describe("xdotoolArgs", () => {
+describe("xdotoolUnits", () => {
   it("warps the pointer to a rounded, root-relative point", () => {
     expect(commandsOf(plan({ type: "move", point: { x: 10.4, y: 20.6 } }))).toEqual([
       ["mousemove", "10", "21"],
@@ -213,14 +221,14 @@ describe("xdotoolArgs", () => {
       point: { x: 5, y: 5 },
     });
     expect(commandsOf(down)).toEqual([["mousemove", "5", "5", "mousedown", "1"]]);
-    expect(down._tag === "commands" && down.held.buttons).toEqual([1]);
+    expect(finalHeld(down).buttons).toEqual([1]);
 
-    const up = xdotoolArgs(
+    const up = xdotoolUnits(
       { type: "button", button: "left", action: "up", point: { x: 40, y: 40 } },
       { surface: WHOLE_SCREEN, held: { keys: [], buttons: [1] } },
     );
     expect(commandsOf(up)).toEqual([["mousemove", "40", "40", "mouseup", "1"]]);
-    expect(up._tag === "commands" && up.held.buttons).toEqual([]);
+    expect(finalHeld(up).buttons).toEqual([]);
   });
 
   it("repeats a click for a double or triple click", () => {
@@ -229,7 +237,7 @@ describe("xdotoolArgs", () => {
     ).toEqual([["mousemove", "1", "2", "click", "--repeat", "2", "--delay", "60", "3"]]);
   });
 
-  it("brackets a modified click with its own modifiers and holds none of them", () => {
+  it("brackets a modified click with its own modifiers, held only in between", () => {
     const result = plan({
       type: "click",
       button: "left",
@@ -237,9 +245,15 @@ describe("xdotoolArgs", () => {
       point: { x: 1, y: 2 },
       modifiers: ["control", "shift"],
     });
-    expect(commandsOf(result)[0]).toEqual(["keydown", "--", "ctrl+shift"]);
-    expect(commandsOf(result)[2]).toEqual(["keyup", "--", "ctrl+shift"]);
-    expect(result._tag === "commands" && result.held).toEqual(NO_X11_INPUT_HELD);
+    // A cancellation can land between the keydown and the keyup, so those
+    // modifiers are tracked while they are down even though they belong to
+    // this event alone.
+    expect(unitsOf(result).map((unit) => [unit.args, unit.held.keys])).toEqual([
+      [["keydown", "--", "ctrl+shift"], ["ctrl+shift"]],
+      [["mousemove", "1", "2", "click", "--repeat", "1", "--delay", "60", "1"], ["ctrl+shift"]],
+      [["keyup", "--", "ctrl+shift"], []],
+    ]);
+    expect(finalHeld(result)).toEqual(NO_X11_INPUT_HELD);
   });
 
   it("scrolls with the wheel buttons in the browser's sign convention", () => {
@@ -274,34 +288,44 @@ describe("xdotoolArgs", () => {
   it("tracks held keys so release-all can undo them in reverse order", () => {
     const first = plan({ type: "key", key: "ControlLeft", action: "down" });
     expect(commandsOf(first)).toEqual([["keydown", "--", "Control_L"]]);
-    const held = first._tag === "commands" ? first.held : NO_X11_INPUT_HELD;
 
-    const second = xdotoolArgs(
+    const second = xdotoolUnits(
       { type: "key", key: "KeyA", action: "down", modifiers: ["control"] },
-      { surface: WHOLE_SCREEN, held },
+      { surface: WHOLE_SCREEN, held: finalHeld(first) },
     );
     expect(commandsOf(second)).toEqual([["keydown", "--", "ctrl+a"]]);
 
-    const release = xdotoolArgs(
+    const release = xdotoolUnits(
       { type: "release-all" },
-      {
-        surface: WHOLE_SCREEN,
-        held: second._tag === "commands" ? { ...second.held, buttons: [3] } : NO_X11_INPUT_HELD,
-      },
+      { surface: WHOLE_SCREEN, held: { ...finalHeld(second), buttons: [3] } },
     );
     expect(commandsOf(release)).toEqual([
       ["keyup", "--", "ctrl+a"],
       ["keyup", "--", "Control_L"],
       ["mouseup", "3"],
     ]);
-    expect(release._tag === "commands" && release.held).toEqual(NO_X11_INPUT_HELD);
+    expect(finalHeld(release)).toEqual(NO_X11_INPUT_HELD);
+  });
+
+  it("drops each release from the held set as its own unit runs", () => {
+    // An interrupted release-all stops between units, so the units it did not
+    // reach must still be held: a later release-all is what finishes them.
+    const release = plan({ type: "release-all" }, WHOLE_SCREEN, {
+      keys: ["Control_L", "shift+a"],
+      buttons: [1],
+    });
+    expect(unitsOf(release).map((unit) => [unit.args.join(" "), unit.held])).toEqual([
+      ["keyup -- shift+a", { keys: ["Control_L"], buttons: [1] }],
+      ["keyup -- Control_L", { keys: [], buttons: [1] }],
+      ["mouseup 1", { keys: [], buttons: [] }],
+    ]);
   });
 
   it("makes release-all a no-op when nothing is held", () => {
     expect(commandsOf(plan({ type: "release-all" }))).toEqual([]);
   });
 
-  it("presses a key down and up in one command", () => {
+  it("presses a key down and up in one process, which is never cut short", () => {
     expect(commandsOf(plan({ type: "key-press", key: "Enter", modifiers: ["meta"] }))).toEqual([
       ["key", "--", "super+Return"],
     ]);
@@ -325,7 +349,7 @@ describe("xdotoolArgs", () => {
   });
 
   it("never passes --sync to mousemove, which hangs when the pointer is already there", () => {
-    const events: ReadonlyArray<Parameters<typeof xdotoolArgs>[0]> = [
+    const events: ReadonlyArray<Parameters<typeof xdotoolUnits>[0]> = [
       { type: "move", point: { x: 10, y: 20 } },
       { type: "button", button: "left", action: "down", point: { x: 10, y: 20 } },
       { type: "button", button: "left", action: "up", point: { x: 10, y: 20 } },
@@ -357,43 +381,45 @@ describe("xdotoolArgs", () => {
     expect(commandsOf(plan(click))).toEqual(expected);
   });
 
-  it("types long text as several processes so a stop lands inside one of them", () => {
-    const text = "a".repeat(200);
+  it("types long text as several bounded processes, none of them held", () => {
+    const text = "a".repeat(40);
     const commands = commandsOf(plan({ type: "text", text }));
     expect(commands.map((command) => command[4])).toEqual([
-      "a".repeat(64),
-      "a".repeat(64),
-      "a".repeat(64),
+      "a".repeat(16),
+      "a".repeat(16),
       "a".repeat(8),
     ]);
     expect(
       commands.every((command) => command.slice(0, 4).join(" ") === "type --delay 12 --"),
     ).toBe(true);
+    expect(finalHeld(plan({ type: "text", text }))).toEqual(NO_X11_INPUT_HELD);
   });
 });
 
 describe("splitTypedText", () => {
   it("leaves anything that fits in one process alone", () => {
     expect(splitTypedText("hello")).toEqual(["hello"]);
-    expect(splitTypedText("x".repeat(64))).toEqual(["x".repeat(64)]);
+    expect(splitTypedText("x".repeat(16))).toEqual(["x".repeat(16)]);
     expect(splitTypedText("")).toEqual([]);
   });
 
-  it("splits into bounded chunks that rejoin to the original", () => {
+  it("bounds text units to sixteen characters, rejoining to the original", () => {
+    // At `--delay 12` sixteen characters is under 200 ms of typing, which is
+    // what a stop waits for: the chunk in flight is always allowed to finish.
     const text = Array.from({ length: 500 }, (_, index) => String(index % 10)).join("");
     const chunks = splitTypedText(text);
-    expect(chunks).toHaveLength(8);
-    expect(chunks.every((chunk) => chunk.length <= 64)).toBe(true);
+    expect(chunks).toHaveLength(32);
+    expect(chunks.every((chunk) => chunk.length <= 16)).toBe(true);
     expect(chunks.join("")).toBe(text);
   });
 
   it("never cuts a surrogate pair in half", () => {
-    // 31 emoji is 62 UTF-16 units; the 32nd would be the 63rd and 64th, and
+    // Eight emoji is 16 UTF-16 units; the ninth would be the 17th and 18th, and
     // half of it would be a character xdotool cannot type.
     const text = "😀".repeat(40);
     const chunks = splitTypedText(text);
     expect(chunks.join("")).toBe(text);
-    expect(chunks[0]).toBe("😀".repeat(32));
+    expect(chunks[0]).toBe("😀".repeat(8));
     expect(chunks.every((chunk) => !/[\uD800-\uDBFF]$/u.test(chunk))).toBe(true);
   });
 });
