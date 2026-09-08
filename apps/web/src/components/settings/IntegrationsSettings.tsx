@@ -590,6 +590,46 @@ function AgentBrowserAccessSetting() {
   );
 }
 
+function AgentComputerAccessSetting() {
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
+
+  return (
+    <SettingsRow
+      serverScoped
+      {...searchableSetting("agent-computer-access")}
+      description="Let agents see and control this computer's shared desktop through the computer_* tools. Your own computer view is unaffected."
+      status={
+        settings.enableAgentComputerAccess
+          ? undefined
+          : "Applies to sessions started from now on; a running agent keeps the tools it was given."
+      }
+      resetAction={
+        settings.enableAgentComputerAccess !==
+        DEFAULT_UNIFIED_SETTINGS.enableAgentComputerAccess ? (
+          <SettingResetButton
+            label="agent computer access"
+            onClick={() =>
+              updateSettings({
+                enableAgentComputerAccess: DEFAULT_UNIFIED_SETTINGS.enableAgentComputerAccess,
+              })
+            }
+          />
+        ) : null
+      }
+      control={
+        <Switch
+          checked={settings.enableAgentComputerAccess}
+          onCheckedChange={(checked) =>
+            updateSettings({ enableAgentComputerAccess: Boolean(checked) })
+          }
+          aria-label="Allow agent computer access"
+        />
+      }
+    />
+  );
+}
+
 function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled: boolean }) {
   const autoShow = useClientSettings((settings) => settings.browserAutoShowFloatingPreview);
   const updateSettings = useUpdatePrimarySettings();
@@ -1212,6 +1252,7 @@ export function IntegrationsSettingsPanel() {
             a server; `serverScoped` covers the hosted app, which has none. It
             sits outside the block covering the desktop-only defaults. */}
         <AgentBrowserAccessSetting />
+        <AgentComputerAccessSetting />
         {previewDefaultsDisabled ? (
           <DesktopOnlyBrowserDefaults>{previewDefaults}</DesktopOnlyBrowserDefaults>
         ) : (

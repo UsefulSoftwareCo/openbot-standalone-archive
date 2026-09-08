@@ -46,12 +46,31 @@ it.effect("stores only a token hash, resolves the bearer token, and revokes by t
 
     const resolved = yield* registry.resolve(token);
     expect(resolved?.threadId).toBe(threadId);
-    expect(resolved?.capabilities).toEqual(new Set(["preview", "orchestration", "worktree"]));
+    expect(resolved?.capabilities).toEqual(
+      new Set(["preview", "computer", "orchestration", "worktree"]),
+    );
 
     yield* registry.revokeThread(threadId);
     expect(yield* registry.resolve(token)).toBeUndefined();
 
     timestamp += 2_000;
+  }),
+);
+
+it.effect("withholds each agent-access capability the request turns off", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry(() => 1_000);
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-no-computer"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      computerToolsAvailable: false,
+    });
+    expect(issued.config.computerToolsAvailable).toBe(false);
+
+    const resolved = yield* registry.resolve(
+      issued.config.authorizationHeader.replace(/^Bearer\s+/, ""),
+    );
+    expect(resolved?.capabilities).toEqual(new Set(["preview", "orchestration", "worktree"]));
   }),
 );
 

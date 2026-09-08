@@ -52,6 +52,7 @@ export * from "./worktreeMcp.ts";
 export * from "./openbot.ts";
 export * from "./openbotIcons.generated.ts";
 export * from "./openbotComputer.ts";
+export * from "./openbotComputerMcp.ts";
 export * from "./openbotQuestion.ts";
 export * from "./resourceTelemetry.ts";
 export * from "./rpc.ts";

@@ -279,19 +279,28 @@ export const layerWithOptions = (
        * reverse costs an agent one toolset and is visible immediately (#7083).
        */
       const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
-      const agentBrowserAccessEnabled = Option.match(serverSettings, {
-        onNone: () => Effect.succeed(true),
-        onSome: (settings) =>
-          settings.getSettings.pipe(
-            Effect.map((resolved) => resolved.enableAgentBrowserAccess),
-            Effect.catch((cause) =>
-              Effect.logWarning(
-                "Could not read server settings; withholding agent browser access for this session.",
-                { cause },
-              ).pipe(Effect.as(false)),
+      const agentAccessEnabled = (
+        key: "enableAgentBrowserAccess" | "enableAgentComputerAccess",
+        surface: "browser" | "computer",
+      ) =>
+        Option.match(serverSettings, {
+          onNone: () => Effect.succeed(true),
+          onSome: (settings) =>
+            settings.getSettings.pipe(
+              Effect.map((resolved) => resolved[key]),
+              Effect.catch((cause) =>
+                Effect.logWarning(
+                  `Could not read server settings; withholding agent ${surface} access for this session.`,
+                  { cause },
+                ).pipe(Effect.as(false)),
+              ),
             ),
-          ),
-      });
+        });
+      const agentBrowserAccessEnabled = agentAccessEnabled("enableAgentBrowserAccess", "browser");
+      const agentComputerAccessEnabled = agentAccessEnabled(
+        "enableAgentComputerAccess",
+        "computer",
+      );
       const eventSink = yield* EventSinkV2;
       const idAllocator = yield* IdAllocatorV2;
       const projectionStore = yield* ProjectionStoreV2;
@@ -359,6 +368,7 @@ export const layerWithOptions = (
                 // re-attaches across a workspace handoff must come back to the
                 // same token or the process's tool calls fail auth.
                 const browserToolsAvailable = yield* agentBrowserAccessEnabled;
+                const computerToolsAvailable = yield* agentComputerAccessEnabled;
                 const existing = McpProviderSession.readMcpProviderSession(threadId);
                 if (existing !== undefined) {
                   // Reserve before the async resolve so a release cannot
@@ -370,9 +380,10 @@ export const layerWithOptions = (
                     resolved !== undefined &&
                     resolved.threadId === threadId &&
                     resolved.providerInstanceId === providerInstanceId &&
-                    // A flipped browser-access setting must not survive through
+                    // A flipped agent-access setting must not survive through
                     // credential reuse: rotate so the new scope reflects it.
-                    resolved.capabilities.has("preview") === browserToolsAvailable
+                    resolved.capabilities.has("preview") === browserToolsAvailable &&
+                    resolved.capabilities.has("computer") === computerToolsAvailable
                   ) {
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }
@@ -383,6 +394,7 @@ export const layerWithOptions = (
                   threadId,
                   providerInstanceId,
                   browserToolsAvailable,
+                  computerToolsAvailable,
                 });
                 McpProviderSession.setMcpProviderSession(credential.config);
                 reserveMcpCredential(threadId, credential.config.providerSessionId);

@@ -20,6 +20,12 @@ export interface McpCredentialRequest {
    * token is honored (#7083). Defaults to full access.
    */
   readonly browserToolsAvailable?: boolean;
+  /**
+   * When false, the credential is minted without the "computer" capability, so
+   * a user who withheld agent access to the shared desktop is honored wherever
+   * the token is honored. Defaults to full access.
+   */
+  readonly computerToolsAvailable?: boolean;
 }
 
 export interface McpIssuedCredential {
@@ -130,17 +136,20 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       const rawToken = yield* crypto.randomBytes(32).pipe(Effect.map(tokenFromBytes), Effect.orDie);
       const tokenHash = yield* hashToken(rawToken);
       const browserToolsAvailable = request.browserToolsAvailable ?? true;
+      const computerToolsAvailable = request.computerToolsAvailable ?? true;
+      const withheld = new Set<McpInvocationContext.McpCapability>([
+        ...(browserToolsAvailable ? [] : (["preview"] as const)),
+        ...(computerToolsAvailable ? [] : (["computer"] as const)),
+      ]);
       const scope: McpInvocationContext.McpInvocationScope = {
         environmentId,
         threadId: ThreadId.make(request.threadId),
         providerSessionId,
         providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
         capabilities: new Set(
-          browserToolsAvailable
-            ? McpInvocationContext.ALL_MCP_CAPABILITIES
-            : McpInvocationContext.ALL_MCP_CAPABILITIES.filter(
-                (capability) => capability !== "preview",
-              ),
+          McpInvocationContext.ALL_MCP_CAPABILITIES.filter(
+            (capability) => !withheld.has(capability),
+          ),
         ),
         issuedAt,
       };
@@ -158,6 +167,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           endpoint,
           authorizationHeader: `Bearer ${rawToken}`,
           browserToolsAvailable,
+          computerToolsAvailable,
         },
       };
     },

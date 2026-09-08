@@ -17,6 +17,7 @@ export const layer = Layer.succeed(
           endpoint: "http://127.0.0.1/mcp",
           authorizationHeader: `Bearer mcp-test:${threadId}`,
           browserToolsAvailable: true,
+          computerToolsAvailable: true,
         },
       }),
     resolve: () => Effect.succeed(undefined),

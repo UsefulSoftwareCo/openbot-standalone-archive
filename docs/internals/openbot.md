@@ -185,6 +185,24 @@ object schema, and one non-object input schema makes MCP clients reject the whol
 server. `apps/server/src/mcp/toolkits/worktree/registration.test.ts` asserts this
 across every registered toolkit.
 
+## Computer
+
+The computer is the host's _shared_ desktop session, not a desktop per agent: one
+pointer, one keyboard, one frontmost app, and a managed display (macOS virtual
+display, headless X screen) is one more screen of that same session. Input from
+every source lands in one ordered per-display queue behind a single lease. A
+human who takes control holds it until they stop; an agent batch takes the free
+lease, delivers, releases. An agent that tries while a person controls fails with
+`not_controlling`, which its tool description tells it to report, not retry.
+
+Agents reach it through the `t3-code` MCP `computer_*` tools, gated on the
+`computer` capability that
+[`McpSessionRegistry`](../../apps/server/src/mcp/McpSessionRegistry.ts) withholds
+when `enableAgentComputerAccess` is off. `computer_screenshot` is registered by
+hand in [`McpHttpServer`](../../apps/server/src/mcp/McpHttpServer.ts) so its JPEG
+leaves as an MCP image block; its `scale` maps image pixels back to the display
+pixels input expects.
+
 ## Skills
 
 [`materializeOpenbotSkills`](../../apps/server/src/openbot/skills/index.ts) writes

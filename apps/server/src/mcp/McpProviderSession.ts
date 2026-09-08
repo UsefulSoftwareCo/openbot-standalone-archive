@@ -14,6 +14,13 @@ export interface McpProviderSessionConfig {
    * call would reject.
    */
   readonly browserToolsAvailable: boolean;
+  /**
+   * Whether this credential includes the "computer" capability, read by
+   * adapters for the same reason as `browserToolsAvailable`: a prompt must not
+   * offer the shared desktop to a session whose every `computer_*` call would
+   * be refused.
+   */
+  readonly computerToolsAvailable: boolean;
 }
 
 const sessionsByThread = new Map<ThreadId, McpProviderSessionConfig>();

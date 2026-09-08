@@ -646,6 +646,7 @@ export function buildCodexTurnStartParams(input: {
   readonly modelSelection: ModelSelection;
   readonly hasT3Mcp?: boolean;
   readonly browserToolsAvailable?: boolean;
+  readonly computerToolsAvailable?: boolean;
 }) {
   return Effect.gen(function* () {
     const runtimeModeDefaults = codexRuntimeModeTurnDefaults(input.runtimePolicy.runtimeMode);
@@ -668,8 +669,14 @@ export function buildCodexTurnStartParams(input: {
       input.hasT3Mcp !== true
         ? undefined
         : input.runtimePolicy.interactionMode === "plan"
-          ? codexPlanModeDeveloperInstructions(input.browserToolsAvailable ?? true)
-          : codexDefaultModeDeveloperInstructions(input.browserToolsAvailable ?? true);
+          ? codexPlanModeDeveloperInstructions(
+              input.browserToolsAvailable ?? true,
+              input.computerToolsAvailable ?? false,
+            )
+          : codexDefaultModeDeveloperInstructions(
+              input.browserToolsAvailable ?? true,
+              input.computerToolsAvailable ?? false,
+            );
     const collaborationMode: CodexSchema.ClientRequest__CollaborationMode | undefined =
       input.runtimePolicy.interactionMode !== "plan" && developerInstructions === undefined
         ? undefined
@@ -4989,6 +4996,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 modelSelection: turnInput.modelSelection,
                 hasT3Mcp: mcpSession !== undefined,
                 browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,
+                computerToolsAvailable: mcpSession?.computerToolsAvailable ?? false,
               });
               yield* Ref.update(pendingRootTurns, (current) => {
                 const updated = new Map(current);

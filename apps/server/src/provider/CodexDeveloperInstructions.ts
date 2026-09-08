@@ -14,6 +14,17 @@ For browser work, first call \`preview_status\`. If no automation-capable previe
 Do not switch to global browser skills, Chrome, Node REPL browser automation, standalone Playwright, or agent-browser merely because the preview is initially closed or a first call fails. Use an alternative browser system only when the T3 preview tools are absent, the user explicitly requests another browser, or \`preview_open\` returns an explicit unsupported/unavailable error. A failed T3 preview tool call should be inspected and retried with corrected arguments when the error is actionable.
 `;
 
+const T3_CODE_COMPUTER_TOOL_INSTRUCTIONS = `
+
+## T3 Code computer
+
+The \`t3-code\` MCP server also exposes \`computer_*\` tools that drive this host's shared desktop. It is shared: one pointer, one keyboard, one frontmost app, used by the person watching and by any other agent at the same time.
+
+Start with \`computer_status\`, and take a \`computer_screenshot\` before you act so you know what is on screen. Prefer \`computer_list_windows\` and \`computer_focus_window\` over clicking at a remembered position. Coordinates are pixels of the display you name, so multiply any point you measured on a screenshot by that screenshot's \`scale\`.
+
+If \`computer_input\` fails with \`not_controlling\`, a person has taken control of the desktop. Tell them what you were trying to do and stop; do not retry in a loop.
+`;
+
 /**
  * The browser block is omitted entirely when the preview tools aren't attached.
  * Describing `preview_*` tools that aren't in the turn's tool list would be
@@ -24,8 +35,14 @@ Do not switch to global browser skills, Chrome, Node REPL browser automation, st
 const browserToolInstructions = (browserToolsAvailable: boolean): string =>
   browserToolsAvailable ? T3_CODE_BROWSER_TOOL_INSTRUCTIONS : "";
 
+/** Same reason as the browser block: never describe a desktop this session's
+    credential cannot touch. */
+const computerToolInstructions = (computerToolsAvailable: boolean): string =>
+  computerToolsAvailable ? T3_CODE_COMPUTER_TOOL_INSTRUCTIONS : "";
+
 export const codexPlanModeDeveloperInstructions = (
   browserToolsAvailable: boolean,
+  computerToolsAvailable = false,
 ): string => `<collaboration_mode># Plan Mode (Conversational)
 
 You work in 3 phases, and you should *chat your way* to a great plan before finalizing it. A great plan is very detailed-intent- and implementation-wise-so that it can be handed to another engineer or agent to be implemented right away. It must be **decision complete**, where the implementer does not need to make any decisions.
@@ -154,11 +171,12 @@ Do not ask "should I proceed?" in the final output. The user can easily switch o
 Only produce at most one \`<proposed_plan>\` block per turn, and only when you are presenting a complete spec.
 
 If the user stays in Plan mode and asks for revisions after a prior \`<proposed_plan>\`, any new \`<proposed_plan>\` must be a complete replacement. If the user indicates that the prior plan is not acceptable but does not provide enough information to produce a complete replacement, address the concern and continue planning without producing a \`<proposed_plan>\` block. If the follow-up neither requires changes nor calls the plan into question (e.g. clarifying question), answer it before the block, then reproduce the prior \`<proposed_plan>\` unchanged.
-${browserToolInstructions(browserToolsAvailable)}
+${browserToolInstructions(browserToolsAvailable)}${computerToolInstructions(computerToolsAvailable)}
 </collaboration_mode>`;
 
 export const codexDefaultModeDeveloperInstructions = (
   browserToolsAvailable: boolean,
+  computerToolsAvailable = false,
 ): string => `<collaboration_mode># Collaboration Mode: Default
 
 You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
@@ -170,7 +188,7 @@ Your active mode changes only when new developer instructions with a different \
 Use the \`request_user_input\` tool only when it is listed in the available tools for this turn.
 
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
-${browserToolInstructions(browserToolsAvailable)}
+${browserToolInstructions(browserToolsAvailable)}${computerToolInstructions(computerToolsAvailable)}
 ${T3_CODE_ORCHESTRATION_INSTRUCTIONS}
 </collaboration_mode>`;
 
@@ -188,11 +206,18 @@ export function buildCodexDeveloperInstructions(
    * setting, so the prompt cannot claim tools the turn doesn't have.
    */
   browserToolsAvailable = true,
+  /**
+   * Whether that same credential grants the "computer" capability. Defaults to
+   * off: an unstated computer is one the caller has not confirmed, and
+   * describing `computer_*` tools that are not in the turn's tool list would
+   * invite calls that can only fail.
+   */
+  computerToolsAvailable = false,
 ): string {
   const base =
     interactionMode === "plan"
-      ? codexPlanModeDeveloperInstructions(browserToolsAvailable)
-      : codexDefaultModeDeveloperInstructions(browserToolsAvailable);
+      ? codexPlanModeDeveloperInstructions(browserToolsAvailable, computerToolsAvailable)
+      : codexDefaultModeDeveloperInstructions(browserToolsAvailable, computerToolsAvailable);
   return `${base}
 
 ${buildRuntimeInstructions({ harness: "Codex", ...runtime })}`;

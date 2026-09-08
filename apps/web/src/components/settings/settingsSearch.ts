@@ -356,6 +356,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["allow open drive preview tools sessions"],
   },
   {
+    id: "agent-computer-access",
+    title: "Agent computer access",
+    to: "/settings/integrations",
+    searchTerms: ["allow see control shared desktop computer tools sessions"],
+  },
+  {
     id: "browser-profiles",
     title: "Browser profiles",
     to: "/settings/integrations",

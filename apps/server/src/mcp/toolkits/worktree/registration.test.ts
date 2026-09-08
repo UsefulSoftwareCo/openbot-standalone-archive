@@ -11,6 +11,7 @@ import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import { ThreadManagementService } from "../../../orchestration-v2/ThreadManagementService.ts";
 import { OpenbotChannelService } from "../../../openbot/OpenbotChannelService.ts";
+import { OpenbotComputerSession } from "../../../openbot/computer/OpenbotComputerSession.ts";
 import { OpenbotQuestionService } from "../../../openbot/OpenbotQuestionService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../../../project/ProjectSetupScriptRunner.ts";
@@ -26,6 +27,7 @@ const StubServicesLive = Layer.mergeAll(
   Layer.mock(ThreadManagementService)({}),
   Layer.mock(OpenbotChannelService)({}),
   Layer.mock(OpenbotQuestionService)({}),
+  Layer.mock(OpenbotComputerSession)({}),
   Layer.mock(ProviderRegistry)({}),
   Layer.mock(ScheduledTaskService)({}),
   Layer.mock(ProjectService.ProjectService)({}),
