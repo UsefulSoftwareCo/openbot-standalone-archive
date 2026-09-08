@@ -10,6 +10,8 @@ export type OpenbotRoute =
   | { readonly type: "chat"; readonly channelId: OpenbotChannelId }
   /** The composer-first draft page. Nothing exists until its first message. */
   | { readonly type: "new-chat" }
+  /** The host's shared desktop, full pane: one canvas, one keyboard, one lease. */
+  | { readonly type: "computer" }
   | {
       readonly type: "project-settings";
       readonly projectId: OpenbotProjectId;
@@ -31,6 +33,15 @@ export type KnowledgePage = Extract<OpenbotPage, { readonly type: "knowledge" }>
 /** The knowledge tab of one project's settings. */
 export function projectKnowledgePage(projectId: OpenbotProjectId): OpenbotPage {
   return { type: "project-settings", projectId, tab: "knowledge" };
+}
+
+/**
+ * Whether the conversation details rail belongs next to what the main area is
+ * showing. The rail is about the selected chat, so a full-pane page owns the
+ * width instead — most of all the computer, whose stage is the point.
+ */
+export function detailsRailApplies(page: OpenbotPage | null): boolean {
+  return page === null;
 }
 
 /**

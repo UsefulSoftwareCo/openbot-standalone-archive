@@ -7,6 +7,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react
 import { ChannelView } from "./components/ChannelView";
 import { ChatHeader } from "./components/ChatHeader";
 import { Composer } from "./components/Composer";
+import { ComputerPage } from "./components/computer/ComputerPage";
 import { ConversationDetails } from "./components/ConversationDetails";
 import { KnowledgeEditorPage } from "./components/KnowledgeEditorPage";
 import { NewChatPage } from "./components/NewChatPage";
@@ -26,7 +27,12 @@ import {
   useProjectsState,
 } from "./state/channels";
 import { commandErrorText } from "./state/errors";
-import { knowledgeReturnPage, type OpenbotPage, projectKnowledgePage } from "./state/route";
+import {
+  detailsRailApplies,
+  knowledgeReturnPage,
+  type OpenbotPage,
+  projectKnowledgePage,
+} from "./state/route";
 
 const ProjectIconPicker = lazy(() => import("./components/ProjectIconPicker"));
 
@@ -255,6 +261,12 @@ export function App() {
             }}
             onUnsavedChange={setUnsaved}
           />
+        ) : page?.type === "computer" ? (
+          <ComputerPage
+            environmentId={environmentId}
+            onClose={() => openPage(null)}
+            onOpenSidebar={() => setSidebarOpen(true)}
+          />
         ) : page?.type === "new-chat" || channels.length === 0 ? (
           // An empty account lands here too: the draft page is also the way to
           // make the first chat, and the sidebar still offers a new project.
@@ -323,7 +335,7 @@ export function App() {
           </>
         )}
       </main>
-      {environmentId !== null && view !== null && (
+      {environmentId !== null && view !== null && detailsRailApplies(page) && (
         <>
           {detailsOpen && (
             <div className="hidden h-full w-80 shrink-0 border-l border-border lg:block">
@@ -332,6 +344,7 @@ export function App() {
                 environmentId={environmentId}
                 view={view}
                 onClose={() => setDetailsOpen(false)}
+                onOpenComputer={() => openPage({ type: "computer" })}
               />
             </div>
           )}
@@ -343,6 +356,10 @@ export function App() {
                 environmentId={environmentId}
                 view={view}
                 onClose={() => setMobileDetailsOpen(false)}
+                onOpenComputer={() => {
+                  setMobileDetailsOpen(false);
+                  openPage({ type: "computer" });
+                }}
               />
             </DialogPopup>
           </Dialog>

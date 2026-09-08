@@ -28,7 +28,7 @@ import {
   useAtomCommand,
   useRoutines,
 } from "../state/channels";
-import ComputerPanel from "./ComputerPanel";
+import { ComputerCard } from "./computer/ComputerCard";
 import { describeCron } from "./cronDescription";
 
 const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -80,10 +80,13 @@ export function ConversationDetails({
   environmentId,
   view,
   onClose,
+  onOpenComputer,
 }: {
   readonly environmentId: EnvironmentId;
   readonly view: OpenbotChannelView;
   readonly onClose: () => void;
+  /** Opens the host's screen full pane; the card here is only a glance at it. */
+  readonly onOpenComputer: () => void;
 }) {
   const query = useRoutines(environmentId);
   const result = Option.getOrUndefined(AsyncResult.value(query));
@@ -121,7 +124,7 @@ export function ConversationDetails({
           </p>
         ) : page.type === "list" ? (
           <>
-            <ComputerPanel environmentId={environmentId} />
+            <ComputerCard environmentId={environmentId} onOpen={onOpenComputer} />
             <div className="mb-3 flex items-center justify-between">
               <h2 className="font-medium text-sm">Routines</h2>
               <Button

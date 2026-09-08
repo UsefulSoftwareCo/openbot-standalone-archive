@@ -1,7 +1,7 @@
 import { OpenbotKnowledgeId, OpenbotProjectId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
-import { knowledgeReturnPage, projectKnowledgePage } from "./route";
+import { detailsRailApplies, knowledgeReturnPage, projectKnowledgePage } from "./route";
 
 const projectId = OpenbotProjectId.make("openbot-project:groceries");
 const knowledgeId = OpenbotKnowledgeId.make("openbot-knowledge:pantry");
@@ -23,5 +23,17 @@ describe("knowledgeReturnPage", () => {
     expect(knowledgeReturnPage({ type: "knowledge", knowledgeId: null, projectId })).toEqual(
       projectKnowledgePage(projectId),
     );
+  });
+});
+
+describe("detailsRailApplies", () => {
+  it("shows the chat's details next to a chat", () => {
+    expect(detailsRailApplies(null)).toBe(true);
+  });
+
+  it("gives the whole width to a full-pane page, the computer included", () => {
+    expect(detailsRailApplies({ type: "computer" })).toBe(false);
+    expect(detailsRailApplies({ type: "new-chat" })).toBe(false);
+    expect(detailsRailApplies({ type: "knowledge", knowledgeId: null, projectId })).toBe(false);
   });
 });
