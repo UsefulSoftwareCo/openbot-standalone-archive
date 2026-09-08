@@ -18,6 +18,7 @@
     "@t3tools/contracts": "workspace:*",
     "@t3tools/shared": "workspace:*",
     "@t3tools/ui": "workspace:*",
+    "cronstrue": "^3.24.0",
     "effect": "catalog:",
     "lucide-react": "^0.564.0",
     "react": "19.2.6",

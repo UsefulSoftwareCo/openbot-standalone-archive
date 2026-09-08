@@ -28,6 +28,7 @@ import {
   useRoutines,
 } from "../state/channels";
 import ComputerPanel from "./ComputerPanel";
+import { describeCron } from "./cronDescription";
 
 const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const fieldClass = "w-full rounded-md border border-border bg-background px-3 py-2 text-sm";
@@ -38,7 +39,8 @@ function scheduleLabel(schedule: ScheduledTask["schedule"]): string {
   if (schedule.type === "interval") return `Every ${schedule.everyMs / 60000} minutes`;
   // A cron schedule is only meaningful with its zone: the same expression in
   // UTC and in a local zone are different routines.
-  if (schedule.type === "cron") return `${schedule.expression} (${schedule.timeZone})`;
+  if (schedule.type === "cron")
+    return `${describeCron(schedule.expression) ?? schedule.expression} (${schedule.timeZone})`;
   const selected = schedule.weekdays;
   const label =
     selected === undefined || selected.length === 0 || selected.length === 7
@@ -253,6 +255,16 @@ function RoutineEditor({
         ? Number.isFinite(Number(minutes)) && Number(minutes) >= 1
         : /^([01]\d|2[0-3]):[0-5]\d$/.test(time) && weekdays.length > 0;
   const valid = title.trim().length > 0 && prompt.trim().length > 0 && scheduleValid;
+  // Reads back what the typed expression means, so the user is not left
+  // decoding their own cron. Stays honest while the expression is half-typed.
+  const cronDescription = describeCron(cronExpression);
+  const cronZone = cronTimeZone.trim();
+  const cronPreview =
+    cronDescription === undefined
+      ? "Not a complete cron expression yet."
+      : cronZone.length === 0
+        ? cronDescription
+        : `${cronDescription} · ${cronZone}`;
   const persist = async () => {
     if (!valid) return undefined;
     const input: ScheduledTaskUpsertInput = {
@@ -430,6 +442,7 @@ function RoutineEditor({
                 value={cronTimeZone}
                 onChange={(event) => setCronTimeZone(event.target.value)}
               />
+              <p className="text-muted-foreground text-xs">{cronPreview}</p>
               <p className="text-muted-foreground text-xs">
                 Five fields: minute, hour, day of month, month, weekday. Evaluated in the time zone
                 above.
