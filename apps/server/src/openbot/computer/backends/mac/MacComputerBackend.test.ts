@@ -20,6 +20,8 @@ import { layer as macComputerBackendLayer, macPermissionDetail } from "./MacComp
 
 const DISPLAY_ID = OpenbotComputerDisplayId.make("37");
 const OTHER_DISPLAY_ID = OpenbotComputerDisplayId.make("38");
+/** A display the backend has never listed, standing in for one just unplugged. */
+const UNKNOWN_DISPLAY_ID = OpenbotComputerDisplayId.make("999999");
 const WINDOW_ID = OpenbotComputerWindowId.make("w-1");
 
 const HELPER_APP = "/Applications/T3ComputerHelper.app";
@@ -323,6 +325,40 @@ describe("MacComputerBackend", () => {
           events: [{ type: "release-all" }],
         });
       }).pipe(Effect.provide(stub.layer));
+    }),
+  );
+
+  /**
+   * Cleanup has to survive the display it names. A monitor unplugged mid-drag
+   * leaves a button down, and the release for it arrives addressed to a display
+   * that no longer exists: the backend must forward it rather than decide the
+   * target is unknown, because the helper releases held input globally.
+   */
+  it.effect("forwards a release-all-only batch for a display it has never seen", () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStub({
+        reply: () => ({
+          id: 1,
+          type: "input-result",
+          delivered: 1,
+          rejected: [],
+        }),
+      });
+
+      const result = yield* Effect.gen(function* () {
+        const backend = yield* ComputerBackend;
+        return yield* backend.input(UNKNOWN_DISPLAY_ID, [{ type: "release-all" }]);
+      }).pipe(Effect.provide(stub.layer));
+
+      expect(result).toEqual({ delivered: 1, rejected: [] });
+      const commands = yield* Queue.takeAll(stub.sent);
+      expect(Array.from(commands)).toEqual([
+        {
+          type: "input",
+          displayId: UNKNOWN_DISPLAY_ID,
+          events: [{ type: "release-all" }],
+        },
+      ]);
     }),
   );
 

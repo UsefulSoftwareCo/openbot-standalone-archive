@@ -263,6 +263,34 @@ struct CommandTests {
         if case .event = events[2] {} else { Issue.record("expected the third event to survive") }
     }
 
+    /// The unplug case: cleanup for a display that is gone has to be
+    /// recognisable without resolving that display, or the release fails
+    /// exactly when it matters.
+    @Test("a release-all-only batch is recognised without a display")
+    func releaseOnlyNeedsNoDisplay() throws {
+        let json = #"{"id":2,"type":"input","events":[{"type":"release-all"}]}"#
+        let command = try Command(line: Data(json.utf8))
+        let events = try command.inputEvents()
+
+        #expect(Command.isReleaseOnly(events))
+        // The batch parses and is classified even though there is no display to
+        // name, let alone to find.
+        #expect(throws: HelperError.self) { _ = try command.displayId() }
+    }
+
+    @Test("a batch with anything else in it is not release-only")
+    func mixedIsNotReleaseOnly() throws {
+        let json = """
+            {"id":3,"type":"input","displayId":"9","events":[
+              {"type":"release-all"},{"type":"move","point":{"x":1,"y":1}}
+            ]}
+            """
+        let events = try Command(line: Data(json.utf8)).inputEvents()
+        #expect(!Command.isReleaseOnly(events))
+        #expect(!Command.isReleaseOnly([]))
+        #expect(Command.isReleaseOnly([.event(.releaseAll), .event(.releaseAll)]))
+    }
+
     @Test("a malformed command names the field")
     func malformed() {
         #expect(throws: HelperError.self) { _ = try Command(line: Data("not json".utf8)) }
@@ -393,6 +421,44 @@ struct TextDeliveryTests {
 
         #expect(outcome == .cancelled(typed: 2))
         #expect(recorder.downs == ["a", "b"])
+    }
+}
+
+/// The batch shape a driver sends about a display that has gone away.
+///
+/// Nothing here posts input: the controller under test holds nothing, so
+/// `releaseAll` has no button and no key to let go of.
+@Suite("release without a display")
+@MainActor
+struct ReleaseWithoutDisplayTests {
+    @Test("a release-only batch is delivered in full with nothing to resolve")
+    func releaseOnly() {
+        let result = InputController().releaseWithoutDisplay(
+            events: [.event(.releaseAll), .event(.releaseAll)], reason: "no display 7 is attached")
+
+        #expect(result.delivered == 2)
+        #expect(result.rejected.isEmpty)
+    }
+
+    /// A mixed batch still releases; only the events that genuinely needed the
+    /// screen are refused, and as rejections rather than a failed command.
+    @Test("the events that needed the display are rejected, the release is not")
+    func mixedBatch() {
+        let result = InputController().releaseWithoutDisplay(
+            events: [
+                .event(.releaseAll),
+                .event(.move(point: CGPoint(x: 1, y: 1))),
+                .rejected("unknown event type 'nope'"),
+                .event(.text("hello")),
+            ],
+            reason: "no display 7 is attached")
+
+        #expect(result.delivered == 1)
+        #expect(result.rejected.map(\.index) == [1, 2, 3])
+        #expect(result.rejected[0].reason == "no display 7 is attached")
+        // A parse rejection keeps its own reason instead of being relabelled.
+        #expect(result.rejected[1].reason == "unknown event type 'nope'")
+        #expect(result.rejected[2].reason == "no display 7 is attached")
     }
 }
 

@@ -126,6 +126,16 @@ public struct Command {
         }
     }
 
+    /// True when a batch asks for nothing but `release-all`.
+    ///
+    /// Such a batch names a display on the wire but does not need one: held
+    /// buttons and keys belong to the connection rather than to any screen, and
+    /// the batch that most needs to be honoured is the one sent about a display
+    /// that has just been unplugged. Resolving the display first would fail it.
+    public static func isReleaseOnly(_ events: [ParsedInputEvent]) -> Bool {
+        !events.isEmpty && events.allSatisfy { $0 == .event(.releaseAll) }
+    }
+
     static func parseEvent(_ event: [String: Any]) -> ParsedInputEvent {
         func point() -> CGPoint? {
             guard let raw = event["point"] as? [String: Any],

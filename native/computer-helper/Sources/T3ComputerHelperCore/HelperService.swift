@@ -35,6 +35,9 @@ public final class HelperService {
     private let token: String?
     private var lastPermissions: PermissionsRecord
     private var permissionTimer: Timer?
+    /// The screens seen at the last reconfiguration, so the next one can name
+    /// the ones that went away rather than only that something moved.
+    private var knownDisplayIds: Set<CGDirectDisplayID> = []
 
     /// Called when the helper decides it is done, so `main` can tear the
     /// process down on the same path signals use.
@@ -52,8 +55,9 @@ public final class HelperService {
 
     public func start() {
         displays.startWatching()
+        knownDisplayIds = Set(displays.list().map(\.id))
         displays.onDisplaysChanged = { [weak self] in
-            Task { @MainActor in self?.emit(.event(name: "displays-changed")) }
+            Task { @MainActor in self?.displaysChanged() }
         }
         let frameWriter = self.frameWriter
         capture.onFrame = { displayId, width, height, jpeg in
@@ -164,6 +168,21 @@ public final class HelperService {
         connection?.writer.send(record)
     }
 
+    /// A screen appeared or disappeared.
+    ///
+    /// When one disappeared, whatever was held on it can no longer be released
+    /// against it — the driver's own `release-all` would arrive for a display
+    /// that is gone. Held state is global, so releasing here is both possible
+    /// and the only thing that keeps an unplugged monitor from leaving a button
+    /// down on the desktop the user is still sitting at.
+    private func displaysChanged() {
+        let current = Set(displays.list().map(\.id))
+        let vanished = knownDisplayIds.subtracting(current)
+        knownDisplayIds = current
+        if !vanished.isEmpty, input.hasHeldInput { input.releaseAll() }
+        emit(.event(name: "displays-changed"))
+    }
+
     private func checkPermissions() {
         let current = HelperService.readPermissions()
         guard current != lastPermissions else { return }
@@ -266,12 +285,30 @@ public final class HelperService {
 
         case "input":
             let events = try command.inputEvents()
+            let releases = events.contains(.event(.releaseAll))
             // Cancelling before this batch is queued is what makes `release-all`
             // prompt: it stops a text delivery that could otherwise run for
             // minutes, so the release runs behind a queue that drains at once
             // instead of after the sentence.
-            if events.contains(.event(.releaseAll)) { inputJobs.cancelAll() }
-            let display = try requireDisplay(command.displayId())
+            if releases { inputJobs.cancelAll() }
+            // Held buttons and keys are global, so a release has no target to
+            // resolve — and the batch that most needs to be honoured is the one
+            // sent about a display that has just been unplugged. A release-only
+            // batch therefore skips the display entirely, and a mixed batch
+            // whose display is gone still releases, rejecting only the events
+            // that genuinely needed a screen. Resolving first is what used to
+            // leave a button down on the desktop the user is looking at.
+            guard !Command.isReleaseOnly(events) else {
+                enqueueRelease(id: id, events: events, reason: "no display was named")
+                return
+            }
+            let displayId = try command.displayId()
+            guard let display = displays.find(displayId) else {
+                let reason = "no display \(displayId) is attached"
+                guard releases else { throw HelperError(.displayNotFound, reason) }
+                enqueueRelease(id: id, events: events, reason: reason)
+                return
+            }
             // Deliberately not awaited here. The batch answers this command's id
             // when it finishes, and until then the command chain stays free for
             // `capture-stop`, `windows`, and the disconnect cleanup.
@@ -297,6 +334,9 @@ public final class HelperService {
             // queue in milliseconds; waiting for it to type would not.
             inputJobs.cancelAll()
             await inputJobs.settle()
+            // Release before the destroy, never after: once this screen is gone
+            // a held button cannot be released against it, and it stays down.
+            input.releaseAll()
             await capture.stop(displayId: displayId)
             try displays.destroyDisplay(displayId)
             emit(.ok(id: id))
@@ -323,6 +363,20 @@ public final class HelperService {
 
         default:
             throw HelperError(.invalidInput, "unknown command '\(command.type)'")
+        }
+    }
+
+    /// Queues an input batch that has no display to target. The releases in it
+    /// run, and every other event comes back as a rejection carrying `reason`.
+    ///
+    /// It goes through the queue rather than running here so it still lands
+    /// behind the batch it just cancelled: releasing while one is mid-delivery
+    /// only presses everything again.
+    private func enqueueRelease(id: Int, events: [ParsedInputEvent], reason: String) {
+        inputJobs.enqueue { [weak self] in
+            guard let self else { return }
+            let result = self.input.releaseWithoutDisplay(events: events, reason: reason)
+            self.emit(.inputResult(id: id, delivered: result.delivered, rejected: result.rejected))
         }
     }
 

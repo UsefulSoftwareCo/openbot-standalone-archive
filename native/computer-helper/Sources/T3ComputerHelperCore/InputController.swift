@@ -32,6 +32,11 @@ public final class InputController {
     /// Held state, so a drag posts drag events, a held modifier reaches the
     /// keystrokes after it, and a disconnect can be cleaned up by one
     /// `release-all` instead of guesswork.
+    ///
+    /// Deliberately global rather than keyed by display. There is one physical
+    /// keyboard and one pointer on this login session however many screens it
+    /// has, and cleanup has to keep working for the display that is no longer
+    /// there — which is exactly the case a per-display map could not serve.
     private var heldButtons: Set<MouseButton> = []
     private var heldKeys: Set<CGKeyCode> = []
     private var lastGlobalPoint = CGPoint.zero
@@ -180,6 +185,44 @@ public final class InputController {
 
     private func unknownKey(_ code: String) -> String {
         "unknown key code '\(code)'; expected a W3C KeyboardEvent.code such as 'KeyA' or 'ArrowLeft'"
+    }
+
+    /// True while a button or key is still down.
+    ///
+    /// Cleanup paths that are not answering a request — a monitor being
+    /// unplugged — use this so they post releases only when something is
+    /// actually held.
+    public var hasHeldInput: Bool { !heldButtons.isEmpty || !heldKeys.isEmpty }
+
+    /// Delivers the `release-all` events of a batch whose display could not be
+    /// resolved, and rejects the rest.
+    ///
+    /// Every other event kind names a point or expects a focused screen, so
+    /// those genuinely need the display and come back as rejections. The
+    /// release does not, and running it here is what keeps an unplugged monitor
+    /// from leaving a button down on the desktop the user is still looking at.
+    ///
+    /// - Parameter reason: why the other events could not run, reported per
+    ///   event so the driver learns what was dropped.
+    public func releaseWithoutDisplay(
+        events: [ParsedInputEvent], reason: String
+    ) -> (delivered: Int, rejected: [InputRejection]) {
+        // Before anything else in the batch is judged: cleanup must not depend
+        // on the outcome of the events around it.
+        if events.contains(.event(.releaseAll)) { releaseAll() }
+        var delivered = 0
+        var rejected: [InputRejection] = []
+        for (index, entry) in events.enumerated() {
+            switch entry {
+            case let .rejected(why):
+                rejected.append(InputRejection(index: index, reason: why))
+            case .event(.releaseAll):
+                delivered += 1
+            case .event:
+                rejected.append(InputRejection(index: index, reason: reason))
+            }
+        }
+        return (delivered, rejected)
     }
 
     /// Releases every button and key this connection is holding.
