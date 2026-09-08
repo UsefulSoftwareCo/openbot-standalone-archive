@@ -335,8 +335,8 @@ describe("LinuxX11ComputerBackend", () => {
 
       expect(result).toEqual({ delivered: 3, rejected: [] });
       expect(linesFor(host, "xdotool")).toEqual([
-        "mousemove --sync 10 20",
-        "mousemove --sync 10 20 click --repeat 1 --delay 60 1",
+        "mousemove 10 20",
+        "mousemove 10 20 click --repeat 1 --delay 60 1",
         "type --delay 12 -- hi",
       ]);
       const first = host.recordsFor(toolPath("xdotool"))[0];
@@ -359,7 +359,7 @@ describe("LinuxX11ComputerBackend", () => {
         { index: 0, reason: "unknown key Fn" },
         { index: 2, reason: "scroll had no delta" },
       ]);
-      expect(linesFor(host, "xdotool")).toEqual(["mousemove --sync 1 1"]);
+      expect(linesFor(host, "xdotool")).toEqual(["mousemove 1 1"]);
     }),
   );
 
@@ -391,7 +391,7 @@ describe("LinuxX11ComputerBackend", () => {
       expect(result).toEqual({ delivered: 1, rejected: [] });
       expect(linesFor(host, "xdotool")).toEqual([
         "keydown -- Control_L",
-        "mousemove --sync 4 4 mousedown 1",
+        "mousemove 4 4 mousedown 1",
         "keyup -- Control_L",
         "mouseup 1",
       ]);
@@ -479,7 +479,7 @@ describe("LinuxX11ComputerBackend", () => {
             : defaultRespond(command),
       });
       yield* shape.input(displayId(":0/HDMI-1"), [{ type: "move", point: { x: 5, y: 5 } }]);
-      expect(linesFor(host, "xdotool")).toEqual(["mousemove --sync 1925 5"]);
+      expect(linesFor(host, "xdotool")).toEqual(["mousemove 1925 5"]);
     }),
   );
 

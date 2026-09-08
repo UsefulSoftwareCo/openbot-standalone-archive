@@ -400,10 +400,17 @@ function withoutLast<A>(values: ReadonlyArray<A>, value: A): ReadonlyArray<A> {
  * The xdotool invocations that apply one input event, plus the held state they
  * leave behind.
  *
- * One process per event, run in order by the caller: xdotool has no batch mode
- * that keeps a pointer warp and the click that follows it atomic, and two
- * overlapping xdotool runs race inside the X server (measured: "wsok" typed,
- * "wosk" received).
+ * One process per event, run in order by the caller: two overlapping xdotool
+ * runs race inside the X server (measured: "wsok" typed, "wosk" received). A
+ * warp and the click that follows it stay together by being one invocation,
+ * `mousemove X Y click ...`, which xdotool applies in the order written.
+ *
+ * `mousemove` never takes `--sync`. That flag waits for a pointer-motion event
+ * confirming the new position, and when the pointer is already at X,Y the X
+ * server sends no motion at all, so xdotool blocks forever (measured: `timeout
+ * 2s xdotool mousemove --sync 700 230` exits 124 with the pointer already at
+ * 700,230). A hover followed by a click on the same point is the ordinary case,
+ * and it would wedge the whole ordered input path behind the session lock.
  */
 export function xdotoolArgs(
   event: OpenbotComputerInputEvent,
@@ -413,7 +420,7 @@ export function xdotoolArgs(
   switch (event.type) {
     case "move": {
       const [x, y] = rootPoint(surface, event.point);
-      return { _tag: "commands", commands: [["mousemove", "--sync", x, y]], held };
+      return { _tag: "commands", commands: [["mousemove", x, y]], held };
     }
     case "button": {
       const [x, y] = rootPoint(surface, event.point);
@@ -421,7 +428,7 @@ export function xdotoolArgs(
       const action = event.action === "down" ? "mousedown" : "mouseup";
       return {
         _tag: "commands",
-        commands: [["mousemove", "--sync", x, y, action, String(button)]],
+        commands: [["mousemove", x, y, action, String(button)]],
         held: {
           keys: held.keys,
           buttons:
@@ -434,7 +441,6 @@ export function xdotoolArgs(
       const button = String(BUTTON_NUMBERS[event.button]);
       const click = [
         "mousemove",
-        "--sync",
         x,
         y,
         "click",
@@ -465,18 +471,7 @@ export function xdotoolArgs(
       return {
         _tag: "commands",
         commands: [
-          [
-            "mousemove",
-            "--sync",
-            x,
-            y,
-            "click",
-            "--repeat",
-            String(steps),
-            "--delay",
-            "10",
-            String(button),
-          ],
+          ["mousemove", x, y, "click", "--repeat", String(steps), "--delay", "10", String(button)],
         ],
         held,
       };

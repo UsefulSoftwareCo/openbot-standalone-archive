@@ -190,18 +190,18 @@ describe("keysymForCode", () => {
 });
 
 describe("xdotoolArgs", () => {
-  it("warps the pointer with --sync so the click behind it cannot overtake it", () => {
+  it("warps the pointer to a rounded, root-relative point", () => {
     expect(commandsOf(plan({ type: "move", point: { x: 10.4, y: 20.6 } }))).toEqual([
-      ["mousemove", "--sync", "10", "21"],
+      ["mousemove", "10", "21"],
     ]);
   });
 
   it("clamps a point onto the display and offsets it into the root window", () => {
     expect(commandsOf(plan({ type: "move", point: { x: -5, y: 9999 } }, SECOND_MONITOR))).toEqual([
-      ["mousemove", "--sync", "1920", "1439"],
+      ["mousemove", "1920", "1439"],
     ]);
     expect(commandsOf(plan({ type: "move", point: { x: 10, y: 10 } }, SECOND_MONITOR))).toEqual([
-      ["mousemove", "--sync", "1930", "10"],
+      ["mousemove", "1930", "10"],
     ]);
   });
 
@@ -212,21 +212,21 @@ describe("xdotoolArgs", () => {
       action: "down",
       point: { x: 5, y: 5 },
     });
-    expect(commandsOf(down)).toEqual([["mousemove", "--sync", "5", "5", "mousedown", "1"]]);
+    expect(commandsOf(down)).toEqual([["mousemove", "5", "5", "mousedown", "1"]]);
     expect(down._tag === "commands" && down.held.buttons).toEqual([1]);
 
     const up = xdotoolArgs(
       { type: "button", button: "left", action: "up", point: { x: 40, y: 40 } },
       { surface: WHOLE_SCREEN, held: { keys: [], buttons: [1] } },
     );
-    expect(commandsOf(up)).toEqual([["mousemove", "--sync", "40", "40", "mouseup", "1"]]);
+    expect(commandsOf(up)).toEqual([["mousemove", "40", "40", "mouseup", "1"]]);
     expect(up._tag === "commands" && up.held.buttons).toEqual([]);
   });
 
   it("repeats a click for a double or triple click", () => {
     expect(
       commandsOf(plan({ type: "click", button: "right", count: 2, point: { x: 1, y: 2 } })),
-    ).toEqual([["mousemove", "--sync", "1", "2", "click", "--repeat", "2", "--delay", "60", "3"]]);
+    ).toEqual([["mousemove", "1", "2", "click", "--repeat", "2", "--delay", "60", "3"]]);
   });
 
   it("brackets a modified click with its own modifiers and holds none of them", () => {
@@ -263,7 +263,7 @@ describe("xdotoolArgs", () => {
   it("emits one scroll command at the pointer position", () => {
     expect(
       commandsOf(plan({ type: "scroll", point: { x: 8, y: 9 }, deltaX: 0, deltaY: 120 })),
-    ).toEqual([["mousemove", "--sync", "8", "9", "click", "--repeat", "3", "--delay", "10", "5"]]);
+    ).toEqual([["mousemove", "8", "9", "click", "--repeat", "3", "--delay", "10", "5"]]);
   });
 
   it("rejects a scroll with no delta instead of pressing a random button", () => {
@@ -322,6 +322,39 @@ describe("xdotoolArgs", () => {
     expect(commandsOf(plan({ type: "text", text: "--version" }))).toEqual([
       ["type", "--delay", "12", "--", "--version"],
     ]);
+  });
+
+  it("never passes --sync to mousemove, which hangs when the pointer is already there", () => {
+    const events: ReadonlyArray<Parameters<typeof xdotoolArgs>[0]> = [
+      { type: "move", point: { x: 10, y: 20 } },
+      { type: "button", button: "left", action: "down", point: { x: 10, y: 20 } },
+      { type: "button", button: "left", action: "up", point: { x: 10, y: 20 } },
+      { type: "click", button: "left", count: 2, point: { x: 10, y: 20 } },
+      { type: "click", button: "right", count: 1, point: { x: 10, y: 20 }, modifiers: ["control"] },
+      { type: "scroll", point: { x: 10, y: 20 }, deltaX: 0, deltaY: 120 },
+      { type: "key", key: "KeyA", action: "down" },
+      { type: "key-press", key: "Enter" },
+      { type: "text", text: "hi" },
+      { type: "release-all" },
+    ];
+    const argv = events.flatMap((event) =>
+      commandsOf(plan(event, WHOLE_SCREEN, { keys: ["ctrl+a"], buttons: [1] })),
+    );
+    expect(argv.length).toBeGreaterThan(0);
+    expect(argv.filter((command) => command.includes("--sync"))).toEqual([]);
+  });
+
+  it("issues the same argv for a click at the pointer's current position", () => {
+    // The plan carries no pointer position, so a click on the point the last
+    // event already moved to is byte-for-byte the first one: a complete
+    // warp-then-click that xdotool can finish without waiting for motion.
+    const click = { type: "click", button: "left", count: 1, point: { x: 10, y: 20 } } as const;
+    const expected = [["mousemove", "10", "20", "click", "--repeat", "1", "--delay", "60", "1"]];
+    expect(commandsOf(plan({ type: "move", point: { x: 10, y: 20 } }))).toEqual([
+      ["mousemove", "10", "20"],
+    ]);
+    expect(commandsOf(plan(click))).toEqual(expected);
+    expect(commandsOf(plan(click))).toEqual(expected);
   });
 
   it("types long text as several processes so a stop lands inside one of them", () => {
