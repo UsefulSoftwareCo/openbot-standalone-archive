@@ -1,6 +1,7 @@
 import { OpenbotComputerDisplayId, OpenbotComputerWindowId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
@@ -50,6 +51,9 @@ const makeStub = (options: {
   readonly hello?: HelperHelloRecord;
   readonly reply?: (command: HelperCommandWithoutId) => HelperRecord;
   readonly binaryFailure?: ComputerHelperNotFound;
+  /** Commands the fake helper never answers, so a test can interrupt one the
+      way the session does when control is dropped mid-batch. */
+  readonly stall?: (command: HelperCommandWithoutId) => boolean;
 }) =>
   Effect.gen(function* () {
     const sent = yield* Queue.unbounded<HelperCommandWithoutId>();
@@ -61,7 +65,12 @@ const makeStub = (options: {
     const client = Layer.succeed(
       ComputerHelperClient,
       ComputerHelperClient.of({
-        request: (command) => Queue.offer(sent, command).pipe(Effect.as(reply(command))),
+        request: (command) =>
+          Queue.offer(sent, command).pipe(
+            Effect.andThen(
+              options.stall?.(command) === true ? Effect.never : Effect.succeed(reply(command)),
+            ),
+          ),
         requestFrame: (command) =>
           Queue.offer(sent, command).pipe(
             Effect.as({
@@ -281,6 +290,39 @@ describe("MacComputerBackend", () => {
 
       const commands = yield* Queue.takeAll(stub.sent);
       expect(commands.map((command) => command.type)).toEqual(["capture-start", "capture-stop"]);
+    }),
+  );
+
+  /**
+   * Interruption is the contract's cancel signal, but the helper is a separate
+   * process typing at a fixed pace: it hears about it only if something tells
+   * it, and `release-all` is what cancels the batch it is still delivering.
+   */
+  it.effect("tells the helper to release everything when the batch is interrupted", () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStub({
+        stall: (command) =>
+          command.type === "input" && command.events.some((event) => event.type === "text"),
+      });
+
+      yield* Effect.gen(function* () {
+        const backend = yield* ComputerBackend;
+        const typing = yield* backend
+          .input(DISPLAY_ID, [{ type: "text", text: "a".repeat(4096) }])
+          .pipe(Effect.forkChild);
+
+        const started = yield* Queue.take(stub.sent);
+        expect(started.type).toBe("input");
+
+        yield* Fiber.interrupt(typing);
+
+        const cancelling = yield* Queue.take(stub.sent);
+        expect(cancelling).toEqual({
+          type: "input",
+          displayId: DISPLAY_ID,
+          events: [{ type: "release-all" }],
+        });
+      }).pipe(Effect.provide(stub.layer));
     }),
   );
 

@@ -196,6 +196,17 @@ export const make = Effect.fn("openbot.computer.macComputerBackend.make")(functi
             } satisfies OpenbotComputerInputResult)
           : Effect.fail(wrongReply(record, "input")),
       ),
+      // Interruption is the cancel signal, and the helper hears about it only
+      // through a command: `release-all` cancels the batch it is still
+      // delivering, which for a long `text` event is the difference between
+      // stopping now and typing for another two minutes. The session sends one
+      // of these too when control is dropped; asking twice releases nothing
+      // that was not already released.
+      Effect.onInterrupt(() =>
+        Effect.ignore(
+          client.request({ type: "input", displayId, events: [{ type: "release-all" }] }),
+        ),
+      ),
     );
 
   const createDisplay: ComputerBackendShape["createDisplay"] = (create) =>

@@ -53,6 +53,14 @@ const REQUEST_TIMEOUT = Duration.seconds(10);
 /** Screen capture and virtual display creation both wait on the window server. */
 const SLOW_REQUEST_TIMEOUT = Duration.seconds(30);
 const SLOW_COMMANDS: ReadonlySet<string> = new Set(["screenshot", "create-display"]);
+/** Typing is paced at the helper end — 15ms between key phases, measured, since
+    a faster string loses characters — so a long `text` event honestly takes
+    minutes. A flat deadline would report failure while the helper was still
+    typing, and the batch would keep going after the caller gave up. */
+const INPUT_TIMEOUT_PER_TEXT_CHARACTER = Duration.millis(40);
+/** A full batch of full text events is hours of typing at that rate. Past this
+    the helper is the wrong thing to be waiting on. */
+const MAX_INPUT_TIMEOUT = Duration.minutes(10);
 const INITIAL_RESTART_DELAY = Duration.millis(500);
 const MAX_RESTART_DELAY = Duration.seconds(10);
 const FAILURE_WINDOW_MS = 60_000;
@@ -484,8 +492,23 @@ function toHelperFrame(record: HelperFrameRecord, jpeg: Uint8Array): HelperFrame
   };
 }
 
-function requestTimeout(commandType: string): Duration.Duration {
-  return SLOW_COMMANDS.has(commandType) ? SLOW_REQUEST_TIMEOUT : REQUEST_TIMEOUT;
+/**
+ * How long to wait for one command's reply. Input scales with the text it
+ * carries, because the helper types it at a fixed pace and the reply only comes
+ * once the batch has finished; everything else answers promptly or not at all.
+ */
+export function helperRequestTimeout(command: HelperCommandWithoutId): Duration.Duration {
+  if (command.type === "input") {
+    const characters = command.events.reduce(
+      (total, event) => (event.type === "text" ? total + event.text.length : total),
+      0,
+    );
+    return Duration.min(
+      Duration.sum(REQUEST_TIMEOUT, Duration.times(INPUT_TIMEOUT_PER_TEXT_CHARACTER, characters)),
+      MAX_INPUT_TIMEOUT,
+    );
+  }
+  return SLOW_COMMANDS.has(command.type) ? SLOW_REQUEST_TIMEOUT : REQUEST_TIMEOUT;
 }
 
 function backendUnavailable(message: string): OpenbotComputerError {
@@ -553,7 +576,7 @@ export const make = Effect.fn("openbot.computer.computerHelperClient.make")(func
       const id = yield* Ref.modify(nextId, (current) => [current, current + 1]);
       const deferred = yield* Deferred.make<HelperFrameEnvelope, OpenbotComputerError>();
       yield* Ref.update(pending, (map) => new Map(map).set(id, deferred));
-      const timeout = requestTimeout(command.type);
+      const timeout = helperRequestTimeout(command);
       return yield* writeMutex
         .withPermits(1)(active.write(encodeHelperCommand(withCommandId(command, id))))
         .pipe(
@@ -568,7 +591,7 @@ export const make = Effect.fn("openbot.computer.computerHelperClient.make")(func
                   onNone: () =>
                     Effect.fail(
                       backendUnavailable(
-                        `T3 Computer Helper did not answer '${command.type}' within ${Duration.toSeconds(timeout)} seconds.`,
+                        `T3 Computer Helper did not answer '${command.type}' within ${Math.round(Duration.toSeconds(timeout))} seconds.`,
                       ),
                     ),
                   onSome: Effect.succeed,

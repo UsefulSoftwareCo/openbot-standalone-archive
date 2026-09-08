@@ -109,12 +109,32 @@ Every command carries an `id` that its reply echoes.
 | `screenshot` `{displayId, maxWidthPx}`                  | `frame` with an `id` and a JPEG payload                     |
 | `capture-start` `{displayId, maxWidthPx, fps, quality}` | `ok`, then unsolicited `frame` records                      |
 | `capture-stop` `{displayId}`                            | `ok`                                                        |
-| `input` `{displayId, events}`                           | `input-result` `{delivered, rejected}`                      |
+| `input` `{displayId, events}`                           | `input-result` `{delivered, rejected}` — see below          |
 | `create-display` `{name, widthPx, heightPx, hiDpi}`     | `display`                                                   |
 | `destroy-display` `{displayId}`                         | `ok`                                                        |
 | `launch` `{app, args, displayId}`                       | `launched` `{pid}`                                          |
 | `request-permissions`                                   | `permissions` — **the only command that may show a prompt** |
 | `shutdown`                                              | `ok`, then exit 0                                           |
+
+### Input, and how it is cancelled
+
+`input` is the one command that does not run on the command chain. Typing is
+paced — 15ms between key phases, measured, because a faster string loses
+characters — so one 4096-character `text` event is two minutes of work, and
+nothing else may wait behind it. Batches run on their own serial queue: two
+`input` commands still land in the order they arrived, while `capture-stop`,
+`windows`, a disconnect and the next `input` are all served meanwhile. The
+`input-result` arrives when the batch finishes, which for a long one is minutes
+after the command; the server's deadline for `input` scales with the text in the
+batch for that reason.
+
+A `release-all` event cancels every input batch that is queued or in flight
+before it releases anything, so stopping an agent mid-sentence takes
+milliseconds instead of waiting out the sentence. A cancelled batch still
+answers its own request: the text event it stopped inside comes back as
+`{"index":N,"reason":"cancelled after 37 characters"}`, and the events it never
+reached as `"cancelled"`. `delivered` counts only the events that fully landed.
+Losing the driver and `shutdown` cancel the same way before releasing.
 
 Unsolicited: `{"type":"event","event":"displays-changed"｜"permissions-changed"}`
 and `frame` records while a capture is running. Failures are
@@ -141,8 +161,9 @@ involved.
 ## Exit paths
 
 On `shutdown`, on SIGTERM/SIGINT, and on losing its driver with
-`--exit-on-disconnect`, the helper releases every held button and key, stops
-every capture, and destroys every virtual display it created. A virtual display
+`--exit-on-disconnect`, the helper cancels every input batch, releases every
+held button and key, stops every capture, and destroys every virtual display it
+created. A virtual display
 that outlives its owner is a monitor the user can neither see nor remove.
 
 ## Known platform behaviour

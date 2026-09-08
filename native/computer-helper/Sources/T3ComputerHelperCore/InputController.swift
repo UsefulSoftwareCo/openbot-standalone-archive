@@ -41,38 +41,65 @@ public final class InputController {
     /// asynchronously, so typing faster than the target's event loop loses
     /// characters with no error anywhere. 15ms types about 33 characters a
     /// second and arrives complete.
-    private let keystrokeGapMicroseconds: UInt32 = 15_000
+    private let keystrokeGap = Duration.milliseconds(15)
     private let clickGapMicroseconds: UInt32 = 40_000
 
     public init() {}
 
     public var isTrusted: Bool { AXIsProcessTrusted() }
 
+    /// What one event did.
+    private enum EventOutcome {
+        case delivered
+        case rejected(String)
+        /// A text event that cancellation stopped, and how many graphemes it
+        /// managed to type first.
+        case cancelled(typed: Int)
+    }
+
     /// Delivers a batch in order, reporting per-event rejections rather than
     /// failing the batch: one unknown key should not lose the sentence
     /// after it.
+    ///
+    /// Cancelling the surrounding task stops the batch promptly — a long text
+    /// event stops mid-string — and every event that did not run comes back as
+    /// a rejection, so the driver is told what was dropped instead of having to
+    /// infer it from a count.
     public func deliver(
         events: [ParsedInputEvent], display: DisplayRecord
-    ) -> (delivered: Int, rejected: [InputRejection]) {
+    ) async -> (delivered: Int, rejected: [InputRejection]) {
         var delivered = 0
         var rejected: [InputRejection] = []
+        var cancelled = false
         for (index, entry) in events.enumerated() {
             switch entry {
             case let .rejected(reason):
                 rejected.append(InputRejection(index: index, reason: reason))
             case let .event(event):
-                if let reason = perform(event, on: display) {
-                    rejected.append(InputRejection(index: index, reason: reason))
-                } else {
+                if cancelled || Task.isCancelled {
+                    cancelled = true
+                    rejected.append(InputRejection(index: index, reason: "cancelled"))
+                    continue
+                }
+                switch await perform(event, on: display) {
+                case .delivered:
                     delivered += 1
+                case let .rejected(reason):
+                    rejected.append(InputRejection(index: index, reason: reason))
+                case let .cancelled(typed):
+                    cancelled = true
+                    rejected.append(
+                        InputRejection(
+                            index: index, reason: "cancelled after \(typed) characters"))
                 }
             }
         }
         return (delivered, rejected)
     }
 
-    /// Returns nil on success, or the reason this event was rejected.
-    private func perform(_ event: InputEvent, on display: DisplayRecord) -> String? {
+    /// Performs one event. Only `text` awaits; everything else is a handful of
+    /// posts and stays synchronous inside the job.
+    private func perform(_ event: InputEvent, on display: DisplayRecord) async -> EventOutcome {
         func global(_ point: CGPoint) -> CGPoint? {
             guard InputGeometry.isInside(point, widthPx: display.widthPx, heightPx: display.heightPx)
             else { return nil }
@@ -82,19 +109,19 @@ public final class InputController {
 
         switch event {
         case let .move(point):
-            guard let target = global(point) else { return offDisplay(point, display) }
+            guard let target = global(point) else { return .rejected(offDisplay(point, display)) }
             move(to: target)
-            return nil
+            return .delivered
 
         case let .button(button, down, point):
-            guard let target = global(point) else { return offDisplay(point, display) }
+            guard let target = global(point) else { return .rejected(offDisplay(point, display)) }
             move(to: target)
             postButton(button, down: down, at: target, clickState: 1)
             if down { heldButtons.insert(button) } else { heldButtons.remove(button) }
-            return nil
+            return .delivered
 
         case let .click(button, count, point, modifiers):
-            guard let target = global(point) else { return offDisplay(point, display) }
+            guard let target = global(point) else { return .rejected(offDisplay(point, display)) }
             move(to: target)
             let flags = Keymap.flags(for: modifiers).union(heldFlags())
             for index in 1...count {
@@ -103,42 +130,46 @@ public final class InputController {
                 postButton(button, down: false, at: target, clickState: index, flags: flags)
                 if index < count { usleep(clickGapMicroseconds) }
             }
-            return nil
+            return .delivered
 
         case let .scroll(point, deltaX, deltaY):
-            guard let target = global(point) else { return offDisplay(point, display) }
+            guard let target = global(point) else { return .rejected(offDisplay(point, display)) }
             let axes = InputGeometry.wheelAxes(deltaX: deltaX, deltaY: deltaY)
             guard
                 let scroll = CGEvent(
                     scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
                     wheel1: axes.wheel1, wheel2: axes.wheel2, wheel3: 0)
-            else { return "scroll event could not be created" }
+            else { return .rejected("scroll event could not be created") }
             scroll.location = target
             scroll.flags = heldFlags()
             scroll.post(tap: .cghidEventTap)
-            return nil
+            return .delivered
 
         case let .key(code, down, modifiers):
-            guard let key = Keymap.virtualKey(for: code) else { return unknownKey(code) }
+            guard let key = Keymap.virtualKey(for: code) else { return .rejected(unknownKey(code)) }
             postKey(key, down: down, extra: Keymap.flags(for: modifiers))
             if down { heldKeys.insert(key) } else { heldKeys.remove(key) }
-            return nil
+            return .delivered
 
         case let .keyPress(code, modifiers):
-            guard let key = Keymap.virtualKey(for: code) else { return unknownKey(code) }
+            guard let key = Keymap.virtualKey(for: code) else { return .rejected(unknownKey(code)) }
             let extra = Keymap.flags(for: modifiers)
             postKey(key, down: true, extra: extra)
             usleep(8_000)
             postKey(key, down: false, extra: extra)
-            return nil
+            return .delivered
 
         case let .text(text):
-            type(text)
-            return nil
+            switch await type(text) {
+            case .completed:
+                return .delivered
+            case let .cancelled(typed):
+                return .cancelled(typed: typed)
+            }
 
         case .releaseAll:
             releaseAll()
-            return nil
+            return .delivered
         }
     }
 
@@ -238,23 +269,23 @@ public final class InputController {
         event.post(tap: .cghidEventTap)
     }
 
-    /// Types literal text into whatever has focus.
+    /// Types literal text into whatever has focus, paced and cancellable.
     ///
     /// Virtual key 0 with an attached unicode string types the character
     /// whatever the active keyboard layout is, which no keycode table can do.
-    /// Graphemes, not scalars, so an emoji or a combining accent arrives whole.
-    private func type(_ text: String) {
-        for character in text {
-            let units = Array(String(character).utf16)
-            guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
-                let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
-            else { continue }
-            down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
-            up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
-            down.post(tap: .cghidEventTap)
-            usleep(keystrokeGapMicroseconds)
-            up.post(tap: .cghidEventTap)
-            usleep(keystrokeGapMicroseconds)
+    /// The pacing and the cancellation live in `TextDeliveryJob`; this supplies
+    /// the posting.
+    private func type(_ text: String) async -> TextDeliveryJob.Outcome {
+        let source = self.source
+        let job = TextDeliveryJob(text: text, gap: keystrokeGap) { grapheme, phase in
+            guard
+                let event = CGEvent(
+                    keyboardEventSource: source, virtualKey: 0, keyDown: phase == .down)
+            else { return }
+            let units = Array(grapheme.utf16)
+            event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+            event.post(tap: .cghidEventTap)
         }
+        return await job.run()
     }
 }

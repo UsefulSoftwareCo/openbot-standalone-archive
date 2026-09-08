@@ -1,3 +1,4 @@
+import { OpenbotComputerDisplayId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
@@ -20,6 +21,7 @@ import {
   ComputerHelperLauncher,
   ComputerHelperUnavailable,
   childLauncherLayer,
+  helperRequestTimeout,
   layer as computerHelperClientLayer,
   loginSessionLauncherLayer,
 } from "./ComputerHelperClient.ts";
@@ -28,6 +30,7 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 const GRANTED = { screenCapture: "granted", accessibility: "granted" } as const;
+const DISPLAY_ID = OpenbotComputerDisplayId.make("7");
 
 function frameBytes(record: Record<string, unknown>, payload: Uint8Array): Uint8Array {
   const line = encoder.encode(`${JSON.stringify(record)}\n`);
@@ -424,6 +427,89 @@ describe("ComputerHelperClient", () => {
       }),
     ),
   );
+
+  // The helper types at a fixed pace, so a long batch is slow on purpose. A
+  // flat deadline reported failure while it was still typing.
+  it.effect("waits out a long text batch instead of failing at ten seconds", () =>
+    withHelper((harness) =>
+      Effect.gen(function* () {
+        const { connection } = yield* connect(harness);
+
+        const typing = yield* harness.client
+          .request({
+            type: "input",
+            displayId: DISPLAY_ID,
+            events: [{ type: "text", text: "a".repeat(1_000) }],
+          })
+          .pipe(Effect.forkChild);
+        const command = yield* takeCommand(connection);
+        expect(command.type).toBe("input");
+
+        yield* TestClock.adjust(Duration.seconds(45));
+        expect(typing.pollUnsafe()).toBeUndefined();
+
+        yield* push(
+          connection,
+          recordBytes({ id: command.id, type: "input-result", delivered: 1, rejected: [] }),
+        );
+        expect((yield* Fiber.join(typing)).type).toBe("input-result");
+      }),
+    ),
+  );
+});
+
+describe("helperRequestTimeout", () => {
+  it("gives an input batch ten seconds plus the time the helper needs to type it", () => {
+    expect(
+      Duration.toMillis(
+        helperRequestTimeout({
+          type: "input",
+          displayId: DISPLAY_ID,
+          events: [{ type: "click", button: "left", count: 1, point: { x: 1, y: 1 } }],
+        }),
+      ),
+    ).toBe(10_000);
+
+    // 500 characters is 20 seconds of paced typing, and the reply comes only
+    // once the whole batch has been typed.
+    expect(
+      Duration.toMillis(
+        helperRequestTimeout({
+          type: "input",
+          displayId: DISPLAY_ID,
+          events: [
+            { type: "text", text: "a".repeat(300) },
+            { type: "key-press", key: "Enter" },
+            { type: "text", text: "b".repeat(200) },
+          ],
+        }),
+      ),
+    ).toBe(30_000);
+  });
+
+  it("caps a batch nobody should still be waiting on", () => {
+    expect(
+      Duration.toMillis(
+        helperRequestTimeout({
+          type: "input",
+          displayId: DISPLAY_ID,
+          events: Array.from({ length: 64 }, () => ({
+            type: "text" as const,
+            text: "x".repeat(4096),
+          })),
+        }),
+      ),
+    ).toBe(600_000);
+  });
+
+  it("leaves every other command on its own deadline", () => {
+    expect(Duration.toMillis(helperRequestTimeout({ type: "displays" }))).toBe(10_000);
+    expect(
+      Duration.toMillis(
+        helperRequestTimeout({ type: "screenshot", displayId: DISPLAY_ID, maxWidthPx: 100 }),
+      ),
+    ).toBe(30_000);
+  });
 });
 
 // ---------------------------------------------------------------------------

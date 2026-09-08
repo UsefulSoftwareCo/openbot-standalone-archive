@@ -12,6 +12,9 @@ import Foundation
 public final class HelperService {
     private let displays = DisplayRegistry()
     private let input = InputController()
+    /// Input batches run here rather than on the command chain, so a paced text
+    /// event cannot hold up the commands that would stop it.
+    private let inputJobs = InputJobQueue()
     private let capture = CaptureManager()
     /// Nil until a driver connects, and in socket mode until it authenticates.
     private var connection: Connection?
@@ -23,6 +26,10 @@ public final class HelperService {
     /// of them await — a capture start, a screenshot — and without this chain a
     /// slow one would let the command behind it overtake it, which for input
     /// means a keystroke landing before the click that focused the field.
+    ///
+    /// Input joins this chain only long enough to be parsed and queued: its
+    /// delivery is paced and can run for minutes, and nothing else may wait
+    /// behind that.
     private var commandChain: Task<Void, Never>?
     private var authenticated: Bool
     private let token: String?
@@ -107,7 +114,11 @@ public final class HelperService {
 
     private func disconnected(exitOnDisconnect: Bool) async {
         // A driver that vanished mid-drag would otherwise leave the mouse
-        // button down for the human sitting at this machine.
+        // button down for the human sitting at this machine — and one that
+        // vanished mid-sentence would keep typing into their session for
+        // another two minutes. Cancel first, release second: releasing while
+        // a batch is still delivering just presses everything again.
+        inputJobs.cancelAll()
         input.releaseAll()
         await capture.stopAll()
         frameWriter.set(nil)
@@ -122,11 +133,15 @@ public final class HelperService {
     public func shutdown() {
         permissionTimer?.invalidate()
         permissionTimer = nil
+        inputJobs.cancelAll()
         input.releaseAll()
         displays.destroyAllManagedDisplays()
         let capture = self.capture
         Task { @MainActor in
             await capture.stopAll()
+            // Cancelled batches answer their requests as they unwind, so let
+            // the queue drain before the writer is flushed.
+            await self.inputJobs.settle()
             // The reply to `shutdown` is still in the writer's queue.
             self.connection?.writer.flush()
             self.onShutdown?()
@@ -137,6 +152,7 @@ public final class HelperService {
     public func shutdownNow() {
         permissionTimer?.invalidate()
         permissionTimer = nil
+        inputJobs.cancelAll()
         input.releaseAll()
         displays.destroyAllManagedDisplays()
         connection?.writer.flush()
@@ -249,9 +265,22 @@ public final class HelperService {
             emit(.ok(id: id))
 
         case "input":
+            let events = try command.inputEvents()
+            // Cancelling before this batch is queued is what makes `release-all`
+            // prompt: it stops a text delivery that could otherwise run for
+            // minutes, so the release runs behind a queue that drains at once
+            // instead of after the sentence.
+            if events.contains(.event(.releaseAll)) { inputJobs.cancelAll() }
             let display = try requireDisplay(command.displayId())
-            let result = input.deliver(events: try command.inputEvents(), display: display)
-            emit(.inputResult(id: id, delivered: result.delivered, rejected: result.rejected))
+            // Deliberately not awaited here. The batch answers this command's id
+            // when it finishes, and until then the command chain stays free for
+            // `capture-stop`, `windows`, and the disconnect cleanup.
+            inputJobs.enqueue { [weak self] in
+                guard let self else { return }
+                let result = await self.input.deliver(events: events, display: display)
+                self.emit(
+                    .inputResult(id: id, delivered: result.delivered, rejected: result.rejected))
+            }
 
         case "create-display":
             let display = try displays.createDisplay(
@@ -262,6 +291,12 @@ public final class HelperService {
 
         case "destroy-display":
             let displayId = try command.displayId()
+            // Input is no longer ordered against this command, so a batch
+            // queued for a display that is going away would post at whatever
+            // coordinates a destroyed display reports. Cancelling drains the
+            // queue in milliseconds; waiting for it to type would not.
+            inputJobs.cancelAll()
+            await inputJobs.settle()
             await capture.stop(displayId: displayId)
             try displays.destroyDisplay(displayId)
             emit(.ok(id: id))

@@ -314,3 +314,149 @@ struct TokenTests {
         #expect(!constantTimeEquals("", "x"))
     }
 }
+
+/// Records what a `TextDeliveryJob` posted, without an event tap in sight.
+@MainActor
+final class TypingRecorder {
+    private(set) var downs: [String] = []
+    private(set) var ups: [String] = []
+    private(set) var waits = 0
+
+    func record(_ grapheme: String, _ phase: TextKeyPhase) {
+        if phase == .down { downs.append(grapheme) } else { ups.append(grapheme) }
+    }
+
+    func countWait() -> Int {
+        waits += 1
+        return waits
+    }
+}
+
+@MainActor
+final class TypingTaskBox {
+    var task: Task<TextDeliveryJob.Outcome, Never>?
+}
+
+@Suite("text delivery")
+@MainActor
+struct TextDeliveryTests {
+    @Test("a whole string types every grapheme once, down then up")
+    func typesEverything() async {
+        let recorder = TypingRecorder()
+        let job = TextDeliveryJob(text: "héllo👋", gap: .zero) { grapheme, phase in
+            recorder.record(grapheme, phase)
+        }
+
+        let outcome = await job.run()
+
+        // The emoji is one grapheme, not two scalars.
+        #expect(outcome == .completed(typed: 6))
+        #expect(recorder.downs == ["h", "é", "l", "l", "o", "👋"])
+        #expect(recorder.ups == recorder.downs)
+    }
+
+    /// The reason the job exists: a cancel has to stop the typing where it is
+    /// and say how far it got, so the driver learns what landed.
+    @Test("a job cancelled mid-string reports the partial count and stops")
+    func partialCount() async {
+        let recorder = TypingRecorder()
+        let job = TextDeliveryJob(
+            text: "abcdef",
+            pause: { _ in
+                // Two waits per keystroke, so the fifth is the gap after the
+                // third key-down.
+                if recorder.countWait() >= 5 { throw CancellationError() }
+            },
+            post: { grapheme, phase in recorder.record(grapheme, phase) })
+
+        let outcome = await job.run()
+
+        #expect(outcome == .cancelled(typed: 3))
+        #expect(recorder.downs == ["a", "b", "c"])
+        // The key-up of the keystroke the cancel interrupted still goes out, or
+        // that key stays down on the shared desktop.
+        #expect(recorder.ups == ["a", "b", "c"])
+    }
+
+    @Test("cancelling the surrounding task stops the typing")
+    func cancellingTheTask() async {
+        let recorder = TypingRecorder()
+        let box = TypingTaskBox()
+        let job = TextDeliveryJob(text: "abcdefgh", gap: .milliseconds(1)) { grapheme, phase in
+            recorder.record(grapheme, phase)
+            if phase == .up, recorder.ups.count == 2 { box.task?.cancel() }
+        }
+
+        let task = Task { @MainActor in await job.run() }
+        box.task = task
+        let outcome = await task.value
+
+        #expect(outcome == .cancelled(typed: 2))
+        #expect(recorder.downs == ["a", "b"])
+    }
+}
+
+/// A log of what jobs ran, in the order they ran.
+@MainActor
+final class JobLog {
+    private(set) var entries: [String] = []
+    func append(_ entry: String) { entries.append(entry) }
+}
+
+@Suite("input job queue")
+@MainActor
+struct InputJobQueueTests {
+    /// Two batches from one driver are a click and the keystroke that depends
+    /// on it; leaving the command chain must not reorder them.
+    @Test("batches run in the order they were enqueued")
+    func preservesOrder() async {
+        let queue = InputJobQueue()
+        let log = JobLog()
+
+        queue.enqueue {
+            // Suspends, so a queue that did not chain would let the next batch
+            // overtake this one here.
+            await Task.yield()
+            log.append("first")
+        }
+        queue.enqueue { log.append("second") }
+        await queue.settle()
+
+        #expect(log.entries == ["first", "second"])
+    }
+
+    /// What `release-all` relies on: the batch in flight stops, and the batch
+    /// behind it never types anything.
+    @Test("cancelling the queue stops the running batch and the queued one")
+    func cancelsInFlightAndQueued() async {
+        let queue = InputJobQueue()
+        let log = JobLog()
+
+        queue.enqueue {
+            while !Task.isCancelled { await Task.yield() }
+            log.append("first stopped")
+        }
+        queue.enqueue { log.append(Task.isCancelled ? "second cancelled" : "second typed") }
+        // Let the first batch start before cancelling, so this covers the
+        // in-flight case and not only the queued one.
+        await Task.yield()
+        queue.cancelAll()
+        await queue.settle()
+
+        #expect(log.entries == ["first stopped", "second cancelled"])
+    }
+
+    /// A cancelled batch still answers its request; a driver waiting on that id
+    /// would otherwise sit there until its own timeout.
+    @Test("a cancelled batch still runs to its own end")
+    func cancelledBatchStillReplies() async {
+        let queue = InputJobQueue()
+        let log = JobLog()
+
+        queue.enqueue { log.append("replied") }
+        queue.cancelAll()
+        await queue.settle()
+
+        #expect(log.entries == ["replied"])
+    }
+}
