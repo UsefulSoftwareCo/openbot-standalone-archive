@@ -24,11 +24,14 @@ export function Composer({
   channelName,
   environmentId,
   disabled,
+  autoFocus = false,
   onSend,
 }: {
   readonly channelName: string;
   readonly environmentId: EnvironmentId;
   readonly disabled: boolean;
+  /** Takes the caret on mount; for a view whose only job is this composer. */
+  readonly autoFocus?: boolean;
   readonly onSend: (input: {
     text: string;
     attachments: ReadonlyArray<ChatAttachment>;
@@ -216,6 +219,7 @@ export function Composer({
                 </Button>
                 <Textarea
                   rows={1}
+                  autoFocus={autoFocus}
                   aria-label={`Message ${channelName}`}
                   placeholder={`Message ${channelName}`}
                   autoComplete="off"

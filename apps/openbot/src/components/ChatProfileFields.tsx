@@ -1,13 +1,8 @@
-import {
-  isProviderAvailable,
-  type EnvironmentId,
-  type ModelSelection,
-  type ServerProvider,
-} from "@t3tools/contracts";
+import type { EnvironmentId, ModelSelection } from "@t3tools/contracts";
 import { Input } from "@t3tools/ui/input";
 import { Button } from "@t3tools/ui/button";
-import { useEffect, useId, useState } from "react";
-import { getServerConfig, useAtomCommand } from "../state/channels";
+import { useId, useState } from "react";
+import { providerModelSelection, useServerProviders } from "../state/providers";
 import { TerminalAvatar } from "./TerminalAvatar";
 
 /** Editable chat identity and next-message model selection. */
@@ -57,30 +52,10 @@ export function ChatProfileFields({
   readonly allowAutomatic?: boolean;
   readonly onBusyChange: (busy: boolean) => void;
 }) {
-  const readProviders = useAtomCommand(getServerConfig, { reportFailure: false });
-  const [providers, setProviders] = useState<ReadonlyArray<ServerProvider>>([]);
-  const [providerError, setProviderError] = useState(false);
+  const { items: providers, failed: providerError } = useServerProviders(environmentId);
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const [avatarBusy, setAvatarBusy] = useState(false);
   const modelListId = useId();
-  useEffect(() => {
-    let disposed = false;
-    void readProviders({ environmentId, input: {} }).then((result) => {
-      if (disposed) return;
-      if (result._tag === "Failure") setProviderError(true);
-      else {
-        setProviderError(false);
-        setProviders(
-          result.value.providers.filter(
-            (provider) => isProviderAvailable(provider) && provider.enabled && provider.installed,
-          ),
-        );
-      }
-    });
-    return () => {
-      disposed = true;
-    };
-  }, [environmentId, readProviders]);
   const selected = providers.find(
     (provider) => provider.instanceId === value.modelSelection?.instanceId,
   );
@@ -185,17 +160,12 @@ export function ChatProfileFields({
         <select
           className="h-9 rounded-md border border-border bg-background px-2"
           value={value.modelSelection?.instanceId ?? ""}
-          onChange={(event) => {
-            const provider = providers.find((entry) => entry.instanceId === event.target.value);
-            const model = provider?.models.find((entry) => entry.isDefault) ?? provider?.models[0];
+          onChange={(event) =>
             onChange({
               ...value,
-              modelSelection:
-                provider === undefined || model === undefined
-                  ? undefined
-                  : { instanceId: provider.instanceId, model: model.slug },
-            });
-          }}
+              modelSelection: providerModelSelection(providers, event.target.value),
+            })
+          }
         >
           {allowAutomatic && <option value="">Automatic</option>}
           {value.modelSelection !== undefined && selected === undefined && (

@@ -9,13 +9,12 @@ import { ChatHeader } from "./components/ChatHeader";
 import { Composer } from "./components/Composer";
 import { ConversationDetails } from "./components/ConversationDetails";
 import { KnowledgeEditorPage } from "./components/KnowledgeEditorPage";
-import { NewChatDialog } from "./components/NewChatDialog";
+import { NewChatPage } from "./components/NewChatPage";
 import { NewProjectDialog } from "./components/NewProjectDialog";
 import { PendingRequests } from "./components/PendingRequests";
 import { ProjectSettingsPage } from "./components/ProjectSettingsPage";
 import { Sidebar } from "./components/Sidebar";
 import {
-  createChannel,
   createProject,
   sendChannelMessage,
   updateProject,
@@ -69,10 +68,8 @@ export function App() {
   const [detailsOpen, setDetailsOpen] = useState(true);
   const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [chatDialogOpen, setChatDialogOpen] = useState(false);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [createChatError, setCreateChatError] = useState<string | null>(null);
   const [createProjectError, setCreateProjectError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [iconProjectId, setIconProjectId] = useState<OpenbotProjectId | null>(null);
@@ -99,7 +96,6 @@ export function App() {
     };
   }, []);
 
-  const runCreateChannel = useAtomCommand(createChannel, { reportFailure: false });
   const runCreateProject = useAtomCommand(createProject, { reportFailure: false });
   const runUpdateProject = useAtomCommand(updateProject, { reportFailure: false });
   const runSend = useAtomCommand(sendChannelMessage, { reportFailure: false });
@@ -182,11 +178,7 @@ export function App() {
         setSidebarOpen(false);
         setProjectDialogOpen(true);
       }}
-      onNewChat={() => {
-        setCreateChatError(null);
-        setSidebarOpen(false);
-        setChatDialogOpen(true);
-      }}
+      onNewChat={() => openPage({ type: "new-chat" })}
       connectionLabel={connectionLabel}
     />
   );
@@ -263,20 +255,16 @@ export function App() {
             }}
             onUnsavedChange={setUnsaved}
           />
-        ) : channels.length === 0 ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground text-sm">
-            <p>Nothing here yet.</p>
-            <p className="max-w-sm text-xs">
-              Create a project for ongoing work, or a chat for a one-off. In a chat you can also ask
-              OpenBot to “use the onboard skill and onboard me”.
-            </p>
-            <div className="flex gap-2">
-              <Button onClick={() => setProjectDialogOpen(true)}>New project</Button>
-              <Button variant="outline" onClick={() => setChatDialogOpen(true)}>
-                New chat
-              </Button>
-            </div>
-          </div>
+        ) : page?.type === "new-chat" || channels.length === 0 ? (
+          // An empty account lands here too: the draft page is also the way to
+          // make the first chat, and the sidebar still offers a new project.
+          <NewChatPage
+            environmentId={environmentId}
+            projects={projects}
+            disabled={phase !== "ready"}
+            onOpenSidebar={() => setSidebarOpen(true)}
+            onCreated={openChannel}
+          />
         ) : view === null || activeChannel === null ? (
           <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm">
             <Spinner className="size-4" />
@@ -358,27 +346,6 @@ export function App() {
             </DialogPopup>
           </Dialog>
         </>
-      )}
-      {environmentId !== null && chatDialogOpen && (
-        <NewChatDialog
-          environmentId={environmentId}
-          open={chatDialogOpen}
-          onOpenChange={setChatDialogOpen}
-          busy={creating}
-          error={createChatError}
-          onCreate={async (input) => {
-            setCreating(true);
-            setCreateChatError(null);
-            const result = await runCreateChannel({ environmentId, input });
-            setCreating(false);
-            if (result._tag === "Failure") {
-              setCreateChatError(commandErrorText(result));
-              return;
-            }
-            setChatDialogOpen(false);
-            openChannel(result.value.id);
-          }}
-        />
       )}
       {environmentId !== null && projectDialogOpen && (
         <NewProjectDialog

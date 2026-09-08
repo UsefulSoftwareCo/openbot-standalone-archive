@@ -8,6 +8,8 @@ export type ProjectSettingsTab = "knowledge" | "instructions";
  */
 export type OpenbotRoute =
   | { readonly type: "chat"; readonly channelId: OpenbotChannelId }
+  /** The composer-first draft page. Nothing exists until its first message. */
+  | { readonly type: "new-chat" }
   | {
       readonly type: "project-settings";
       readonly projectId: OpenbotProjectId;

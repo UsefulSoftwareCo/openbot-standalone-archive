@@ -10,6 +10,7 @@ import {
 } from "@t3tools/contracts";
 import { Button } from "@t3tools/ui/button";
 import { Input } from "@t3tools/ui/input";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "@t3tools/ui/tooltip";
 import { ArrowLeft, ChevronRight, Clock3, Plus, X } from "lucide-react";
 import { Switch } from "@base-ui/react/switch";
 import * as Effect from "effect/Effect";
@@ -37,10 +38,7 @@ function failureText(error: unknown): string {
 }
 function scheduleLabel(schedule: ScheduledTask["schedule"]): string {
   if (schedule.type === "interval") return `Every ${schedule.everyMs / 60000} minutes`;
-  // A cron schedule is only meaningful with its zone: the same expression in
-  // UTC and in a local zone are different routines.
-  if (schedule.type === "cron")
-    return `${describeCron(schedule.expression) ?? schedule.expression} (${schedule.timeZone})`;
+  if (schedule.type === "cron") return describeCron(schedule.expression) ?? schedule.expression;
   const selected = schedule.weekdays;
   const label =
     selected === undefined || selected.length === 0 || selected.length === 7
@@ -49,6 +47,28 @@ function scheduleLabel(schedule: ScheduledTask["schedule"]): string {
         ? "Weekdays"
         : selected.map((day) => days[day]).join(", ");
   return `${label} at ${schedule.timeOfDay}`;
+}
+
+/**
+ * The second line of a routine row. A cron expression means different times in
+ * different zones, so the zone is still reachable on hover, but it is noise in
+ * a list that is scanned, and the routine editor is where it is read and set.
+ */
+function ScheduleLine({ task }: { readonly task: ScheduledTask }) {
+  const line = (
+    <span className="block text-xs text-muted-foreground">
+      {scheduleLabel(task.schedule)}
+      {task.enabled ? "" : " · Paused"}
+    </span>
+  );
+  if (task.schedule.type !== "cron") return line;
+  const zone = task.schedule.timeZone;
+  return (
+    <Tooltip>
+      <TooltipTrigger render={line} />
+      <TooltipPopup side="bottom">{zone}</TooltipPopup>
+    </Tooltip>
+  );
 }
 
 type DetailPage =
@@ -126,10 +146,7 @@ export function ConversationDetails({
                       <Clock3 className="size-4 shrink-0 text-muted-foreground" />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm font-medium">{task.title}</span>
-                        <span className="block text-xs text-muted-foreground">
-                          {scheduleLabel(task.schedule)}
-                          {task.enabled ? "" : " · Paused"}
-                        </span>
+                        <ScheduleLine task={task} />
                       </span>
                       <ChevronRight className="size-4 text-muted-foreground" />
                     </button>
