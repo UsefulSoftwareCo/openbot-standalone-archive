@@ -1,0 +1,614 @@
+import type {
+  OpenbotComputerInputEvent,
+  OpenbotComputerModifier,
+  OpenbotComputerMouseButton,
+} from "@t3tools/contracts";
+
+/**
+ * Every X11 mechanic the Linux backend needs, as pure functions over values.
+ *
+ * The backend spawns processes and owns state; this module decides *what* to
+ * run and *how to read* what came back. Argv arrays and parsers are where the
+ * platform's real complexity lives, and they are the part that can be proven
+ * on a machine with no X server at all.
+ */
+
+// ---------------------------------------------------------------------------
+// Xvfb
+// ---------------------------------------------------------------------------
+
+/** The default managed session size. Large enough for a real browser window,
+    small enough that a 12 fps MJPEG stream stays comfortable over a tunnel. */
+export const DEFAULT_MANAGED_WIDTH_PX = 1600;
+export const DEFAULT_MANAGED_HEIGHT_PX = 1000;
+
+/**
+ * Arguments for the headless X server backing one managed session.
+ *
+ * `-noreset` keeps the server alive when the last client disconnects, which
+ * otherwise resets every X resource between two app launches. `-nolisten tcp`
+ * keeps the display reachable only through its Unix socket: a managed session
+ * is a local implementation detail, never a network service.
+ */
+export function xvfbArgs(
+  displayNumber: number,
+  widthPx: number,
+  heightPx: number,
+): ReadonlyArray<string> {
+  return [
+    `:${displayNumber}`,
+    "-screen",
+    "0",
+    `${widthPx}x${heightPx}x24`,
+    "+extension",
+    "GLX",
+    "+extension",
+    "RANDR",
+    "+extension",
+    "RENDER",
+    "-dpi",
+    "96",
+    "-noreset",
+    "-nolisten",
+    "tcp",
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// ffmpeg capture
+// ---------------------------------------------------------------------------
+
+export interface FfmpegCaptureSpec {
+  /** The X display name, as `DISPLAY` would carry it: ":0", ":60". */
+  readonly display: string;
+  readonly screen: number;
+  /** Top-left of the captured region inside that screen's root window. */
+  readonly x: number;
+  readonly y: number;
+  readonly widthPx: number;
+  readonly heightPx: number;
+  readonly fps: number;
+  /** Longest edge of the encoded frame. Larger than the region means no scale. */
+  readonly maxWidthPx: number;
+  /** 0.1 (smallest) to 1 (best). */
+  readonly quality: number;
+  /** True only for a shared desktop: Xvfb has no hardware cursor for x11grab
+      to fetch, and asking for one logs a pointer-query error per capture. */
+  readonly drawMouse: boolean;
+  /** Set to 1 for a screenshot; null streams until the process is stopped. */
+  readonly frames?: number | null;
+}
+
+/** x11grab and the mjpeg encoder both want even dimensions; an odd request
+    silently costs a column or produces a chroma-alignment warning per frame. */
+function evenDown(value: number): number {
+  const rounded = Math.floor(value);
+  return rounded - (rounded % 2);
+}
+
+export interface FfmpegFrameSize {
+  readonly captureWidthPx: number;
+  readonly captureHeightPx: number;
+  readonly frameWidthPx: number;
+  readonly frameHeightPx: number;
+}
+
+/**
+ * The pixel sizes a capture will actually produce: what x11grab reads, and
+ * what comes out after the optional downscale. Callers report these to viewers
+ * before the first frame arrives, so they must match `ffmpegArgs` exactly.
+ */
+export function ffmpegFrameSize(spec: FfmpegCaptureSpec): FfmpegFrameSize {
+  const captureWidthPx = Math.max(2, evenDown(spec.widthPx));
+  const captureHeightPx = Math.max(2, evenDown(spec.heightPx));
+  const target = Math.max(2, evenDown(spec.maxWidthPx));
+  if (target >= captureWidthPx) {
+    return {
+      captureWidthPx,
+      captureHeightPx,
+      frameWidthPx: captureWidthPx,
+      frameHeightPx: captureHeightPx,
+    };
+  }
+  // `scale=W:-2` picks the even height nearest the aspect ratio.
+  const scaledHeight = Math.max(2, evenDown((captureHeightPx * target) / captureWidthPx + 1));
+  return {
+    captureWidthPx,
+    captureHeightPx,
+    frameWidthPx: target,
+    frameHeightPx: scaledHeight,
+  };
+}
+
+/** ffmpeg's mjpeg quantiser scale runs 2 (best) to 31 (worst), the opposite
+    direction from the contract's 0.1..1 quality. */
+export function mjpegQuality(quality: number): number {
+  return Math.min(31, Math.max(2, Math.round(2 + (1 - quality) * 16)));
+}
+
+/** Arguments for one x11grab capture, emitting a raw MJPEG byte stream on
+    stdout that `splitJpegChunk` cuts back into whole frames. */
+export function ffmpegArgs(spec: FfmpegCaptureSpec): ReadonlyArray<string> {
+  const size = ffmpegFrameSize(spec);
+  const scale =
+    size.frameWidthPx === size.captureWidthPx ? [] : ["-vf", `scale=${size.frameWidthPx}:-2`];
+  const frames = spec.frames == null ? [] : ["-frames:v", String(spec.frames)];
+  return [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-nostdin",
+    "-f",
+    "x11grab",
+    "-draw_mouse",
+    spec.drawMouse ? "1" : "0",
+    "-framerate",
+    String(spec.fps),
+    "-video_size",
+    `${size.captureWidthPx}x${size.captureHeightPx}`,
+    "-i",
+    `${spec.display}.${spec.screen}+${spec.x},${spec.y}`,
+    ...scale,
+    ...frames,
+    "-q:v",
+    String(mjpegQuality(spec.quality)),
+    "-f",
+    "mjpeg",
+    "-",
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// W3C key codes to X keysyms
+// ---------------------------------------------------------------------------
+
+const LETTERS = "abcdefghijklmnopqrstuvwxyz";
+
+function buildKeysyms(): ReadonlyMap<string, string> {
+  const table = new Map<string, string>();
+  for (const letter of LETTERS) table.set(`Key${letter.toUpperCase()}`, letter);
+  for (let digit = 0; digit <= 9; digit += 1) table.set(`Digit${digit}`, String(digit));
+  for (let index = 1; index <= 20; index += 1) table.set(`F${index}`, `F${index}`);
+  for (let digit = 0; digit <= 9; digit += 1) table.set(`Numpad${digit}`, `KP_${digit}`);
+  const named: Readonly<Record<string, string>> = {
+    // Editing and whitespace.
+    Enter: "Return",
+    Tab: "Tab",
+    Space: "space",
+    Backspace: "BackSpace",
+    Delete: "Delete",
+    Insert: "Insert",
+    Escape: "Escape",
+    // Navigation.
+    ArrowLeft: "Left",
+    ArrowRight: "Right",
+    ArrowUp: "Up",
+    ArrowDown: "Down",
+    Home: "Home",
+    End: "End",
+    PageUp: "Prior",
+    PageDown: "Next",
+    // Punctuation, named by position exactly as the W3C code is.
+    Minus: "minus",
+    Equal: "equal",
+    BracketLeft: "bracketleft",
+    BracketRight: "bracketright",
+    Backslash: "backslash",
+    Semicolon: "semicolon",
+    Quote: "apostrophe",
+    Backquote: "grave",
+    Comma: "comma",
+    Period: "period",
+    Slash: "slash",
+    IntlBackslash: "less",
+    // Modifiers. X11 distinguishes left from right, and so does the contract.
+    ShiftLeft: "Shift_L",
+    ShiftRight: "Shift_R",
+    ControlLeft: "Control_L",
+    ControlRight: "Control_R",
+    AltLeft: "Alt_L",
+    AltRight: "Alt_R",
+    MetaLeft: "Super_L",
+    MetaRight: "Super_R",
+    CapsLock: "Caps_Lock",
+    NumLock: "Num_Lock",
+    ScrollLock: "Scroll_Lock",
+    ContextMenu: "Menu",
+    PrintScreen: "Print",
+    Pause: "Pause",
+    // Numeric keypad, beyond its digits.
+    NumpadDecimal: "KP_Decimal",
+    NumpadAdd: "KP_Add",
+    NumpadSubtract: "KP_Subtract",
+    NumpadMultiply: "KP_Multiply",
+    NumpadDivide: "KP_Divide",
+    NumpadEnter: "KP_Enter",
+    NumpadEqual: "KP_Equal",
+    NumpadComma: "KP_Separator",
+    // Media keys a browser reports and a desktop acts on.
+    AudioVolumeMute: "XF86AudioMute",
+    AudioVolumeDown: "XF86AudioLowerVolume",
+    AudioVolumeUp: "XF86AudioRaiseVolume",
+    MediaPlayPause: "XF86AudioPlay",
+    MediaStop: "XF86AudioStop",
+    MediaTrackNext: "XF86AudioNext",
+    MediaTrackPrevious: "XF86AudioPrev",
+    BrowserBack: "XF86Back",
+    BrowserForward: "XF86Forward",
+    BrowserRefresh: "XF86Refresh",
+    BrowserHome: "XF86HomePage",
+  };
+  for (const [code, keysym] of Object.entries(named)) table.set(code, keysym);
+  return table;
+}
+
+const KEYSYMS = buildKeysyms();
+
+/**
+ * The X keysym for a W3C `KeyboardEvent.code`, or null when this backend has
+ * no mapping. Null is a rejection the caller reports per event: guessing a
+ * keysym from an unknown code is how a shortcut turns into typed garbage on
+ * somebody's real desktop.
+ */
+export function keysymForCode(code: string): string | null {
+  return KEYSYMS.get(code) ?? null;
+}
+
+const MODIFIER_KEYSYMS: Readonly<Record<OpenbotComputerModifier, string>> = {
+  shift: "shift",
+  control: "ctrl",
+  alt: "alt",
+  meta: "super",
+};
+
+/** xdotool's own combination syntax: `ctrl+shift+a`. */
+export function keyCombination(
+  keysym: string,
+  modifiers: ReadonlyArray<OpenbotComputerModifier>,
+): string {
+  return [...modifiers.map((modifier) => MODIFIER_KEYSYMS[modifier]), keysym].join("+");
+}
+
+const BUTTON_NUMBERS: Readonly<Record<OpenbotComputerMouseButton, number>> = {
+  left: 1,
+  middle: 2,
+  right: 3,
+};
+
+// ---------------------------------------------------------------------------
+// Input planning
+// ---------------------------------------------------------------------------
+
+/** The display region input coordinates are expressed in. `originX`/`originY`
+    place it inside the X screen's root window, which is the only coordinate
+    space `xdotool mousemove` understands. */
+export interface X11InputSurface {
+  readonly originX: number;
+  readonly originY: number;
+  readonly widthPx: number;
+  readonly heightPx: number;
+}
+
+/**
+ * What this display is currently holding down, in press order.
+ *
+ * Held state is what makes `release-all` possible, and `release-all` is what
+ * keeps a dropped WebSocket from leaving a modifier stuck on a desktop a human
+ * is also using. Combinations are stored exactly as they were pressed, so the
+ * release is the symmetric `keyup`.
+ */
+export interface X11InputHeld {
+  readonly keys: ReadonlyArray<string>;
+  readonly buttons: ReadonlyArray<number>;
+}
+
+export const NO_X11_INPUT_HELD: X11InputHeld = { keys: [], buttons: [] };
+
+/** Either the xdotool invocations one event becomes, or why it cannot become
+    any. Every command is the argument list after the `xdotool` executable. */
+export type X11InputPlan =
+  | {
+      readonly _tag: "commands";
+      readonly commands: ReadonlyArray<ReadonlyArray<string>>;
+      readonly held: X11InputHeld;
+    }
+  | { readonly _tag: "rejected"; readonly reason: string };
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+/** Display-relative point to root-window point, clamped onto the display so a
+    stale client geometry can never park the pointer on another monitor. */
+function rootPoint(
+  surface: X11InputSurface,
+  point: { readonly x: number; readonly y: number },
+): readonly [string, string] {
+  const x = clamp(Math.round(point.x), 0, Math.max(0, surface.widthPx - 1)) + surface.originX;
+  const y = clamp(Math.round(point.y), 0, Math.max(0, surface.heightPx - 1)) + surface.originY;
+  return [String(x), String(y)];
+}
+
+/** Wheel steps for a pixel delta. Browsers report a notch as ~40 px in the
+    common case; anything smaller is still worth one step rather than nothing. */
+export function scrollSteps(delta: number): number {
+  return clamp(Math.round(Math.abs(delta) / 40) || 1, 1, 10);
+}
+
+/**
+ * The X button for a wheel delta, in the contract's browser sign convention.
+ *
+ * X11 has no scroll axis: wheel motion is buttons 4/5 (up/down) and 6/7
+ * (left/right). A positive `deltaY` moves the page toward its end, which is a
+ * wheel-down, which is button 5.
+ */
+export function scrollButton(deltaX: number, deltaY: number): number | null {
+  if (deltaY === 0 && deltaX === 0) return null;
+  if (Math.abs(deltaY) >= Math.abs(deltaX)) return deltaY > 0 ? 5 : 4;
+  return deltaX > 0 ? 7 : 6;
+}
+
+function withoutLast<A>(values: ReadonlyArray<A>, value: A): ReadonlyArray<A> {
+  const index = values.lastIndexOf(value);
+  return index < 0 ? values : [...values.slice(0, index), ...values.slice(index + 1)];
+}
+
+/**
+ * The xdotool invocations that apply one input event, plus the held state they
+ * leave behind.
+ *
+ * One process per event, run in order by the caller: xdotool has no batch mode
+ * that keeps a pointer warp and the click that follows it atomic, and two
+ * overlapping xdotool runs race inside the X server (measured: "wsok" typed,
+ * "wosk" received).
+ */
+export function xdotoolArgs(
+  event: OpenbotComputerInputEvent,
+  options: { readonly surface: X11InputSurface; readonly held: X11InputHeld },
+): X11InputPlan {
+  const { surface, held } = options;
+  switch (event.type) {
+    case "move": {
+      const [x, y] = rootPoint(surface, event.point);
+      return { _tag: "commands", commands: [["mousemove", "--sync", x, y]], held };
+    }
+    case "button": {
+      const [x, y] = rootPoint(surface, event.point);
+      const button = BUTTON_NUMBERS[event.button];
+      const action = event.action === "down" ? "mousedown" : "mouseup";
+      return {
+        _tag: "commands",
+        commands: [["mousemove", "--sync", x, y, action, String(button)]],
+        held: {
+          keys: held.keys,
+          buttons:
+            event.action === "down" ? [...held.buttons, button] : withoutLast(held.buttons, button),
+        },
+      };
+    }
+    case "click": {
+      const [x, y] = rootPoint(surface, event.point);
+      const button = String(BUTTON_NUMBERS[event.button]);
+      const click = [
+        "mousemove",
+        "--sync",
+        x,
+        y,
+        "click",
+        "--repeat",
+        String(event.count),
+        "--delay",
+        "60",
+        button,
+      ];
+      const modifiers = event.modifiers ?? [];
+      if (modifiers.length === 0) return { _tag: "commands", commands: [click], held };
+      // A modified click brackets its own modifiers: they belong to this event
+      // and must not survive it, so they never enter the held set.
+      const combination = modifiers.map((modifier) => MODIFIER_KEYSYMS[modifier]).join("+");
+      return {
+        _tag: "commands",
+        commands: [["keydown", "--", combination], click, ["keyup", "--", combination]],
+        held,
+      };
+    }
+    case "scroll": {
+      const button = scrollButton(event.deltaX, event.deltaY);
+      if (button === null) return { _tag: "rejected", reason: "scroll had no delta" };
+      const [x, y] = rootPoint(surface, event.point);
+      const steps = scrollSteps(
+        Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX,
+      );
+      return {
+        _tag: "commands",
+        commands: [
+          [
+            "mousemove",
+            "--sync",
+            x,
+            y,
+            "click",
+            "--repeat",
+            String(steps),
+            "--delay",
+            "10",
+            String(button),
+          ],
+        ],
+        held,
+      };
+    }
+    case "key": {
+      const keysym = keysymForCode(event.key);
+      if (keysym === null) return { _tag: "rejected", reason: `unknown key ${event.key}` };
+      const combination = keyCombination(keysym, event.modifiers ?? []);
+      const action = event.action === "down" ? "keydown" : "keyup";
+      return {
+        _tag: "commands",
+        commands: [[action, "--", combination]],
+        held: {
+          keys:
+            event.action === "down"
+              ? [...held.keys, combination]
+              : withoutLast(held.keys, combination),
+          buttons: held.buttons,
+        },
+      };
+    }
+    case "key-press": {
+      const keysym = keysymForCode(event.key);
+      if (keysym === null) return { _tag: "rejected", reason: `unknown key ${event.key}` };
+      return {
+        _tag: "commands",
+        commands: [["key", "--", keyCombination(keysym, event.modifiers ?? [])]],
+        held,
+      };
+    }
+    case "text":
+      return {
+        _tag: "commands",
+        commands: [["type", "--delay", "12", "--", event.text]],
+        held,
+      };
+    case "release-all":
+      return {
+        _tag: "commands",
+        commands: [
+          ...held.keys.toReversed().map((combination) => ["keyup", "--", combination]),
+          ...held.buttons.toReversed().map((button) => ["mouseup", String(button)]),
+        ],
+        held: NO_X11_INPUT_HELD,
+      };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Parsers
+// ---------------------------------------------------------------------------
+
+export interface X11DisplayName {
+  /** Everything up to the screen suffix: ":0", "localhost:10". This is what
+      `DISPLAY` must be set to for tools that address the whole server. */
+  readonly base: string;
+  readonly screen: number;
+}
+
+/**
+ * Splits an X display name into server and screen.
+ *
+ * `DISPLAY` legitimately carries a screen suffix (`:0.1`), and appending
+ * another one for ffmpeg's `-i` produces a name no X server answers to. Null
+ * when the value is not an X display name at all.
+ */
+export function parseDisplayName(value: string): X11DisplayName | null {
+  const text = value.trim();
+  const colon = text.lastIndexOf(":");
+  if (colon < 0 || colon === text.length - 1) return null;
+  const suffix = text.slice(colon + 1);
+  const dot = suffix.indexOf(".");
+  const displayPart = dot < 0 ? suffix : suffix.slice(0, dot);
+  const screenPart = dot < 0 ? "0" : suffix.slice(dot + 1);
+  if (!/^\d+$/u.test(displayPart)) return null;
+  const screen = Number.parseInt(screenPart, 10);
+  return {
+    base: `${text.slice(0, colon)}:${displayPart}`,
+    screen: Number.isFinite(screen) ? screen : 0,
+  };
+}
+
+export interface X11ScreenSize {
+  readonly widthPx: number;
+  readonly heightPx: number;
+}
+
+/**
+ * The screen size out of `xdpyinfo`. Null when the output has no dimensions
+ * line, which is also how a caller learns the display never answered.
+ */
+export function parseXdpyinfoScreen(text: string): X11ScreenSize | null {
+  const match = /^\s*dimensions:\s+(\d+)x(\d+)\s+pixels/mu.exec(text);
+  if (!match) return null;
+  const widthPx = Number.parseInt(match[1] ?? "", 10);
+  const heightPx = Number.parseInt(match[2] ?? "", 10);
+  if (!Number.isFinite(widthPx) || !Number.isFinite(heightPx)) return null;
+  if (widthPx <= 0 || heightPx <= 0) return null;
+  return { widthPx, heightPx };
+}
+
+export interface X11Monitor {
+  readonly name: string;
+  readonly widthPx: number;
+  readonly heightPx: number;
+  readonly x: number;
+  readonly y: number;
+  readonly primary: boolean;
+}
+
+/**
+ * The monitors of one X screen from `xrandr --listmonitors`.
+ *
+ * Each line looks like ` 0: +*eDP-1 1920/344x1080/193+0+0  eDP-1`: the `*`
+ * marks the primary, the `/nnn` parts are physical millimetres we ignore, and
+ * the trailing `+x+y` is the monitor's origin inside the root window. Returns
+ * an empty array when nothing parses, so a caller falls back to the whole
+ * screen rather than inventing a layout.
+ */
+export function parseXrandrMonitors(text: string): ReadonlyArray<X11Monitor> {
+  const monitors: Array<X11Monitor> = [];
+  const line =
+    /^\s*\d+:\s+\+(?<primary>\*?)(?<name>\S+)\s+(?<width>\d+)(?:\/\d+)?x(?<height>\d+)(?:\/\d+)?\+(?<x>-?\d+)\+(?<y>-?\d+)/u;
+  for (const raw of text.split("\n")) {
+    const match = line.exec(raw);
+    const groups = match?.groups;
+    if (!groups) continue;
+    const widthPx = Number.parseInt(groups.width ?? "", 10);
+    const heightPx = Number.parseInt(groups.height ?? "", 10);
+    const x = Number.parseInt(groups.x ?? "", 10);
+    const y = Number.parseInt(groups.y ?? "", 10);
+    if (!Number.isFinite(widthPx) || !Number.isFinite(heightPx)) continue;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    if (widthPx <= 0 || heightPx <= 0) continue;
+    monitors.push({
+      name: groups.name ?? "",
+      widthPx,
+      heightPx,
+      x,
+      y,
+      primary: groups.primary === "*",
+    });
+  }
+  return monitors;
+}
+
+export interface X11WindowGeometry {
+  readonly x: number;
+  readonly y: number;
+  readonly widthPx: number;
+  readonly heightPx: number;
+  readonly screen: number;
+}
+
+/**
+ * `xdotool getwindowgeometry --shell` output, which is shell assignments:
+ * `WINDOW=`, `X=`, `Y=`, `WIDTH=`, `HEIGHT=`, `SCREEN=`. Null when the four
+ * geometry keys are not all present, because a partial frame would be a lie
+ * the UI cannot detect.
+ */
+export function parseWindowGeometryShell(text: string): X11WindowGeometry | null {
+  const values = new Map<string, number>();
+  for (const raw of text.split("\n")) {
+    const separator = raw.indexOf("=");
+    if (separator <= 0) continue;
+    const key = raw.slice(0, separator).trim();
+    const parsed = Number.parseInt(raw.slice(separator + 1).trim(), 10);
+    if (Number.isFinite(parsed)) values.set(key, parsed);
+  }
+  const x = values.get("X");
+  const y = values.get("Y");
+  const widthPx = values.get("WIDTH");
+  const heightPx = values.get("HEIGHT");
+  if (x === undefined || y === undefined || widthPx === undefined || heightPx === undefined) {
+    return null;
+  }
+  return { x, y, widthPx, heightPx, screen: values.get("SCREEN") ?? 0 };
+}

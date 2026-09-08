@@ -9,6 +9,7 @@ import type {
   OpenbotComputerLaunchInput,
   OpenbotComputerLaunchResult,
   OpenbotComputerSnapshot,
+  OpenbotComputerSnapshotInput,
   OpenbotComputerStatus,
   OpenbotComputerStreamProfile,
   OpenbotComputerStreamServerMessage,
@@ -68,10 +69,9 @@ export interface OpenbotComputerSessionShape {
     displayId?: OpenbotComputerDisplayId,
   ) => Effect.Effect<ReadonlyArray<OpenbotComputerWindow>, OpenbotComputerError>;
   readonly focusWindow: (id: OpenbotComputerWindowId) => Effect.Effect<void, OpenbotComputerError>;
-  readonly snapshot: (input: {
-    readonly displayId?: OpenbotComputerDisplayId;
-    readonly maxWidthPx?: number;
-  }) => Effect.Effect<OpenbotComputerSnapshot, OpenbotComputerError>;
+  readonly snapshot: (
+    input: OpenbotComputerSnapshotInput,
+  ) => Effect.Effect<OpenbotComputerSnapshot, OpenbotComputerError>;
   /**
    * Attach a viewer. Lives as long as the scope; closing the scope releases
    * its lease, releases anything it left pressed, and stops the capture when
@@ -89,6 +89,16 @@ export interface OpenbotComputerSessionShape {
    */
   readonly agentInput: (
     source: Extract<ComputerInputSource, { kind: "agent" }>,
+    displayId: OpenbotComputerDisplayId,
+    events: ReadonlyArray<OpenbotComputerInputEvent>,
+  ) => Effect.Effect<OpenbotComputerInputResult, OpenbotComputerError>;
+  /**
+   * Human-side input from RPC, for the client that drives the computer over
+   * the typed socket rather than the frame socket. Same rule as a stream
+   * viewer: without the lease every event comes back rejected.
+   */
+  readonly viewerInput: (
+    source: Extract<ComputerInputSource, { kind: "viewer" }>,
     displayId: OpenbotComputerDisplayId,
     events: ReadonlyArray<OpenbotComputerInputEvent>,
   ) => Effect.Effect<OpenbotComputerInputResult, OpenbotComputerError>;
