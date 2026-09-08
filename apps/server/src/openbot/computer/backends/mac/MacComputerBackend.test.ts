@@ -1,10 +1,15 @@
-import { OpenbotComputerDisplayId, OpenbotComputerWindowId } from "@t3tools/contracts";
+import {
+  OpenbotComputerDisplayId,
+  OpenbotComputerWindowId,
+  type OpenbotComputerError,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import { ComputerBackend } from "../../ComputerBackend.ts";
@@ -25,6 +30,14 @@ const UNKNOWN_DISPLAY_ID = OpenbotComputerDisplayId.make("999999");
 const WINDOW_ID = OpenbotComputerWindowId.make("w-1");
 
 const HELPER_APP = "/Applications/T3ComputerHelper.app";
+
+const GRANTED: HelperPermissions = { screenCapture: "granted", accessibility: "granted" };
+const DENIED: HelperPermissions = { screenCapture: "denied", accessibility: "denied" };
+/** Screen Recording kept, Accessibility taken away in System Settings. */
+const ACCESSIBILITY_REVOKED: HelperPermissions = {
+  screenCapture: "granted",
+  accessibility: "denied",
+};
 
 function helloWith(permissions: HelperPermissions): HelperHelloRecord {
   return {
@@ -51,6 +64,9 @@ interface HelperStub {
  */
 const makeStub = (options: {
   readonly hello?: HelperHelloRecord;
+  /** What the helper grants right now, read afresh on every describe the way
+      the client reads it from the helper. */
+  readonly permissions?: Effect.Effect<HelperPermissions, OpenbotComputerError>;
   readonly reply?: (command: HelperCommandWithoutId) => HelperRecord;
   readonly binaryFailure?: ComputerHelperNotFound;
   /** Commands the fake helper never answers, so a test can interrupt one the
@@ -60,8 +76,8 @@ const makeStub = (options: {
   Effect.gen(function* () {
     const sent = yield* Queue.unbounded<HelperCommandWithoutId>();
     const frames = yield* PubSub.unbounded<HelperFrame>();
-    const hello =
-      options.hello ?? helloWith({ screenCapture: "granted", accessibility: "granted" });
+    const hello = options.hello ?? helloWith(GRANTED);
+    const permissions = options.permissions ?? Effect.succeed(GRANTED);
     const reply = options.reply ?? ((): HelperRecord => ({ id: 1, type: "ok" }));
 
     const client = Layer.succeed(
@@ -86,6 +102,7 @@ const makeStub = (options: {
         frames: Stream.fromPubSub(frames),
         events: Stream.empty,
         hello: Effect.succeed(hello),
+        permissions,
       }),
     );
     const binary = Layer.succeed(
@@ -123,7 +140,7 @@ describe("MacComputerBackend", () => {
   it.effect("reports the helper's permissions verbatim with a fix for the missing ones", () =>
     Effect.gen(function* () {
       const stub = yield* makeStub({
-        hello: helloWith({ screenCapture: "granted", accessibility: "denied" }),
+        permissions: Effect.succeed({ screenCapture: "granted", accessibility: "denied" }),
       });
 
       const description = yield* Effect.gen(function* () {
@@ -147,6 +164,69 @@ describe("MacComputerBackend", () => {
         focusWindow: true,
         managedDisplays: true,
         launchApp: true,
+      });
+    }),
+  );
+
+  /**
+   * The bug this guards: the helper connects before the user has granted
+   * anything, and describing the computer used to answer from that handshake
+   * forever, so the app still said "denied" after the grant landed.
+   */
+  it.effect("reports permissions granted after they were denied at connect", () =>
+    Effect.gen(function* () {
+      const current = yield* Ref.make(DENIED);
+      const reads = yield* Ref.make(0);
+      const stub = yield* makeStub({
+        // The helper connected before either grant existed, and stays connected.
+        hello: helloWith(DENIED),
+        permissions: Ref.update(reads, (count) => count + 1).pipe(Effect.andThen(Ref.get(current))),
+      });
+
+      const { before, after } = yield* Effect.gen(function* () {
+        const backend = yield* ComputerBackend;
+        const before = yield* backend.describe;
+        // The user grants both in System Settings; the live helper now reads
+        // them as granted and says so.
+        yield* Ref.set(current, GRANTED);
+        return { before, after: yield* backend.describe };
+      }).pipe(Effect.provide(stub.layer));
+
+      expect(before.permissions).toEqual({
+        screenCapture: "denied",
+        accessibility: "denied",
+        detail:
+          "Grant Screen Recording and Accessibility to T3 Computer Helper in System Settings › Privacy & Security, then retry.",
+      });
+      expect(after.permissions).toEqual({
+        screenCapture: "granted",
+        accessibility: "granted",
+        detail: null,
+      });
+      // Both describes asked what is granted now. A describe that re-read the
+      // handshake would leave this at zero and still report denied.
+      expect(yield* Ref.get(reads)).toBe(2);
+    }),
+  );
+
+  it.effect("reports a revoked permission", () =>
+    Effect.gen(function* () {
+      const current = yield* Ref.make(GRANTED);
+      const stub = yield* makeStub({ hello: helloWith(GRANTED), permissions: Ref.get(current) });
+
+      const { before, after } = yield* Effect.gen(function* () {
+        const backend = yield* ComputerBackend;
+        const before = yield* backend.describe;
+        yield* Ref.set(current, ACCESSIBILITY_REVOKED);
+        return { before, after: yield* backend.describe };
+      }).pipe(Effect.provide(stub.layer));
+
+      expect(before.permissions.detail).toBeNull();
+      expect(after.permissions).toEqual({
+        screenCapture: "granted",
+        accessibility: "denied",
+        detail:
+          "Grant Accessibility to T3 Computer Helper in System Settings › Privacy & Security, then retry.",
       });
     }),
   );

@@ -135,12 +135,25 @@ export const make = Effect.fn("openbot.computer.macComputerBackend.make")(functi
         unavailableReason: hello.failure.message,
       };
     }
+    // The handshake record is a snapshot of the moment the helper connected, and
+    // a user granting Screen Recording in System Settings does not reconnect it.
+    // Describing the computer has to ask what is granted now.
+    const permissions = yield* Effect.result(client.permissions);
+    if (Result.isFailure(permissions)) {
+      return {
+        session: "signed-in-desktop" as const,
+        permissions: UNKNOWN_PERMISSIONS,
+        setup: null,
+        capabilities: MAC_CAPABILITIES,
+        unavailableReason: permissions.failure.message,
+      };
+    }
     return {
       session: "signed-in-desktop" as const,
       permissions: {
-        screenCapture: hello.success.permissions.screenCapture,
-        accessibility: hello.success.permissions.accessibility,
-        detail: macPermissionDetail(hello.success.permissions),
+        screenCapture: permissions.success.screenCapture,
+        accessibility: permissions.success.accessibility,
+        detail: macPermissionDetail(permissions.success),
       },
       setup: null,
       capabilities: MAC_CAPABILITIES,

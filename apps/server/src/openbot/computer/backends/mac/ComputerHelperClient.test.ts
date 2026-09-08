@@ -25,11 +25,13 @@ import {
   layer as computerHelperClientLayer,
   loginSessionLauncherLayer,
 } from "./ComputerHelperClient.ts";
+import type { HelperPermissions } from "./ComputerHelperProtocol.ts";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 const GRANTED = { screenCapture: "granted", accessibility: "granted" } as const;
+const DENIED = { screenCapture: "denied", accessibility: "denied" } as const;
 const DISPLAY_ID = OpenbotComputerDisplayId.make("7");
 
 function frameBytes(record: Record<string, unknown>, payload: Uint8Array): Uint8Array {
@@ -122,8 +124,13 @@ const withHelper = <A, E>(body: (harness: Harness) => Effect.Effect<A, E>): Effe
     }).pipe(Effect.provide(computerHelperClientLayer.pipe(Layer.provide(launcher))));
   });
 
-/** Answers the helper's side of the handshake and returns the id it used. */
-const answerHello = (connection: FakeConnection, pid: number) =>
+/** Answers a `hello` — the handshake or a later refresh — the way the helper
+    does, from the permissions it would read at that moment. */
+const answerHello = (
+  connection: FakeConnection,
+  pid: number,
+  permissions: HelperPermissions = GRANTED,
+) =>
   Effect.gen(function* () {
     const command = yield* takeCommand(connection);
     expect(command.type).toBe("hello");
@@ -135,7 +142,7 @@ const answerHello = (connection: FakeConnection, pid: number) =>
         protocolVersion: 1,
         pid,
         bundleId: "codes.t3.ComputerHelper",
-        permissions: GRANTED,
+        permissions,
         displays: [],
       }),
     );
@@ -147,11 +154,11 @@ const answerHello = (connection: FakeConnection, pid: number) =>
  * the handshake. Nothing connects until something demands the helper, so every
  * test that needs a live connection starts here.
  */
-const connect = (harness: Harness, pid = 1) =>
+const connect = (harness: Harness, pid = 1, permissions: HelperPermissions = GRANTED) =>
   Effect.gen(function* () {
     const asking = yield* harness.client.hello.pipe(Effect.forkChild);
     const connection = yield* Queue.take(harness.opened);
-    yield* answerHello(connection, pid);
+    yield* answerHello(connection, pid, permissions);
     const hello = yield* Fiber.join(asking);
     return { connection, hello };
   });
@@ -424,6 +431,55 @@ describe("ComputerHelperClient", () => {
 
         expect(yield* Queue.take(received)).toBe("displays-changed");
         expect(yield* Queue.take(received)).toBe("permissions-changed");
+      }),
+    ),
+  );
+
+  /**
+   * The grants a user makes in System Settings reach a helper that is already
+   * connected, so the handshake record stops being true the moment they do.
+   */
+  it.effect("reports permissions granted after they were denied at connect", () =>
+    withHelper((harness) =>
+      Effect.gen(function* () {
+        const { connection } = yield* connect(harness, 1, DENIED);
+
+        // Until the helper says otherwise, its last answer stands and costs
+        // nothing: the handshake is the only thing on the wire so far.
+        expect(yield* harness.client.permissions).toEqual(DENIED);
+        expect(yield* harness.client.permissions).toEqual(DENIED);
+        expect(yield* Queue.size(connection.written)).toBe(0);
+
+        yield* push(connection, recordBytes({ type: "event", event: "permissions-changed" }));
+        yield* settle;
+
+        const asking = yield* harness.client.permissions.pipe(Effect.forkChild);
+        yield* answerHello(connection, 1, GRANTED);
+        expect(yield* Fiber.join(asking)).toEqual(GRANTED);
+
+        // Readiness is a different question, and still answered by the record
+        // the helper sent when it connected.
+        expect((yield* harness.client.hello).permissions).toEqual(DENIED);
+      }),
+    ),
+  );
+
+  it.effect("a relaunched helper's permissions replace the old ones", () =>
+    withHelper((harness) =>
+      Effect.gen(function* () {
+        const { connection: first } = yield* connect(harness, 1, DENIED);
+        expect(yield* harness.client.permissions).toEqual(DENIED);
+
+        yield* Queue.end(first.inbound);
+        yield* TestClock.adjust(Duration.millis(500));
+
+        const second = yield* Queue.take(harness.opened);
+        yield* answerHello(second, 2, GRANTED);
+        // Waiting on readiness proves the new handshake landed before the read.
+        expect((yield* harness.client.hello).pid).toBe(2);
+
+        expect(yield* harness.client.permissions).toEqual(GRANTED);
+        expect(yield* Queue.size(second.written)).toBe(0);
       }),
     ),
   );

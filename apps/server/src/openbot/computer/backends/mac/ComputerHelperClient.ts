@@ -34,6 +34,7 @@ import {
   feedRecordDecoder,
   type HelperCommand,
   type HelperFrameEnvelope,
+  type HelperPermissions,
   type HelperRecord,
 } from "./ComputerHelperProtocol.ts";
 
@@ -157,9 +158,16 @@ export class ComputerHelperClient extends Context.Service<
         fall behind drop old frames rather than growing a backlog. */
     readonly frames: Stream.Stream<HelperFrame>;
     readonly events: Stream.Stream<HelperEvent>;
-    /** The connected helper, starting it on the first call and after a start
-        that stopped for good. Fails with the reason there is no helper. */
+    /** Readiness: the handshake that proves a helper is up, starting it on the
+        first call and after a start that stopped for good. Fails with the reason
+        there is no helper. The record is the one the helper sent when it
+        connected, so read `permissions` for grants rather than this. */
     readonly hello: Effect.Effect<HelperHelloRecord, OpenbotComputerError>;
+    /** What macOS grants the helper *now*. Answered from the last `hello` reply
+        while that is still true, and by asking the helper again once it has
+        reported a `permissions-changed`, so a grant made in System Settings
+        shows up without restarting anything. */
+    readonly permissions: Effect.Effect<HelperPermissions, OpenbotComputerError>;
   }
 >()("t3/openbot/computer/backends/mac/ComputerHelperClient") {}
 
@@ -546,6 +554,9 @@ export const make = Effect.fn("openbot.computer.computerHelperClient.make")(func
   const frames = yield* PubSub.sliding<HelperFrame>(FRAME_BUFFER);
   const events = yield* PubSub.sliding<HelperEvent>(EVENT_BUFFER);
   const connection = yield* Ref.make(Option.none<ActiveConnection>());
+  // The grants the helper last reported. `None` means nobody knows: no helper
+  // has answered yet, or one told us they changed and what we held is a lie.
+  const knownPermissions = yield* Ref.make(Option.none<HelperPermissions>());
   // `None` means no handshake is in flight, so callers answer with the reason
   // the last attempt failed instead of waiting on a connection nobody is making.
   const helloReady = yield* Ref.make(Option.none<HelloDeferred>());
@@ -555,6 +566,9 @@ export const make = Effect.fn("openbot.computer.computerHelperClient.make")(func
   const supervising = yield* Ref.make(false);
   const startMutex = yield* Semaphore.make(1);
   const writeMutex = yield* Semaphore.make(1);
+  // Every session re-describes the computer when permissions change, so the
+  // refreshes arrive together; the first one asks and the rest read its answer.
+  const permissionsMutex = yield* Semaphore.make(1);
 
   const failPending = (reason: string) =>
     Effect.gen(function* () {
@@ -613,8 +627,18 @@ export const make = Effect.fn("openbot.computer.computerHelperClient.make")(func
     Effect.gen(function* () {
       const record = envelope.record;
       if (record.type === "event") {
+        // Forgotten before the event goes out, so a subscriber that describes
+        // the computer on hearing it cannot read the superseded grants.
+        if (record.event === "permissions-changed") {
+          yield* Ref.set(knownPermissions, Option.none());
+        }
         yield* PubSub.publish(events, record.event);
         return;
+      }
+      // Every `hello` reply carries the grants as they were when the helper
+      // answered — the handshake's and any later refresh's alike.
+      if (record.type === "hello") {
+        yield* Ref.set(knownPermissions, Option.some(record.permissions));
       }
       const id = recordId(record);
       if (id !== null) {
@@ -693,7 +717,16 @@ export const make = Effect.fn("openbot.computer.computerHelperClient.make")(func
 
       return yield* Effect.raceFirst(connectionEnded, handshake);
     }),
-  ).pipe(Effect.ensuring(Ref.set(connection, Option.none())));
+    // A dead helper's grants are nobody's grants: dropping them here is what
+    // makes a relaunched helper's handshake replace the old ones rather than
+    // sit behind them.
+  ).pipe(
+    Effect.ensuring(
+      Ref.set(connection, Option.none()).pipe(
+        Effect.andThen(Ref.set(knownPermissions, Option.none())),
+      ),
+    ),
+  );
 
   /**
    * Keeps one helper running until the service scope closes, restarting it with
@@ -823,12 +856,42 @@ export const make = Effect.fn("openbot.computer.computerHelperClient.make")(func
     return yield* downNow;
   });
 
+  /**
+   * `hello` is the only command that reports permissions, and the helper answers
+   * it from a fresh read of both gates every time, so re-asking is how the
+   * server learns about a grant. It is asked only when nothing current is
+   * remembered, which after a handshake or a change is at most once.
+   */
+  const permissions: ComputerHelperClient["Service"]["permissions"] = permissionsMutex.withPermits(
+    1,
+  )(
+    Effect.gen(function* () {
+      const remembered = yield* Ref.get(knownPermissions);
+      if (Option.isSome(remembered)) return remembered.value;
+      const active = yield* connected;
+      // Connecting runs a handshake, whose reply is already an answer.
+      const handshaken = yield* Ref.get(knownPermissions);
+      if (Option.isSome(handshaken)) return handshaken.value;
+      const reply = yield* sendEnvelope(active, {
+        type: "hello",
+        protocolVersion: COMPUTER_HELPER_PROTOCOL_VERSION,
+      });
+      if (reply.record.type !== "hello") {
+        return yield* Effect.fail(
+          backendUnavailable(`T3 Computer Helper replied with '${reply.record.type}' to 'hello'.`),
+        );
+      }
+      return reply.record.permissions;
+    }),
+  );
+
   return ComputerHelperClient.of({
     request,
     requestFrame,
     frames: Stream.fromPubSub(frames),
     events: Stream.fromPubSub(events),
     hello,
+    permissions,
   });
 });
 
