@@ -621,6 +621,11 @@ const makeWsRpcLayer = (
         sessionId: currentSessionId,
         label: clientOrigin.surface ?? "A client",
       } as const;
+      // This source has no frame socket to close on its behalf, so the socket's
+      // own scope is what gives the lease and any held keys back. Without it a
+      // client that took control here and then went away leaves the computer
+      // locked to a connection that no longer exists.
+      yield* Effect.addFinalizer(() => openbotComputer.detachSource(computerViewer));
       const pullRequests = yield* PullRequestService.PullRequestService;
       const usage = yield* UsageService.UsageService;
       const projectService = yield* ProjectService.ProjectService;

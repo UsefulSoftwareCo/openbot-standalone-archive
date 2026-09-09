@@ -1093,16 +1093,30 @@ export const make = Effect.gen(function* () {
    * interrupted and only its own holds come back up, leaving the controller's
    * lease and whatever it has mid-flight untouched.
    */
+  const detachKeys = (key: string) =>
+    Effect.gen(function* () {
+      const before = yield* Ref.get(lease);
+      return before !== null && before.ownerConnection === key
+        ? yield* connectionsOfLease(before.key)
+        : [key];
+    });
+
+  /** The lease and held-key half of a disconnect, under the host lock. */
+  const detachConnectionLocked = (key: string, source: ComputerInputSource) =>
+    Effect.gen(function* () {
+      // Rechecked under the lock: ownership can have moved to another of this
+      // person's connections since the keys were chosen.
+      if (ownedByConnection(yield* Ref.get(lease), key)) {
+        yield* releaseLeaseLocked(source);
+      }
+      yield* releaseHoldsLocked([key]);
+    });
+
   const detachViewer = (viewerId: string) =>
     Effect.gen(function* () {
       const key = `viewer:${viewerId}`;
-      const before = yield* Ref.get(lease);
-      const keys =
-        before !== null && before.ownerConnection === key
-          ? yield* connectionsOfLease(before.key)
-          : [key];
       yield* withHostCancellation(
-        keys,
+        yield* detachKeys(key),
         Effect.gen(function* () {
           const removed = yield* Ref.modify(viewers, (map) => {
             const record = map.get(viewerId);
@@ -1112,17 +1126,24 @@ export const make = Effect.gen(function* () {
             return [record, next];
           });
           if (removed === null) return;
-          // Rechecked under the lock: ownership can have moved to another of
-          // this person's connections since the keys above were chosen.
-          if (ownedByConnection(yield* Ref.get(lease), key)) {
-            yield* releaseLeaseLocked(toViewerSource(removed));
-          }
-          yield* releaseHoldsLocked([key]);
+          yield* detachConnectionLocked(key, toViewerSource(removed));
           if (removed.displayId !== null) yield* reconcileCaptureLocked(removed.displayId);
           yield* Queue.end(removed.control);
           yield* Queue.end(removed.frames);
         }),
       );
+    });
+
+  /**
+   * The same disconnect for a source with no viewer record: the typed RPC
+   * socket holds a lease and can leave keys down without ever attaching to a
+   * display, and the held and in-flight maps are keyed by connection, so they
+   * answer for it too.
+   */
+  const detachSource: OpenbotComputerSessionShape["detachSource"] = (source) =>
+    Effect.gen(function* () {
+      const key = sourceKey(source);
+      yield* withHostCancellation(yield* detachKeys(key), detachConnectionLocked(key, source));
     });
 
   const attachViewer: OpenbotComputerSessionShape["attachViewer"] = (input) =>
@@ -1319,6 +1340,7 @@ export const make = Effect.gen(function* () {
     agentInput,
     viewerInput: viewerRpcInput,
     control,
+    detachSource,
     controller: Ref.get(lease).pipe(Effect.map(controllerOf)),
     createDisplay,
     destroyDisplay,

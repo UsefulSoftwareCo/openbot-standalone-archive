@@ -135,6 +135,20 @@ export interface OpenbotComputerSessionShape {
     source: Extract<ComputerInputSource, { kind: "viewer" }>,
     action: "take" | "release",
   ) => Effect.Effect<OpenbotComputerStatus, OpenbotComputerError>;
+  /**
+   * Called when the connection behind a viewer source goes away. Cancels that
+   * connection's in-flight input, releases what that connection left pressed,
+   * and frees the lease only when THIS connection owns it (`ownerConnection ===
+   * sourceKey`); a lease owned by another connection of the same session is
+   * left alone.
+   *
+   * `attachViewer` already does this from its own scope, so this is for the
+   * sources that have no viewer record: the typed RPC socket, whose lease and
+   * held keys would otherwise outlive the socket that took them.
+   */
+  readonly detachSource: (
+    source: Extract<ComputerInputSource, { kind: "viewer" }>,
+  ) => Effect.Effect<void>;
   readonly controller: Effect.Effect<OpenbotComputerController | null>;
   readonly createDisplay: (
     input: OpenbotComputerDisplayCreateInput,

@@ -662,6 +662,94 @@ describe("OpenbotComputerSessionService", () => {
     ),
   );
 
+  it.effect("an RPC connection that took control gives it back when it disconnects", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { session: computer } = yield* session();
+        const client = {
+          kind: "viewer",
+          viewerId: "rpc:session-1",
+          sessionId: "session-1",
+          label: "web",
+        } as const;
+        const stranger = {
+          kind: "viewer",
+          viewerId: "rpc:session-2",
+          sessionId: "session-2",
+          label: "iPad",
+        } as const;
+
+        yield* computer.control(client, "take");
+        const refused = yield* Effect.flip(computer.control(stranger, "take"));
+        expect(refused.code).toBe("not_controlling");
+
+        yield* computer.detachSource(client);
+
+        expect(yield* computer.controller).toBeNull();
+        const taken = yield* computer.control(stranger, "take");
+        expect(taken.controller).toMatchObject({ kind: "viewer", label: "iPad" });
+      }),
+    ),
+  );
+
+  it.effect("an RPC disconnect leaves the same session's frame-socket lease alone", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { host, session: computer } = yield* session();
+        const viewer = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-1",
+          canControl: true,
+        });
+        yield* viewer.open(MAIN_DISPLAY.id, PROFILE);
+        yield* viewer.takeControl;
+
+        // The same person's typed socket goes away without ever having taken
+        // control; the live view they are still driving must not lose it.
+        yield* computer.detachSource({
+          kind: "viewer",
+          viewerId: "rpc:session-1",
+          sessionId: "session-1",
+          label: "web",
+        });
+
+        expect(yield* computer.controller).toMatchObject({ kind: "viewer", label: "Rhys" });
+        expect(yield* viewer.input([clickAt(5, 5)])).toEqual({ delivered: 1, rejected: [] });
+        expect((yield* host.delivered).at(-1)).toEqual({
+          displayId: MAIN_DISPLAY.id,
+          events: [clickAt(5, 5)],
+        });
+      }),
+    ),
+  );
+
+  it.effect("an RPC disconnect releases what that connection pressed", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { host, session: computer } = yield* session();
+        const client = {
+          kind: "viewer",
+          viewerId: "rpc:session-1",
+          sessionId: "session-1",
+          label: "web",
+        } as const;
+
+        yield* computer.control(client, "take");
+        yield* computer.viewerInput(client, MAIN_DISPLAY.id, [
+          { type: "key", key: "ShiftLeft", action: "down" },
+        ]);
+
+        yield* computer.detachSource(client);
+
+        expect((yield* host.delivered).at(-1)).toEqual({
+          displayId: MAIN_DISPLAY.id,
+          events: [{ type: "key", key: "ShiftLeft", action: "up" }],
+        });
+        expect(yield* computer.controller).toBeNull();
+      }),
+    ),
+  );
+
   it.effect("refuses to open a display this host does not have", () =>
     Effect.scoped(
       Effect.gen(function* () {
