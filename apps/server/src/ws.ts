@@ -94,6 +94,7 @@ import { ProviderSessionManagerV2 } from "./orchestration-v2/ProviderSessionMana
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import { OpenbotChannelService } from "./openbot/OpenbotChannelService.ts";
+import { OpenbotChatComputerService } from "./openbot/computer/OpenbotChatComputer.ts";
 import { OpenbotComputerSession } from "./openbot/computer/OpenbotComputerSession.ts";
 import {
   archivedShellStreamItemFromThreadShell,
@@ -605,6 +606,9 @@ const makeWsRpcLayer = (
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const openbotChannels = yield* OpenbotChannelService;
       const openbotComputer = yield* OpenbotComputerSession;
+      // The chat-scoped view of the same session: every surface above this
+      // names a chat, never a display the host happens to have.
+      const openbotChatComputer = yield* OpenbotChatComputerService;
       // Input and the lease from the typed socket belong to the human at
       // this client, so they share one identity for as long as the socket
       // lives: taking control in one tab and clicking in it is one viewer.
@@ -1781,6 +1785,53 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.openbotComputerLaunch,
             openbotComputer.launch(computerViewer, input),
+            { "rpc.aggregate": "openbot" },
+          ),
+        [WS_METHODS.openbotChatComputerGet]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.openbotChatComputerGet,
+            openbotChatComputer.get(input.channelId),
+            { "rpc.aggregate": "openbot" },
+          ),
+        [WS_METHODS.openbotChatComputerEnsure]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.openbotChatComputerEnsure,
+            openbotChatComputer.ensure(input.channelId),
+            { "rpc.aggregate": "openbot" },
+          ),
+        [WS_METHODS.openbotChatComputerSubscribe]: (input) =>
+          observeRpcStream(
+            WS_METHODS.openbotChatComputerSubscribe,
+            openbotChatComputer.changes(input.channelId),
+            { "rpc.aggregate": "openbot" },
+          ),
+        [WS_METHODS.openbotChatComputerSnapshot]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.openbotChatComputerSnapshot,
+            openbotChatComputer.snapshot(input.channelId, input.maxWidthPx),
+            { "rpc.aggregate": "openbot" },
+          ),
+        [WS_METHODS.openbotChatComputerWindowFocus]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.openbotChatComputerWindowFocus,
+            openbotChatComputer
+              .focusWindow(computerViewer, input.channelId, input.windowId)
+              .pipe(Effect.as({})),
+            { "rpc.aggregate": "openbot" },
+          ),
+        [WS_METHODS.openbotChatComputerLaunch]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.openbotChatComputerLaunch,
+            openbotChatComputer.launch(computerViewer, input.channelId, {
+              app: input.app,
+              ...(input.args === undefined ? {} : { args: input.args }),
+            }),
+            { "rpc.aggregate": "openbot" },
+          ),
+        [WS_METHODS.openbotChatComputerInput]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.openbotChatComputerInput,
+            openbotChatComputer.input(computerViewer, input.channelId, input.events),
             { "rpc.aggregate": "openbot" },
           ),
         [WS_METHODS.serverProbe]: (_input) =>

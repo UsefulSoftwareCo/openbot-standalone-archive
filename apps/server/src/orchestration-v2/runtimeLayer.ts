@@ -52,6 +52,7 @@ import {
 } from "../openbot/OpenbotChannelService.ts";
 import { layer as openbotChannelStoreLayer } from "../openbot/OpenbotChannelStore.ts";
 import { layer as computerBackendLayer } from "../openbot/computer/ComputerBackendLive.ts";
+import { layer as openbotChatComputerLayer } from "../openbot/computer/OpenbotChatComputerService.ts";
 import { layer as openbotComputerSessionLayer } from "../openbot/computer/OpenbotComputerSessionService.ts";
 import { layer as openbotQuestionServiceLayer } from "../openbot/OpenbotQuestionService.ts";
 
@@ -300,6 +301,12 @@ export const OrchestrationV2LayerLive = Layer.mergeAll(
 const openbotComputerProvided = openbotComputerSessionLayer.pipe(
   Layer.provide(computerBackendLayer),
 );
+// The chat-scoped owner of those displays. It needs the session for the host
+// itself and the channel store to answer "whose computer is this", and is the
+// only thing above the session that decides which display a chat means.
+const openbotChatComputerProvided = openbotChatComputerLayer.pipe(
+  Layer.provide(Layer.merge(openbotComputerProvided, openbotChannelStoreLayer)),
+);
 
 export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   OrchestrationLayerLive,
@@ -312,6 +319,7 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   // The session owns viewers, the lease, and the input queue; the backend
   // underneath it is chosen from the host platform and stays private to it.
   openbotComputerProvided,
+  openbotChatComputerProvided,
   openbotQuestionProvided,
   providerContinuationWorkerProvided,
 );

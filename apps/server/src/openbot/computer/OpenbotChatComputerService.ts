@@ -1,0 +1,398 @@
+import {
+  OpenbotComputerError,
+  type OpenbotChannel,
+  type OpenbotChannelId,
+  type OpenbotChatComputer,
+  type OpenbotChatComputerState,
+  type OpenbotComputerDisplay,
+  type OpenbotComputerWindow,
+} from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
+import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
+
+import { OpenbotChannelStore } from "../OpenbotChannelStore.ts";
+import {
+  OpenbotChatComputerService,
+  type OpenbotChatComputerShape,
+} from "./OpenbotChatComputer.ts";
+import { OpenbotComputerSession } from "./OpenbotComputerSession.ts";
+
+/**
+ * One managed display per top-level chat, created on first use and remembered
+ * for the life of the process.
+ *
+ * Everything here is a decision about *which* display a chat means; the lease,
+ * ordering, capture, and cleanup all still belong to `OpenbotComputerSession`.
+ * Nothing in this file ever picks the main display or any other physical
+ * screen: a chat that has no managed display of its own has no computer, and
+ * saying so is better than quietly driving the person's own monitor.
+ */
+
+/** The chat's screen. Large enough for a browser and an editor side by side,
+    small enough to encode at a readable frame rate over a remote link. */
+const CHAT_DISPLAY_WIDTH_PX = 1680;
+const CHAT_DISPLAY_HEIGHT_PX = 1050;
+
+/** The app macOS attaches the grants to, whatever launched the server. */
+const HELPER_NAME = "T3 Computer Helper";
+
+/**
+ * Why a launch is refused rather than attempted. Without Accessibility macOS
+ * cannot place a new window on a specific display, and the app would open on
+ * the screen the person is using — the one outcome this feature exists to
+ * avoid — so the launch never reaches the host.
+ */
+export const LAUNCH_ACCESSIBILITY_DETAIL = `Opening an app on this chat's computer needs Accessibility. Grant it to ${HELPER_NAME} (codes.t3.openbot.computer-helper) in System Settings › Privacy & Security › Accessibility, then try again. Until then nothing is launched: without that grant macOS would put the window on your own screen instead of the chat's.`;
+
+/** Said when a chat's parent chain is not the one level the schema promises. */
+const INCONSISTENT_CHAIN = "chat nesting is one level; data is inconsistent";
+
+/**
+ * What this server knows about one chat's display right now.
+ *
+ * `provisioning` carries the creation in flight so a second caller waits on it
+ * instead of asking the host for a second screen, and `unavailable` keeps the
+ * last failure so `get` can explain an empty rail without provisioning
+ * anything.
+ */
+type ChatDisplayEntry =
+  | { readonly kind: "ready"; readonly display: OpenbotComputerDisplay }
+  | {
+      readonly kind: "provisioning";
+      readonly pending: Deferred.Deferred<OpenbotComputerDisplay, OpenbotComputerError>;
+    }
+  | { readonly kind: "unavailable"; readonly detail: string };
+
+/** What one pass of `acquire` decided to do, settled inside a single atomic
+    read-modify-write so two callers cannot both decide to create. */
+type AcquireDecision =
+  | { readonly kind: "listed"; readonly display: OpenbotComputerDisplay }
+  | {
+      readonly kind: "await";
+      readonly pending: Deferred.Deferred<OpenbotComputerDisplay, OpenbotComputerError>;
+    }
+  | { readonly kind: "create" };
+
+/** The one sentence a person or an agent can read out of a failed creation. */
+const detailOfCause = (cause: Cause.Cause<OpenbotComputerError>): string => {
+  const squashed = Cause.squash(cause);
+  return squashed instanceof Error ? squashed.message : String(squashed);
+};
+
+const invalidInput = (message: string) =>
+  new OpenbotComputerError({ code: "invalid_input", message });
+
+export const make = Effect.gen(function* () {
+  const session = yield* OpenbotComputerSession;
+  const store = yield* OpenbotChannelStore;
+
+  const entries = yield* Ref.make<ReadonlyMap<OpenbotChannelId, ChatDisplayEntry>>(new Map());
+  /** Nudged whenever this server's own view of a chat's display moves, which
+      the host's status stream cannot know about. */
+  const changed = yield* PubSub.unbounded<OpenbotChannelId>();
+
+  const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
+
+  // A chat row that cannot be read is a broken database, not a computer
+  // failure this API can describe; it fails fast rather than being dressed up
+  // as an unavailable desktop.
+  const requireChannel = Effect.fn("OpenbotChatComputerService.requireChannel")(function* (
+    channelId: OpenbotChannelId,
+  ) {
+    const channel = yield* store.getById(channelId).pipe(Effect.orDie);
+    if (channel === undefined) {
+      return yield* invalidInput(`Chat ${channelId} was not found.`);
+    }
+    return channel;
+  });
+
+  /**
+   * The top-level chat whose computer this one is. A child hands back its
+   * parent; a chain that is deeper than one level, or that comes back to a
+   * chat already on it, is reported rather than followed.
+   */
+  const ownerOf = Effect.fn("OpenbotChatComputerService.ownerOf")(function* (
+    channel: OpenbotChannel,
+  ) {
+    if (channel.parentChannelId === null) return channel;
+    const parent = yield* requireChannel(channel.parentChannelId);
+    // A self-parent or a cycle lands here too: it comes back as a chat that
+    // still has a parent of its own.
+    if (parent.parentChannelId !== null) {
+      return yield* invalidInput(
+        `Chat ${channel.id} resolves through ${parent.id}, which has a parent of its own: ${INCONSISTENT_CHAIN}.`,
+      );
+    }
+    return parent;
+  });
+
+  const ownerOfId = (channelId: OpenbotChannelId) =>
+    requireChannel(channelId).pipe(Effect.flatMap(ownerOf));
+
+  /** Only the windows the host puts on this chat's own screen. */
+  const ownedWindows = (displayId: OpenbotComputerDisplay["id"]) =>
+    session
+      .listWindows(displayId)
+      .pipe(Effect.map((windows) => windows.filter((window) => window.displayId === displayId)));
+
+  /** Whether a launch could place its window on a managed display right now.
+      macOS needs Accessibility for that; Linux places by session, not grant. */
+  const launchable = session.status.pipe(
+    Effect.map(
+      (status) =>
+        status.capabilities.launchApp &&
+        (status.host.platform === "darwin" ? status.permissions.accessibility === "granted" : true),
+    ),
+  );
+
+  const view = Effect.fn("OpenbotChatComputerService.view")(function* (
+    owner: OpenbotChannel,
+    described: {
+      readonly state: OpenbotChatComputerState;
+      readonly display: OpenbotComputerDisplay | null;
+      readonly detail: string | null;
+    },
+  ) {
+    const display = described.display;
+    const windows: ReadonlyArray<OpenbotComputerWindow> =
+      display === null ? [] : yield* ownedWindows(display.id).pipe(Effect.orElseSucceed(() => []));
+    const controller = yield* session.controller;
+    const canLaunch = yield* launchable;
+    return {
+      channelId: owner.id,
+      channelName: owner.name,
+      state: described.state,
+      display,
+      detail: described.detail,
+      windows,
+      controller,
+      canLaunch,
+      checkedAt: yield* nowIso,
+    } satisfies OpenbotChatComputer;
+  });
+
+  const describeEntry = (owner: OpenbotChannel, entry: ChatDisplayEntry | undefined) => {
+    if (entry === undefined) return view(owner, { state: "idle", display: null, detail: null });
+    switch (entry.kind) {
+      case "ready":
+        return view(owner, { state: "ready", display: entry.display, detail: null });
+      case "provisioning":
+        return view(owner, { state: "provisioning", display: null, detail: null });
+      case "unavailable":
+        return view(owner, { state: "unavailable", display: null, detail: entry.detail });
+    }
+  };
+
+  const currentView = (owner: OpenbotChannel) =>
+    Ref.get(entries).pipe(Effect.flatMap((map) => describeEntry(owner, map.get(owner.id))));
+
+  /**
+   * Provision-or-reuse, failing loudly so the acting paths (snapshot, focus,
+   * launch, input) never act on a display that is not there. `ensure` is the
+   * one caller that turns a failure into a description instead.
+   *
+   * Concurrency is settled by one `Ref.modify`: whoever installs the pending
+   * `Deferred` creates, everyone else waits on it, so a UI mount racing an
+   * agent's first tool call produces one display.
+   */
+  const acquire = Effect.fn("OpenbotChatComputerService.acquire")(function* (
+    owner: OpenbotChannel,
+  ): Effect.fn.Return<OpenbotComputerDisplay, OpenbotComputerError> {
+    for (;;) {
+      const pending = yield* Deferred.make<OpenbotComputerDisplay, OpenbotComputerError>();
+      const decision = yield* Ref.modify(
+        entries,
+        (map): readonly [AcquireDecision, ReadonlyMap<OpenbotChannelId, ChatDisplayEntry>] => {
+          const entry = map.get(owner.id);
+          if (entry?.kind === "ready") return [{ kind: "listed", display: entry.display }, map];
+          if (entry?.kind === "provisioning")
+            return [{ kind: "await", pending: entry.pending }, map];
+          return [
+            { kind: "create" },
+            new Map(map).set(owner.id, { kind: "provisioning", pending }),
+          ];
+        },
+      );
+
+      if (decision.kind === "await") return yield* Deferred.await(decision.pending);
+
+      if (decision.kind === "listed") {
+        // Display ids are the host's, and a helper restart or a signed-out
+        // session takes them with it. The listing is the only evidence the
+        // remembered screen still exists, and it refreshes its geometry.
+        const listed = yield* session.listDisplays;
+        const live = listed.find((display) => display.id === decision.display.id);
+        if (live !== undefined) {
+          yield* Ref.update(entries, (map) => {
+            const entry = map.get(owner.id);
+            return entry?.kind === "ready" && entry.display.id === live.id
+              ? new Map(map).set(owner.id, { kind: "ready", display: live })
+              : map;
+          });
+          return live;
+        }
+        yield* Ref.update(entries, (map) => {
+          const entry = map.get(owner.id);
+          if (entry?.kind !== "ready" || entry.display.id !== decision.display.id) return map;
+          const next = new Map(map);
+          next.delete(owner.id);
+          return next;
+        });
+        yield* PubSub.publish(changed, owner.id);
+        continue;
+      }
+
+      // Uninterruptible so an abandoned caller cannot leave a half-made screen
+      // behind, and so the waiters on `pending` always get an outcome.
+      const outcome = yield* Effect.exit(
+        Effect.uninterruptible(
+          session.createDisplay({
+            name: owner.name,
+            widthPx: CHAT_DISPLAY_WIDTH_PX,
+            heightPx: CHAT_DISPLAY_HEIGHT_PX,
+            hiDpi: true,
+          }),
+        ),
+      );
+      yield* Deferred.done(pending, outcome);
+      const settled: ChatDisplayEntry = Exit.isSuccess(outcome)
+        ? { kind: "ready", display: outcome.value }
+        : { kind: "unavailable", detail: detailOfCause(outcome.cause) };
+      yield* Ref.update(entries, (map) => new Map(map).set(owner.id, settled));
+      yield* PubSub.publish(changed, owner.id);
+      if (Exit.isSuccess(outcome)) return outcome.value;
+      return yield* Effect.failCause(outcome.cause);
+    }
+  });
+
+  const get: OpenbotChatComputerShape["get"] = Effect.fn("OpenbotChatComputerService.get")(
+    function* (channelId) {
+      return yield* currentView(yield* ownerOfId(channelId));
+    },
+  );
+
+  const ensure: OpenbotChatComputerShape["ensure"] = Effect.fn("OpenbotChatComputerService.ensure")(
+    function* (channelId) {
+      const owner = yield* ownerOfId(channelId);
+      return yield* acquire(owner).pipe(
+        Effect.flatMap((display) => view(owner, { state: "ready", display, detail: null })),
+        // A host that cannot make a screen is a state to render, not an
+        // exception: the rail says why instead of showing an error toast.
+        Effect.catch((error) =>
+          error.code === "invalid_input"
+            ? Effect.fail(error)
+            : view(owner, { state: "unavailable", display: null, detail: error.message }),
+        ),
+      );
+    },
+  );
+
+  /** `checkedAt` moves on every recomposition, so it is left out of the
+      comparison that decides whether a client learned anything new. */
+  const sameView = (left: OpenbotChatComputer, right: OpenbotChatComputer) =>
+    JSON.stringify({ ...left, checkedAt: "" }) === JSON.stringify({ ...right, checkedAt: "" });
+
+  const changes: OpenbotChatComputerShape["changes"] = (channelId) =>
+    Stream.unwrap(
+      Effect.gen(function* () {
+        const owner = yield* ownerOfId(channelId);
+        // Subscribed before the first view is composed, so a change that lands
+        // while it is being read still produces a follow-up.
+        const local = yield* PubSub.subscribe(changed);
+        const hostChanged = Stream.map(session.statusChanges, (): void => undefined);
+        const ownChanged = Stream.fromSubscription(local).pipe(
+          Stream.filter((id) => id === owner.id),
+          Stream.map((): void => undefined),
+        );
+        // The host's own stream opens with the current status, which is what
+        // makes the first element of this stream the current view.
+        return Stream.mapEffect(Stream.merge(hostChanged, ownChanged), () => currentView(owner));
+      }),
+    ).pipe(
+      Stream.changesWith(sameView),
+      // The stream carries no error channel: a chat that cannot be resolved has
+      // nothing to stream, and `get` is where a client learns why.
+      Stream.catch(() => Stream.empty),
+    );
+
+  const channelForThread: OpenbotChatComputerShape["channelForThread"] = Effect.fn(
+    "OpenbotChatComputerService.channelForThread",
+  )(function* (threadId) {
+    const channel = yield* store.getByThreadId(threadId).pipe(Effect.orDie);
+    if (channel === undefined) {
+      return yield* invalidInput(`No chat was found for thread ${threadId}.`);
+    }
+    return (yield* ownerOf(channel)).id;
+  });
+
+  const snapshot: OpenbotChatComputerShape["snapshot"] = Effect.fn(
+    "OpenbotChatComputerService.snapshot",
+  )(function* (channelId, maxWidthPx) {
+    const display = yield* acquire(yield* ownerOfId(channelId));
+    return yield* session.snapshot({
+      displayId: display.id,
+      ...(maxWidthPx === undefined ? {} : { maxWidthPx }),
+    });
+  });
+
+  const focusWindow: OpenbotChatComputerShape["focusWindow"] = Effect.fn(
+    "OpenbotChatComputerService.focusWindow",
+  )(function* (source, channelId, windowId) {
+    const owner = yield* ownerOfId(channelId);
+    const display = yield* acquire(owner);
+    const windows = yield* ownedWindows(display.id);
+    if (!windows.some((window) => window.id === windowId)) {
+      return yield* new OpenbotComputerError({
+        code: "window_not_found",
+        message: `Window ${windowId} is not on ${owner.name}'s computer.`,
+      });
+    }
+    yield* session.focusWindow(source, windowId);
+  });
+
+  const launch: OpenbotChatComputerShape["launch"] = Effect.fn("OpenbotChatComputerService.launch")(
+    function* (source, channelId, input) {
+      const display = yield* acquire(yield* ownerOfId(channelId));
+      if (!(yield* launchable)) {
+        return yield* new OpenbotComputerError({
+          code: "permission_denied",
+          message: LAUNCH_ACCESSIBILITY_DETAIL,
+        });
+      }
+      return yield* session.launch(source, {
+        app: input.app,
+        ...(input.args === undefined ? {} : { args: input.args }),
+        displayId: display.id,
+      });
+    },
+  );
+
+  const input: OpenbotChatComputerShape["input"] = Effect.fn("OpenbotChatComputerService.input")(
+    function* (source, channelId, events) {
+      const display = yield* acquire(yield* ownerOfId(channelId));
+      return yield* source.kind === "agent"
+        ? session.agentInput(source, display.id, events)
+        : session.viewerInput(source, display.id, events);
+    },
+  );
+
+  return OpenbotChatComputerService.of({
+    get,
+    ensure,
+    changes,
+    channelForThread,
+    snapshot,
+    focusWindow,
+    launch,
+    input,
+  });
+});
+
+export const layer = Layer.effect(OpenbotChatComputerService, make);
