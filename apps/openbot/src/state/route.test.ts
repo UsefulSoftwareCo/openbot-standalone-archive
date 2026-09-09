@@ -1,10 +1,11 @@
-import { OpenbotKnowledgeId, OpenbotProjectId } from "@t3tools/contracts";
+import { OpenbotChannelId, OpenbotKnowledgeId, OpenbotProjectId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
 import { detailsRailApplies, knowledgeReturnPage, projectKnowledgePage } from "./route";
 
 const projectId = OpenbotProjectId.make("openbot-project:groceries");
 const knowledgeId = OpenbotKnowledgeId.make("openbot-knowledge:pantry");
+const channelId = OpenbotChannelId.make("openbot-channel:groceries");
 
 describe("knowledgeReturnPage", () => {
   it("returns to the knowledge tab of the project the editor was opened from", () => {
@@ -32,7 +33,7 @@ describe("detailsRailApplies", () => {
   });
 
   it("gives the whole width to a full-pane page, the computer included", () => {
-    expect(detailsRailApplies({ type: "computer" })).toBe(false);
+    expect(detailsRailApplies({ type: "computer", channelId })).toBe(false);
     expect(detailsRailApplies({ type: "new-chat" })).toBe(false);
     expect(detailsRailApplies({ type: "knowledge", knowledgeId: null, projectId })).toBe(false);
   });

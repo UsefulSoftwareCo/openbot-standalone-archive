@@ -185,7 +185,6 @@ export function App() {
         setProjectDialogOpen(true);
       }}
       onNewChat={() => openPage({ type: "new-chat" })}
-      onOpenComputer={() => openPage({ type: "computer" })}
       connectionLabel={connectionLabel}
     />
   );
@@ -264,7 +263,9 @@ export function App() {
           />
         ) : page?.type === "computer" ? (
           <ComputerPage
+            key={page.channelId}
             environmentId={environmentId}
+            channelId={page.channelId}
             onClose={() => openPage(null)}
             onOpenSidebar={() => setSidebarOpen(true)}
           />
@@ -345,7 +346,7 @@ export function App() {
                 environmentId={environmentId}
                 view={view}
                 onClose={() => setDetailsOpen(false)}
-                onOpenComputer={() => openPage({ type: "computer" })}
+                onOpenComputer={() => openPage({ type: "computer", channelId: view.channel.id })}
               />
             </div>
           )}
@@ -359,7 +360,7 @@ export function App() {
                 onClose={() => setMobileDetailsOpen(false)}
                 onOpenComputer={() => {
                   setMobileDetailsOpen(false);
-                  openPage({ type: "computer" });
+                  openPage({ type: "computer", channelId: view.channel.id });
                 }}
               />
             </DialogPopup>

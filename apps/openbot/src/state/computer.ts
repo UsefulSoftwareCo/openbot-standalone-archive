@@ -3,119 +3,133 @@ import {
   createEnvironmentRpcCommand,
   createEnvironmentRpcSubscriptionAtomFamily,
 } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId, OpenbotComputerStatus } from "@t3tools/contracts";
+import type { EnvironmentId, OpenbotChannelId, OpenbotChatComputer } from "@t3tools/contracts";
 import { WS_METHODS } from "@t3tools/contracts";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
+import { useEffect, useRef, useState } from "react";
 
 import { connectionAtomRuntime } from "../connection/atomRuntime";
+import { useAtomCommand } from "./channels";
 import { commandErrorText } from "./errors";
 
 /**
- * The host's desktop session.
+ * The computer a chat works on.
  *
- * Status is a subscription because displays appear, permissions get granted
- * and the input lease changes hands while the user is looking at it; a card
- * that had to be refreshed by hand would be wrong more often than right.
- * Frames never travel here — they have their own socket (`computerStream.ts`)
- * so a 12 fps JPEG stream cannot block an agent's RPC.
+ * Everything here is keyed by a chat, never by a display: the server owns the
+ * mapping, so a child chat can be asked about its own id and still get the
+ * parent's screen back. The display id inside the answer is ephemeral and is
+ * only ever used to open a frame socket (`computerStream.ts`) — frames never
+ * travel over these RPCs, so a 12 fps JPEG stream cannot block an agent.
  */
 
+/** The chat's computer as it stands, without provisioning one. */
+export const getChatComputer = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:chat-computer-get",
+  tag: WS_METHODS.openbotChatComputerGet,
+});
+
+/** Provisions this chat's display on first use, then describes it. */
+export const ensureChatComputer = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:chat-computer-ensure",
+  tag: WS_METHODS.openbotChatComputerEnsure,
+});
+
 /** One screenshot, on demand. Still useful where a live stream is overkill. */
-export const getComputerSnapshot = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "openbot:computer-snapshot",
-  tag: WS_METHODS.openbotComputerSnapshot,
+export const getChatComputerSnapshot = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:chat-computer-snapshot",
+  tag: WS_METHODS.openbotChatComputerSnapshot,
 });
 
-/** A one-shot read for callers outside a React subscription. */
-export const getComputerStatus = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "openbot:computer-status",
-  tag: WS_METHODS.openbotComputerStatus,
+export const focusChatComputerWindow = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:chat-computer-window-focus",
+  tag: WS_METHODS.openbotChatComputerWindowFocus,
 });
 
-export const listComputerWindows = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "openbot:computer-windows",
-  tag: WS_METHODS.openbotComputerWindowsList,
+/** Opens an app onto this chat's display. Refused when it cannot be placed there. */
+export const launchChatComputerApp = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:chat-computer-launch",
+  tag: WS_METHODS.openbotChatComputerLaunch,
 });
 
-export const focusComputerWindow = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "openbot:computer-window-focus",
-  tag: WS_METHODS.openbotComputerWindowFocus,
+/** Ordered input for callers without a frame socket. */
+export const sendChatComputerInput = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:chat-computer-input",
+  tag: WS_METHODS.openbotChatComputerInput,
 });
 
-export const createComputerDisplay = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "openbot:computer-display-create",
-  tag: WS_METHODS.openbotComputerDisplayCreate,
+const chatComputerSubscription = createEnvironmentRpcSubscriptionAtomFamily(connectionAtomRuntime, {
+  label: "openbot:chat-computer-stream",
+  tag: WS_METHODS.openbotChatComputerSubscribe,
+  // The card and the page share one subscription; keep it briefly so opening
+  // the page from the card does not re-ask the host for the whole thing.
+  idleTtlMs: 30_000,
 });
 
-export const destroyComputerDisplay = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "openbot:computer-display-destroy",
-  tag: WS_METHODS.openbotComputerDisplayDestroy,
-});
-
-/** Ordered input on the shared desktop, for callers without a frame socket. */
-export const sendComputerInput = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "openbot:computer-input",
-  tag: WS_METHODS.openbotComputerInput,
-});
-
-export const setComputerControl = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "openbot:computer-control",
-  tag: WS_METHODS.openbotComputerControl,
-});
-
-export const launchComputerApp = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "openbot:computer-launch",
-  tag: WS_METHODS.openbotComputerLaunch,
-});
-
-const computerStatusSubscription = createEnvironmentRpcSubscriptionAtomFamily(
-  connectionAtomRuntime,
-  {
-    label: "openbot:computer-status-stream",
-    tag: WS_METHODS.openbotComputerSubscribe,
-    // The card and the page share one subscription; keep it briefly so opening
-    // the page from the card does not re-ask the host for its whole state.
-    idleTtlMs: 30_000,
-  },
-);
-
-export interface ComputerStatusState {
-  readonly status: OpenbotComputerStatus | null;
-  /** True until the first status arrives; "no computer" and "not yet" differ. */
+export interface ChatComputerState {
+  readonly computer: OpenbotChatComputer | null;
+  /** True until the first answer arrives; "no computer" and "not yet" differ. */
   readonly loading: boolean;
   /** Set when the subscription itself failed. */
   readonly error: string | null;
 }
 
-const LOADING_STATUS: ComputerStatusState = { status: null, loading: true, error: null };
-const LOADING_STATUS_ATOM = Atom.make(LOADING_STATUS).pipe(
-  Atom.withLabel("openbot-computer-status:empty"),
+const LOADING: ChatComputerState = { computer: null, loading: true, error: null };
+const NO_CHAT: ChatComputerState = { computer: null, loading: false, error: null };
+const NO_CHAT_ATOM = Atom.make(NO_CHAT).pipe(Atom.withLabel("openbot-chat-computer:none"));
+
+const chatComputerValueAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.family((channelId: OpenbotChannelId) =>
+    Atom.make((get): ChatComputerState => {
+      const result = get(chatComputerSubscription({ environmentId, input: { channelId } }));
+      if (AsyncResult.isSuccess(result)) {
+        return { computer: result.value, loading: false, error: null };
+      }
+      if (AsyncResult.isFailure(result)) {
+        return { computer: null, loading: false, error: commandErrorText(result) };
+      }
+      return LOADING;
+    }).pipe(Atom.withLabel(`openbot-chat-computer:${environmentId}:${channelId}`)),
+  ),
 );
 
-const computerStatusValueAtom = Atom.family((environmentId: EnvironmentId) =>
-  Atom.make((get): ComputerStatusState => {
-    const result = get(computerStatusSubscription({ environmentId, input: {} }));
-    if (AsyncResult.isSuccess(result)) {
-      return { status: result.value, loading: false, error: null };
-    }
-    if (AsyncResult.isFailure(result)) {
-      return { status: null, loading: false, error: commandErrorText(result) };
-    }
-    return LOADING_STATUS;
-  }).pipe(Atom.withLabel(`openbot-computer-status:${environmentId}`)),
-);
-
-/** Live desktop status: displays, windows, permissions and who is controlling. */
-export function useComputerStatus(environmentId: EnvironmentId | null): ComputerStatusState {
+/**
+ * Live state of the chat's computer: whether it exists yet, the display to
+ * stream, the windows on it, and who is controlling. Without a chat nothing is
+ * subscribed, so a fresh account with no chats asks the host for nothing.
+ */
+export function useChatComputer(
+  environmentId: EnvironmentId,
+  channelId: OpenbotChannelId | null,
+): ChatComputerState {
   return useAtomValue(
-    environmentId === null ? LOADING_STATUS_ATOM : computerStatusValueAtom(environmentId),
+    channelId === null ? NO_CHAT_ATOM : chatComputerValueAtom(environmentId)(channelId),
   );
 }
 
-/** Prefers the main display, then the first the host reported. */
-export function preferredDisplay(
-  status: OpenbotComputerStatus | null,
-): OpenbotComputerStatus["displays"][number] | null {
-  if (status === null) return null;
-  return status.displays.find((display) => display.main) ?? status.displays[0] ?? null;
+/**
+ * Asks the host to provision this chat's display, once per chat.
+ *
+ * `ensure` is idempotent on the server, but a request per render would still
+ * be a request per keystroke, so the chat it has already been asked for is
+ * remembered. Returns the failure text when the host refused, which is worth
+ * showing only until the subscription has something better to say.
+ */
+export function useEnsureChatComputer(
+  environmentId: EnvironmentId,
+  channelId: OpenbotChannelId | null,
+): string | null {
+  const [error, setError] = useState<string | null>(null);
+  const run = useAtomCommand(ensureChatComputer, { reportFailure: false });
+  const askedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (channelId === null) return;
+    const key = `${environmentId} ${channelId}`;
+    if (askedRef.current === key) return;
+    askedRef.current = key;
+    setError(null);
+    void run({ environmentId, input: { channelId } }).then((result) => {
+      setError(result._tag === "Failure" ? commandErrorText(result) : null);
+    });
+  }, [channelId, environmentId, run]);
+  return error;
 }

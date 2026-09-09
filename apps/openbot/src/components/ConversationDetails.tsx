@@ -85,7 +85,7 @@ export function ConversationDetails({
   readonly environmentId: EnvironmentId;
   readonly view: OpenbotChannelView;
   readonly onClose: () => void;
-  /** Opens the host's screen full pane; the card here is only a glance at it. */
+  /** Opens this chat's screen full pane; the card here is only a glance at it. */
   readonly onOpenComputer: () => void;
 }) {
   const query = useRoutines(environmentId);
@@ -124,7 +124,11 @@ export function ConversationDetails({
           </p>
         ) : page.type === "list" ? (
           <>
-            <ComputerCard environmentId={environmentId} onOpen={onOpenComputer} />
+            <ComputerCard
+              environmentId={environmentId}
+              channelId={view.channel.id}
+              onOpen={onOpenComputer}
+            />
             <div className="mb-3 flex items-center justify-between">
               <h2 className="font-medium text-sm">Routines</h2>
               <Button

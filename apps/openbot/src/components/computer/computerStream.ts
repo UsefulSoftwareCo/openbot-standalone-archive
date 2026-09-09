@@ -1,9 +1,9 @@
 import {
   MAX_COMPUTER_INPUT_BATCH,
   OPENBOT_COMPUTER_STREAM_PATH,
+  type OpenbotChannelId,
   type OpenbotComputerController,
   type OpenbotComputerDisplay,
-  type OpenbotComputerDisplayId,
   type OpenbotComputerInputEvent,
   type OpenbotComputerInputResult,
   type OpenbotComputerStreamClientMessage,
@@ -201,7 +201,7 @@ function decodeJpegFrame(data: ArrayBuffer): Promise<ImageBitmap> {
 }
 
 interface OpenRequest {
-  readonly displayId: OpenbotComputerDisplayId;
+  readonly channelId: OpenbotChannelId;
   readonly profile: OpenbotComputerStreamProfile;
   readonly control: boolean;
 }
@@ -209,9 +209,11 @@ interface OpenRequest {
 const PING_INTERVAL_MS = 15_000;
 
 /**
- * One viewer's socket: opens a display, keeps it open across drops, decodes
- * frames and reports state. Every method is safe after `close`, which is the
- * only way the client stops trying.
+ * One viewer's socket: opens one chat's screen, keeps it open across drops,
+ * decodes frames and reports state. The chat is all this socket ever names —
+ * the server resolves it to the display it owns — so a viewer cannot aim at a
+ * physical screen. Every method is safe after `close`, which is the only way
+ * the client stops trying.
  */
 export class ComputerStreamClient {
   readonly #handlers: ComputerStreamHandlers;
@@ -231,13 +233,13 @@ export class ComputerStreamClient {
   #decoding = false;
   #pendingFrame: ArrayBuffer | null = null;
   /**
-   * Bumped whenever every frame in flight stops being worth painting: a
-   * display switch and a close. A decode that finishes with an older
+   * Bumped whenever every frame in flight stops being worth painting: a switch
+   * to another chat and a close. A decode that finishes with an older
    * generation closes its bitmap instead of handing it to the canvas.
    */
   #generation = 0;
-  /** The display the server last said it is capturing, null until it says so. */
-  #streamDisplayId: OpenbotComputerDisplayId | null = null;
+  /** Whether this socket has said which display it is capturing for this open. */
+  #acknowledged = false;
 
   constructor(handlers: ComputerStreamHandlers, options: ComputerStreamClientOptions = {}) {
     this.#handlers = handlers;
@@ -250,14 +252,10 @@ export class ComputerStreamClient {
     return this.#state;
   }
 
-  /** Starts (or switches to) one display. Nothing is captured until this is called. */
-  open(
-    displayId: OpenbotComputerDisplayId,
-    profile: OpenbotComputerStreamProfile,
-    control: boolean,
-  ): void {
+  /** Starts (or switches to) one chat's screen. Nothing is captured until this is called. */
+  open(channelId: OpenbotChannelId, profile: OpenbotComputerStreamProfile, control: boolean): void {
     if (this.#closed) return;
-    this.#request = { displayId, profile, control };
+    this.#request = { channelId, profile, control };
     this.#state = INITIAL_STREAM_STATE;
     this.#attempt = 0;
     this.#invalidateFrames();
@@ -296,21 +294,21 @@ export class ComputerStreamClient {
   }
 
   /**
-   * Everything already decoded or queued belongs to the display this client
-   * has just stopped showing, so it is dropped rather than painted late.
+   * Everything already decoded or queued belongs to the screen this client has
+   * just stopped showing, so it is dropped rather than painted late.
    */
   #invalidateFrames(): void {
     this.#generation += 1;
     this.#pendingFrame = null;
-    this.#streamDisplayId = null;
+    this.#acknowledged = false;
   }
 
   #connect(retry: boolean): void {
     const request = this.#request;
     if (request === null || this.#closed) return;
     // A new socket has said nothing yet, so nothing it sends is trusted to be
-    // the requested display until its `hello` arrives.
-    this.#streamDisplayId = null;
+    // the requested chat's screen until its `hello` arrives.
+    this.#acknowledged = false;
     this.#apply({ type: "connecting", retry });
     const socket = this.#createSocket(this.#url);
     socket.binaryType = "arraybuffer";
@@ -326,7 +324,7 @@ export class ComputerStreamClient {
         this.#apply({ type: "opened" });
         this.#send({
           type: "open",
-          displayId: request.displayId,
+          channelId: request.channelId,
           maxWidthPx: request.profile.maxWidthPx,
           fps: request.profile.fps,
           ...(request.profile.quality === undefined ? {} : { quality: request.profile.quality }),
@@ -344,7 +342,7 @@ export class ComputerStreamClient {
           if (message !== undefined) {
             if (message.type === "hello") this.#attempt = 0;
             if (message.type === "hello" || message.type === "geometry") {
-              this.#streamDisplayId = message.display.id;
+              this.#acknowledged = true;
             }
             this.#apply({ type: "server", message });
           }
@@ -418,13 +416,12 @@ export class ComputerStreamClient {
    * Newest frame wins. A slow decoder must never build a queue: a viewer that
    * is one second behind is showing a screen the user is already clicking on.
    *
-   * Frames the server sent before it acknowledged the requested display still
-   * show the previous one, and the switch may land mid-decode, so both the
-   * arrival and the completion are checked against what is wanted now.
+   * Frames the server sent before it acknowledged this open still show the
+   * previous screen, and the switch may land mid-decode, so both the arrival
+   * and the completion are checked against what is wanted now.
    */
   #acceptFrame(data: ArrayBuffer): void {
-    const request = this.#request;
-    if (request === null || this.#streamDisplayId !== request.displayId) return;
+    if (this.#request === null || !this.#acknowledged) return;
     if (this.#decoding) {
       this.#pendingFrame = data;
       return;
@@ -445,7 +442,7 @@ export class ComputerStreamClient {
       .finally(() => {
         this.#decoding = false;
         // Anything still pending arrived after the last invalidation, and
-        // `#acceptFrame` checks the display again before decoding it.
+        // `#acceptFrame` checks the open again before decoding it.
         const pending = this.#pendingFrame;
         this.#pendingFrame = null;
         if (pending !== null && !this.#closed) this.#acceptFrame(pending);

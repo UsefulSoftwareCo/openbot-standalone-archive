@@ -1,7 +1,6 @@
 import type {
   EnvironmentId,
-  OpenbotComputerDisplay,
-  OpenbotComputerDisplayId,
+  OpenbotChannelId,
   OpenbotComputerInputEvent,
   OpenbotComputerMouseButton,
   OpenbotComputerWindow,
@@ -25,18 +24,16 @@ import {
   Menu,
   Minimize2,
   MousePointer2,
-  Plus,
-  X,
+  SquarePlus,
 } from "lucide-react";
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 
 import { useAtomCommand } from "../../state/channels";
 import {
-  createComputerDisplay,
-  destroyComputerDisplay,
-  focusComputerWindow,
-  preferredDisplay,
-  useComputerStatus,
+  focusChatComputerWindow,
+  launchChatComputerApp,
+  useChatComputer,
+  useEnsureChatComputer,
 } from "../../state/computer";
 import { commandErrorText } from "../../state/errors";
 import {
@@ -53,13 +50,7 @@ import {
   textEvents,
 } from "./computerKeys";
 import { type MaximizeEvent, NOT_MAXIMIZED, nextMaximizeState } from "./computerMaximize";
-import {
-  computerStatusView,
-  controllerBadge,
-  displayOptionLabel,
-  sessionLabel,
-  streamBanner,
-} from "./computerStatusView";
+import { chatComputerView, controllerBadge, streamBanner } from "./computerStatusView";
 import { useComputerStream, useDocumentVisible, useElementSize } from "./useComputerStream";
 
 /** A viewer watching a desktop: full detail, and interactive rather than smooth. */
@@ -68,16 +59,21 @@ const VIEWER_PROFILE = { maxWidthPx: 1920, fps: 12 } as const;
 /** ~60 pointer moves a second is what the host can act on; more is just traffic. */
 const MOVE_INTERVAL_MS = 16;
 
-const EMPTY_DISPLAYS: ReadonlyArray<OpenbotComputerDisplay> = [];
 const EMPTY_WINDOWS: ReadonlyArray<OpenbotComputerWindow> = [];
+
+/**
+ * Why launching is off, in the terms of the setting that turns it back on. The
+ * consequence is the point: without the grant a launched window lands on the
+ * user's own screen, which is worse than not launching at all.
+ */
+const LAUNCH_BLOCKED_NOTE =
+  "Opening apps here needs Accessibility for T3 Computer Helper (System Settings › Privacy & Security). Without it, windows would open on your own screen, so launching is off.";
 
 const BUTTONS: Record<number, OpenbotComputerMouseButton> = {
   0: "left",
   1: "middle",
   2: "right",
 };
-
-const fieldClass = "rounded-md border border-border bg-background px-3 py-2 text-sm";
 
 /**
  * Leaves the browser's own fullscreen if this document is in it. Safe to call
@@ -91,37 +87,36 @@ function leaveNativeFullscreen() {
 }
 
 /**
- * The host's screen, full pane.
+ * The screen a chat works on, full pane.
  *
- * The rules that make this safe to use are all about the shared session: no
- * input is sent unless this viewer holds the lease, the lease is always
- * visible, and everything this client pressed is released when it stops
+ * The chat is the identity here: the header is its name, the windows are the
+ * ones the host puts on its display, and an app opened here lands there. There
+ * is no picker for the host's own monitors — this page is never about them. The rules that make it safe to use are all about the shared
+ * session: no input is sent unless this viewer holds the lease, the lease is
+ * always visible, and everything this client pressed is released when it stops
  * looking. The pointer mapping and key translation are pure functions
  * (`computerGeometry`, `computerKeys`) so they can be tested without a host.
  */
 export function ComputerPage({
   environmentId,
+  channelId,
   onClose,
   onOpenSidebar,
 }: {
   readonly environmentId: EnvironmentId;
+  /** The chat whose screen this is. A child chat resolves to its parent's. */
+  readonly channelId: OpenbotChannelId;
   readonly onClose: () => void;
   readonly onOpenSidebar: () => void;
 }) {
-  const { status, error } = useComputerStatus(environmentId);
-  const view = computerStatusView({ status, statusError: error });
-  const displays = status?.displays ?? EMPTY_DISPLAYS;
-  const windows = status?.windows ?? EMPTY_WINDOWS;
-
-  const [chosenDisplayId, setChosenDisplayId] = useState<OpenbotComputerDisplayId | null>(null);
-  // A chosen display that the host no longer reports falls back rather than
-  // leaving the stage pointed at nothing.
-  const activeDisplay =
-    displays.find((display) => display.id === chosenDisplayId) ?? preferredDisplay(status);
+  const { computer, error } = useChatComputer(environmentId, channelId);
+  const ensureError = useEnsureChatComputer(environmentId, channelId);
+  const view = chatComputerView({ computer, error });
+  const windows = computer?.windows ?? EMPTY_WINDOWS;
 
   const [mode, setMode] = useState<ComputerViewMode>("fit");
   const [windowsOpen, setWindowsOpen] = useState(false);
-  const [newDisplayOpen, setNewDisplayOpen] = useState(false);
+  const [launchOpen, setLaunchOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -141,15 +136,15 @@ export function ComputerPage({
   const visible = useDocumentVisible();
   const stream = useComputerStream({
     enabled: view.canStream && visible,
-    displayId: activeDisplay?.id ?? null,
+    channelId,
     profile: VIEWER_PROFILE,
     control: false,
     canvasRef,
   });
   const { sendInput, setControl } = stream;
   const controlling = stream.state.controlling;
-  // The frame maps onto the display the *stream* is showing, which may lag a
-  // display switch by one round trip.
+  // The frame maps onto the display the *stream* is showing, which may lag the
+  // chat's display changing by one round trip.
   const streamDisplay = stream.state.display;
   const geometry = computerGeometry(
     stage,
@@ -293,9 +288,8 @@ export function ComputerPage({
     );
   };
 
-  const runFocusWindow = useAtomCommand(focusComputerWindow, { reportFailure: false });
-  const runCreateDisplay = useAtomCommand(createComputerDisplay, { reportFailure: false });
-  const runDestroyDisplay = useAtomCommand(destroyComputerDisplay, { reportFailure: false });
+  const runFocusWindow = useAtomCommand(focusChatComputerWindow, { reportFailure: false });
+  const runLaunchApp = useAtomCommand(launchChatComputerApp, { reportFailure: false });
 
   const banner = streamBanner({
     connection: stream.state.connection,
@@ -303,11 +297,13 @@ export function ComputerPage({
     message: stream.state.message,
     hasFrame: stream.hasFrame,
   });
-  const badge = controllerBadge(status?.controller ?? null, controlling);
-  const otherController = !controlling && status?.controller != null;
-  const canControl = status?.capabilities.input === true && view.canStream;
-  const physical = displays.filter((display) => !display.managed);
-  const managed = displays.filter((display) => display.managed);
+  const badge = controllerBadge(computer?.controller ?? null, controlling);
+  const otherController = !controlling && computer?.controller != null;
+  const canLaunch = computer?.canLaunch === true;
+  // Only worth saying about a screen that exists: a chat with no display yet
+  // has a more useful thing to say in the placeholder.
+  const launchBlocked = view.canStream && !canLaunch;
+  const screenName = computer?.channelName ?? "Computer";
   // The browser paints only the fullscreen element's subtree, so a dialog
   // portaled to `<body>` while fullscreen is simply not there. The in-app
   // overlay has the same problem for a different reason: `<body>` is behind it.
@@ -337,89 +333,50 @@ export function ComputerPage({
           <span className="hidden sm:inline">Back</span>
         </Button>
         <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
-          <h1 className="truncate font-medium text-sm">{status?.host.label ?? "Computer"}</h1>
+          <h1 className="truncate font-medium text-sm">{screenName}</h1>
           <span className="hidden shrink-0 text-muted-foreground text-xs sm:inline">
-            {status === null ? view.statusLabel : sessionLabel(status.session)}
+            {computer === null ? view.statusLabel : "Shared screen"}
           </span>
         </div>
-        <select
-          aria-label="Display"
-          className={`${fieldClass} h-8 max-w-44 truncate py-0`}
-          value={activeDisplay?.id ?? ""}
-          disabled={displays.length === 0}
-          onChange={(event) =>
-            setChosenDisplayId(
-              displays.find((display) => display.id === event.target.value)?.id ?? null,
-            )
-          }
-        >
-          {displays.length === 0 && <option value="">No displays</option>}
-          {physical.length > 0 && (
-            <optgroup label="Physical">
-              {physical.map((display) => (
-                <option key={display.id} value={display.id}>
-                  {displayOptionLabel(display)}
-                </option>
-              ))}
-            </optgroup>
-          )}
-          {managed.length > 0 && (
-            <optgroup label="Managed">
-              {managed.map((display) => (
-                <option key={display.id} value={display.id}>
-                  {displayOptionLabel(display)}
-                </option>
-              ))}
-            </optgroup>
-          )}
-        </select>
-        {status?.capabilities.managedDisplays === true && (
-          <>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Add a managed display"
-              onClick={() => {
-                setActionError(null);
-                setNewDisplayOpen(true);
-              }}
-            >
-              <Plus />
-            </Button>
-            {activeDisplay?.managed === true && (
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                aria-label={`Remove ${activeDisplay.name}`}
-                onClick={async () => {
-                  setActionError(null);
-                  const result = await runDestroyDisplay({
-                    environmentId,
-                    input: { displayId: activeDisplay.id },
-                  });
-                  if (result._tag === "Failure") setActionError(commandErrorText(result));
-                  else setChosenDisplayId(null);
-                }}
-              >
-                <X />
-              </Button>
-            )}
-          </>
-        )}
-        {status?.capabilities.windows === true && (
+        {canLaunch ? (
           <Button
             variant="ghost"
             size="xs"
             className="shrink-0 text-muted-foreground"
             onClick={() => {
               setActionError(null);
-              setWindowsOpen(true);
+              setLaunchOpen(true);
             }}
           >
-            <AppWindow />
-            <span className="hidden lg:inline">Windows</span>
+            <SquarePlus />
+            <span className="hidden lg:inline">Open app…</span>
           </Button>
+        ) : (
+          <Tooltip>
+            <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
+              <Button variant="ghost" size="xs" className="text-muted-foreground" disabled>
+                <SquarePlus />
+                <span className="hidden lg:inline">Open app…</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipPopup side="bottom" className="max-w-xs">
+              {LAUNCH_BLOCKED_NOTE}
+            </TooltipPopup>
+          </Tooltip>
         )}
+        <Button
+          variant="ghost"
+          size="xs"
+          className="shrink-0 text-muted-foreground"
+          disabled={!view.canStream}
+          onClick={() => {
+            setActionError(null);
+            setWindowsOpen(true);
+          }}
+        >
+          <AppWindow />
+          <span className="hidden lg:inline">Windows</span>
+        </Button>
         {controlling ? (
           <Button
             variant="outline"
@@ -445,7 +402,7 @@ export function ComputerPage({
             variant="ghost"
             size="xs"
             className="shrink-0"
-            disabled={!canControl}
+            disabled={!view.canStream}
             onClick={() => {
               setControl("take");
               keyboardRef.current?.focus();
@@ -483,6 +440,12 @@ export function ComputerPage({
           {maximize.maximized ? <Minimize2 /> : <Maximize2 />}
         </Button>
       </header>
+
+      {launchBlocked && (
+        <p className="shrink-0 border-b border-border bg-warning-surface px-3 py-1.5 text-warning-foreground text-xs">
+          {LAUNCH_BLOCKED_NOTE}
+        </p>
+      )}
 
       <div className="relative flex min-h-0 flex-1 flex-col bg-muted">
         <div
@@ -534,11 +497,7 @@ export function ComputerPage({
         >
           <canvas
             ref={canvasRef}
-            aria-label={
-              activeDisplay === null
-                ? "The host's screen"
-                : `${activeDisplay.name} on ${status?.host.label ?? "the host"}`
-            }
+            aria-label={`${screenName}'s screen`}
             role="img"
             className="absolute bg-black"
             style={{
@@ -554,7 +513,7 @@ export function ComputerPage({
           <textarea
             ref={keyboardRef}
             className="sr-only"
-            aria-label="Keyboard input for the host"
+            aria-label="Keyboard input for this screen"
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
@@ -606,9 +565,9 @@ export function ComputerPage({
               {banner.text}
             </p>
           )}
-          {view.reason !== null && !view.canStream && (
+          {view.placeholder !== null && !view.canStream && (
             <p className="-translate-x-1/2 -translate-y-1/2 absolute top-1/2 left-1/2 max-w-sm text-balance text-center text-muted-foreground text-sm">
-              {view.reason}
+              {view.placeholder}
             </p>
           )}
           {badge !== null && (
@@ -619,12 +578,14 @@ export function ComputerPage({
         </div>
         <p className="shrink-0 border-t border-border px-3 py-1.5 text-muted-foreground text-xs">
           {controlling
-            ? "Your pointer and keyboard go to the host while the stage is focused. Agents share this session."
+            ? "Your pointer and keyboard go to this screen while the stage is focused. Agents share this session."
             : otherController
               ? `${badge ?? "Someone else is controlling"}. You can watch until they stop.`
               : "Take control to interact with this screen."}
           {maximize.hint !== null && <span> {maximize.hint}</span>}
-          {actionError !== null && <span className="text-error-foreground"> {actionError}</span>}
+          {(actionError ?? ensureError) !== null && (
+            <span className="text-error-foreground"> {actionError ?? ensureError}</span>
+          )}
         </p>
       </div>
 
@@ -640,7 +601,7 @@ export function ComputerPage({
           <DialogPanel className="max-h-[60dvh] overflow-y-auto">
             {windows.length === 0 ? (
               <p className="text-muted-foreground text-sm">
-                No windows are open, or this host cannot list them.
+                Nothing is open on this screen, or this host cannot list windows.
               </p>
             ) : (
               <ul className="flex flex-col gap-0.5" aria-label="Open windows">
@@ -653,21 +614,13 @@ export function ComputerPage({
                         setActionError(null);
                         const result = await runFocusWindow({
                           environmentId,
-                          input: { windowId: hostWindow.id },
+                          input: { channelId, windowId: hostWindow.id },
                         });
                         if (result._tag === "Failure") {
                           setActionError(commandErrorText(result));
                           return;
                         }
                         setWindowsOpen(false);
-                        // Focusing a window on another screen without following
-                        // it leaves the stage pointed at the screen it left.
-                        if (
-                          hostWindow.displayId !== null &&
-                          hostWindow.displayId !== activeDisplay?.id
-                        ) {
-                          setChosenDisplayId(hostWindow.displayId);
-                        }
                       }}
                     >
                       <span className="min-w-0 flex-1 truncate text-sm">
@@ -675,10 +628,6 @@ export function ComputerPage({
                       </span>
                       <span className="shrink-0 text-muted-foreground text-xs">
                         {hostWindow.app}
-                      </span>
-                      <span className="shrink-0 text-muted-foreground text-xs">
-                        {displays.find((display) => display.id === hostWindow.displayId)?.name ??
-                          "—"}
                       </span>
                     </button>
                   </li>
@@ -689,21 +638,20 @@ export function ComputerPage({
         </DialogPopup>
       </Dialog>
 
-      {newDisplayOpen && (
-        <NewDisplayDialog
-          open={newDisplayOpen}
-          onOpenChange={setNewDisplayOpen}
-          hiDpiAvailable={status?.host.platform === "darwin"}
+      {launchOpen && (
+        <LaunchAppDialog
+          open={launchOpen}
+          onOpenChange={setLaunchOpen}
+          screenName={screenName}
           portalContainer={dialogContainer}
-          onCreate={async (input) => {
+          onLaunch={async (app) => {
             setActionError(null);
-            const result = await runCreateDisplay({ environmentId, input });
+            const result = await runLaunchApp({ environmentId, input: { channelId, app } });
             if (result._tag === "Failure") {
               setActionError(commandErrorText(result));
               return;
             }
-            setChosenDisplayId(result.value.id);
-            setNewDisplayOpen(false);
+            setLaunchOpen(false);
           }}
         />
       )}
@@ -711,45 +659,33 @@ export function ComputerPage({
   );
 }
 
-interface NewDisplayInput {
-  readonly name?: string;
-  readonly widthPx: number;
-  readonly heightPx: number;
-  readonly hiDpi?: boolean;
-}
-
 /**
- * A managed display is a real screen on the host's session that this server
- * owns and destroys on shutdown, so creating one is deliberate.
+ * Opening an app is the one thing here that changes the host, so it asks for
+ * the name rather than guessing from a list this client cannot see.
  */
-function NewDisplayDialog({
+function LaunchAppDialog({
   open,
   onOpenChange,
-  hiDpiAvailable,
+  screenName,
   portalContainer,
-  onCreate,
+  onLaunch,
 }: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
-  readonly hiDpiAvailable: boolean;
+  readonly screenName: string;
   /** Where to portal to, so the dialog survives the page going fullscreen. */
   readonly portalContainer: RefObject<HTMLElement | null> | undefined;
-  readonly onCreate: (input: NewDisplayInput) => Promise<void>;
+  readonly onLaunch: (app: string) => Promise<void>;
 }) {
-  const [name, setName] = useState("");
-  const [width, setWidth] = useState("1920");
-  const [height, setHeight] = useState("1080");
-  const [hiDpi, setHiDpi] = useState(false);
+  const [app, setApp] = useState("");
   const [busy, setBusy] = useState(false);
-  const widthPx = Number(width);
-  const heightPx = Number(height);
-  const valid =
-    Number.isInteger(widthPx) &&
-    widthPx >= 640 &&
-    widthPx <= 7680 &&
-    Number.isInteger(heightPx) &&
-    heightPx >= 480 &&
-    heightPx <= 4320;
+  const trimmed = app.trim();
+  const submit = async () => {
+    if (busy || trimmed.length === 0) return;
+    setBusy(true);
+    await onLaunch(trimmed);
+    setBusy(false);
+  };
 
   return (
     <Dialog
@@ -764,71 +700,34 @@ function NewDisplayDialog({
         portalContainer={portalContainer}
       >
         <DialogHeader>
-          <DialogTitle>New managed display</DialogTitle>
+          <DialogTitle>Open an app</DialogTitle>
         </DialogHeader>
         <DialogPanel className="flex flex-col gap-3">
           <label className="flex flex-col gap-1 text-sm">
-            Name
+            App
             <Input
-              value={name}
-              placeholder="Agent desktop"
+              value={app}
+              placeholder="Safari"
               disabled={busy}
-              onChange={(event) => setName(event.target.value)}
+              autoFocus
+              onChange={(event) => setApp(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                void submit();
+              }}
             />
           </label>
-          <div className="flex gap-3">
-            <label className="flex flex-1 flex-col gap-1 text-sm">
-              Width
-              <Input
-                type="number"
-                value={width}
-                disabled={busy}
-                onChange={(event) => setWidth(event.target.value)}
-              />
-            </label>
-            <label className="flex flex-1 flex-col gap-1 text-sm">
-              Height
-              <Input
-                type="number"
-                value={height}
-                disabled={busy}
-                onChange={(event) => setHeight(event.target.value)}
-              />
-            </label>
-          </div>
-          {hiDpiAvailable && (
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={hiDpi}
-                disabled={busy}
-                onChange={(event) => setHiDpi(event.target.checked)}
-              />
-              Render at 2x
-            </label>
-          )}
           <p className="text-muted-foreground text-xs">
-            This display lives on the host's session until the server stops.
+            The name or path of an app on the host. It opens on {screenName}'s screen.
           </p>
         </DialogPanel>
         <DialogFooter>
           <Button variant="ghost" disabled={busy} onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button
-            disabled={busy || !valid}
-            onClick={async () => {
-              setBusy(true);
-              await onCreate({
-                ...(name.trim().length === 0 ? {} : { name: name.trim() }),
-                widthPx,
-                heightPx,
-                ...(hiDpiAvailable && hiDpi ? { hiDpi: true } : {}),
-              });
-              setBusy(false);
-            }}
-          >
-            Create display
+          <Button disabled={busy || trimmed.length === 0} onClick={submit}>
+            Open
           </Button>
         </DialogFooter>
       </DialogPopup>

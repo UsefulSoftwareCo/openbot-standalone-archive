@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
+  OpenbotChannelId,
   OpenbotComputerDisplayId,
   type OpenbotComputerDisplay,
   type OpenbotComputerStreamServerMessage,
@@ -258,10 +259,13 @@ const secondDisplay: OpenbotComputerDisplay = {
   managed: true,
 };
 
+const channelId = OpenbotChannelId.make("openbot-channel:groceries");
+const otherChannelId = OpenbotChannelId.make("openbot-channel:taxes");
+
 const PROFILE = { maxWidthPx: 1920, fps: 12 } as const;
 
 describe("ComputerStreamClient", () => {
-  it("drops a frame decoded for the display the viewer has already left", async () => {
+  it("drops a frame decoded for the screen the viewer has already left", async () => {
     const sockets: Array<FakeSocket> = [];
     const painted: Array<ImageBitmap> = [];
     const decodes: Array<(bitmap: ImageBitmap) => void> = [];
@@ -278,7 +282,7 @@ describe("ComputerStreamClient", () => {
       },
     );
 
-    client.open(display.id, PROFILE, false);
+    client.open(channelId, PROFILE, false);
     const first = sockets[0];
     if (first === undefined) throw new Error("the client opened no socket");
     first.dispatchEvent(new Event("open"));
@@ -286,8 +290,8 @@ describe("ComputerStreamClient", () => {
     first.deliver(new ArrayBuffer(8));
     expect(decodes).toHaveLength(1);
 
-    // The user picks another display while that frame is still decoding.
-    client.open(secondDisplay.id, PROFILE, false);
+    // The user opens another chat's screen while that frame is still decoding.
+    client.open(otherChannelId, PROFILE, false);
     const stale = fakeBitmap();
     decodes[0]?.(stale.bitmap);
     await flush();
@@ -295,7 +299,7 @@ describe("ComputerStreamClient", () => {
     expect(painted).toEqual([]);
 
     // The new socket's frames are not trusted until it says which display it
-    // is capturing, so anything in flight from before that is dropped.
+    // is capturing for this chat, so anything in flight before that is dropped.
     const second = sockets[1];
     if (second === undefined) throw new Error("the switch opened no second socket");
     second.dispatchEvent(new Event("open"));
@@ -330,7 +334,7 @@ describe("ComputerStreamClient", () => {
         decodeFrame: () => new Promise<ImageBitmap>((resolve) => decodes.push(resolve)),
       },
     );
-    client.open(display.id, PROFILE, false);
+    client.open(channelId, PROFILE, false);
     const socket = sockets[0];
     if (socket === undefined) throw new Error("the client opened no socket");
     socket.dispatchEvent(new Event("open"));
@@ -359,7 +363,7 @@ describe("ComputerStreamClient", () => {
         },
       },
     );
-    client.open(display.id, PROFILE, false);
+    client.open(channelId, PROFILE, false);
     const socket = sockets[0];
     if (socket === undefined) throw new Error("the client opened no socket");
     socket.dispatchEvent(new Event("open"));

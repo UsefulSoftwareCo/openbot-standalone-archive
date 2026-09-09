@@ -1,42 +1,50 @@
-import type { EnvironmentId } from "@t3tools/contracts";
-import { Monitor } from "lucide-react";
+import type { EnvironmentId, OpenbotChannelId } from "@t3tools/contracts";
+import { ChevronRight, Monitor } from "lucide-react";
 import { useRef } from "react";
 
-import { preferredDisplay, useComputerStatus } from "../../state/computer";
-import { computerStatusView, controllerBadge, displayCountLabel } from "./computerStatusView";
+import { useChatComputer, useEnsureChatComputer } from "../../state/computer";
+import { chatComputerView, controllerBadge } from "./computerStatusView";
 import { useComputerStream, useDocumentVisible } from "./useComputerStream";
 
 /** A thumbnail is a thumbnail: small, slow, and never the reason a host is busy. */
 const THUMBNAIL_PROFILE = { maxWidthPx: 320, fps: 4 } as const;
 
 /**
- * The computer, as it appears beside a conversation: a live thumbnail of the
- * host's screen, what state it is in, and one way in. Everything else about
- * the computer lives on its own page — this rail is for glancing at.
+ * The chat's computer, as it appears beside the conversation: a live thumbnail
+ * of the screen this chat works on, what state it is in, and one way in.
+ *
+ * The chat owns the screen, so this card asks for `channelId`'s computer and
+ * the server answers with the owner's — a child chat shows its parent's screen
+ * under the parent's name. Provisioning happens once per chat, on mount: the
+ * rail is where a user first sees the computer, and a chat nobody has opened
+ * has cost the host nothing.
  */
 export function ComputerCard({
   environmentId,
+  channelId,
   onOpen,
 }: {
   readonly environmentId: EnvironmentId;
+  readonly channelId: OpenbotChannelId;
   readonly onOpen: () => void;
 }) {
-  const { status, error } = useComputerStatus(environmentId);
-  const view = computerStatusView({ status, statusError: error });
-  const display = preferredDisplay(status);
+  const { computer, error } = useChatComputer(environmentId, channelId);
+  const ensureError = useEnsureChatComputer(environmentId, channelId);
+  const view = chatComputerView({ computer, error });
   const visible = useDocumentVisible();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stream = useComputerStream({
     enabled: view.canStream && visible,
-    displayId: display?.id ?? null,
+    channelId,
     profile: THUMBNAIL_PROFILE,
     control: false,
     canvasRef,
   });
 
-  const badge = controllerBadge(status?.controller ?? null, stream.state.controlling);
-  const hostLabel = status?.host.label ?? "The host";
-  const secondary = status === null ? null : displayCountLabel(status.displays);
+  const badge = controllerBadge(computer?.controller ?? null, stream.state.controlling);
+  // The server's own words win: a failed `ensure` is only worth saying when
+  // nothing better arrived on the subscription.
+  const note = view.placeholder ?? ensureError;
 
   return (
     <section aria-label="Computer" className="flex flex-col gap-2 pb-4">
@@ -67,15 +75,13 @@ export function ComputerCard({
             </span>
           )}
         </span>
-        <span className="flex min-w-0 items-baseline gap-1.5 text-sm">
-          <span className="truncate font-medium">{hostLabel}</span>
-          {secondary !== null && (
-            <span className="shrink-0 text-muted-foreground text-xs">· {secondary}</span>
-          )}
+        <span className="flex min-w-0 items-center gap-1.5 text-sm">
+          <span className="min-w-0 flex-1 truncate font-medium">
+            {computer?.channelName ?? "This chat's screen"}
+          </span>
+          <ChevronRight aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         </span>
-        {view.reason !== null && (
-          <span className="text-muted-foreground text-xs">{view.reason}</span>
-        )}
+        {note !== null && <span className="text-muted-foreground text-xs">{note}</span>}
       </button>
     </section>
   );

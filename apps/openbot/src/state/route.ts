@@ -10,8 +10,9 @@ export type OpenbotRoute =
   | { readonly type: "chat"; readonly channelId: OpenbotChannelId }
   /** The composer-first draft page. Nothing exists until its first message. */
   | { readonly type: "new-chat" }
-  /** The host's shared desktop, full pane: one canvas, one keyboard, one lease. */
-  | { readonly type: "computer" }
+  /** One chat's screen, full pane: one canvas, one keyboard, one lease. The
+      chat is the identity, so the page cannot be opened without one. */
+  | { readonly type: "computer"; readonly channelId: OpenbotChannelId }
   | {
       readonly type: "project-settings";
       readonly projectId: OpenbotProjectId;

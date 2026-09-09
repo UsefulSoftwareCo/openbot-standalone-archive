@@ -1,5 +1,5 @@
 import type {
-  OpenbotComputerDisplayId,
+  OpenbotChannelId,
   OpenbotComputerInputEvent,
   OpenbotComputerStreamProfile,
 } from "@t3tools/contracts";
@@ -12,7 +12,7 @@ import {
 } from "./computerStream";
 
 /**
- * One live display, drawn into a canvas.
+ * One chat's live screen, drawn into a canvas.
  *
  * Frames never become React state: at 12 fps a `setState` per frame would
  * rerender the whole page thirty thousand times an hour. The bitmap goes
@@ -31,7 +31,8 @@ export interface ComputerStreamView {
 export interface UseComputerStreamOptions {
   /** Nothing is captured on the host while this is false. */
   readonly enabled: boolean;
-  readonly displayId: OpenbotComputerDisplayId | null;
+  /** The chat to watch; the server resolves it to the display it owns. */
+  readonly channelId: OpenbotChannelId | null;
   readonly profile: OpenbotComputerStreamProfile;
   /** Whether to ask for the input lease when the socket opens. */
   readonly control: boolean;
@@ -39,7 +40,7 @@ export interface UseComputerStreamOptions {
 }
 
 export function useComputerStream(options: UseComputerStreamOptions): ComputerStreamView {
-  const { enabled, displayId, canvasRef, control } = options;
+  const { enabled, channelId, canvasRef, control } = options;
   const { maxWidthPx, fps, quality } = options.profile;
   const [state, setState] = useState<ComputerStreamState>(INITIAL_STREAM_STATE);
   const [hasFrame, setHasFrame] = useState(false);
@@ -82,11 +83,11 @@ export function useComputerStream(options: UseComputerStreamOptions): ComputerSt
   useEffect(() => {
     // Nothing to do: leaving an enabled stream already reset everything in the
     // previous effect's cleanup.
-    if (!enabled || displayId === null) return;
+    if (!enabled || channelId === null) return;
     const client = new ComputerStreamClient({ onFrame: draw, onState: setState });
     clientRef.current = client;
     client.open(
-      displayId,
+      channelId,
       { maxWidthPx, fps, ...(quality === undefined ? {} : { quality }) },
       controlRef.current,
     );
@@ -98,7 +99,7 @@ export function useComputerStream(options: UseComputerStreamOptions): ComputerSt
       setHasFrame(false);
       setState(INITIAL_STREAM_STATE);
     };
-  }, [displayId, draw, enabled, fps, maxWidthPx, quality]);
+  }, [channelId, draw, enabled, fps, maxWidthPx, quality]);
 
   const sendInput = useCallback((events: ReadonlyArray<OpenbotComputerInputEvent>) => {
     clientRef.current?.input(events);
