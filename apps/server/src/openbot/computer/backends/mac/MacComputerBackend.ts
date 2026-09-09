@@ -253,7 +253,16 @@ export const make = Effect.fn("openbot.computer.macComputerBackend.make")(functi
       .pipe(
         Effect.flatMap((record) =>
           record.type === "launched"
-            ? Effect.succeed({ pid: record.pid } satisfies OpenbotComputerLaunchResult)
+            ? // Passed through rather than defaulted: a helper that says
+              // nothing about placement asked for none, or is old enough not to
+              // know the question, and neither is a failed placement.
+              Effect.succeed({
+                pid: record.pid,
+                ...(record.placedWindows === undefined
+                  ? {}
+                  : { placedWindows: record.placedWindows }),
+                ...(record.placed === undefined ? {} : { placed: record.placed }),
+              } satisfies OpenbotComputerLaunchResult)
             : Effect.fail(wrongReply(record, "launch")),
         ),
       );

@@ -559,3 +559,362 @@ struct InputJobQueueTests {
         #expect(log.entries == ["replied"])
     }
 }
+
+// ---------------------------------------------------------------------------
+// Keyboard focus
+// ---------------------------------------------------------------------------
+
+/// A chat's screen: a managed display, off to the side of the main one.
+private let chatDisplay = DisplayRecord(
+    id: 37, name: "Chat A", kind: .managedVirtual, widthPx: 1280, heightPx: 800, scale: 1,
+    main: false)
+/// Where that display sits in the global point space.
+private let chatBounds = CGRect(x: 1512, y: 0, width: 1280, height: 800)
+/// A window on it, and one on the laptop's own screen.
+private let windowOnChatScreen = CGRect(x: 1572, y: 60, width: 800, height: 600)
+private let windowOnOwnScreen = CGRect(x: 100, y: 100, width: 800, height: 600)
+
+/// A guard that reads focus from a script instead of from Accessibility.
+@MainActor
+private func guardWith(
+    trusted: Bool = true, frames: [CGRect?]
+) -> (guard: FocusGuard, reads: () -> Int) {
+    let reader = FrameReader(frames: frames)
+    return (
+        FocusGuard(
+            isTrusted: { trusted },
+            focusedWindowFrame: { reader.next() },
+            boundsOfDisplay: { id in id == chatDisplay.id ? chatBounds : .null }),
+        { reader.reads }
+    )
+}
+
+/// Answers a scripted sequence of focused-window frames, repeating the last one
+/// forever so a caller may read as often as it likes.
+@MainActor
+private final class FrameReader {
+    private let frames: [CGRect?]
+    private(set) var reads = 0
+
+    init(frames: [CGRect?]) { self.frames = frames }
+
+    func next() -> CGRect? {
+        defer { reads += 1 }
+        return frames[min(reads, frames.count - 1)]
+    }
+}
+
+@Suite("focus geometry")
+struct FocusGeometryTests {
+    @Test("a window overlapping the display is on it")
+    func overlapping() {
+        #expect(FocusGuard.windowIsOnDisplay(windowOnChatScreen, displayBounds: chatBounds))
+        // Half on, half off still counts: the point is to stop typing that
+        // would plainly land elsewhere, not to adjudicate a dragged window.
+        #expect(
+            FocusGuard.windowIsOnDisplay(
+                CGRect(x: 1112, y: 0, width: 800, height: 600), displayBounds: chatBounds))
+    }
+
+    @Test("a window on another screen is not on it")
+    func elsewhere() {
+        #expect(!FocusGuard.windowIsOnDisplay(windowOnOwnScreen, displayBounds: chatBounds))
+    }
+
+    /// Touching edges are not an overlap: a window flush against the left edge
+    /// of this display is entirely on the one before it.
+    @Test("a zero-area touch is not an overlap")
+    func touching() {
+        #expect(
+            !FocusGuard.windowIsOnDisplay(
+                CGRect(x: 712, y: 0, width: 800, height: 600), displayBounds: chatBounds))
+        #expect(!FocusGuard.windowIsOnDisplay(.null, displayBounds: chatBounds))
+        #expect(!FocusGuard.windowIsOnDisplay(windowOnChatScreen, displayBounds: .null))
+    }
+}
+
+@Suite("focus guard")
+@MainActor
+struct FocusGuardTests {
+    @Test("focus on the display permits typing")
+    func onDisplay() {
+        let (focus, _) = guardWith(frames: [windowOnChatScreen])
+        #expect(focus.rejectionReason(display: chatDisplay) == nil)
+    }
+
+    @Test("focus on another screen names that reason")
+    func offDisplay() {
+        let (focus, _) = guardWith(frames: [windowOnOwnScreen])
+        #expect(focus.rejectionReason(display: chatDisplay) == "keyboard focus is on another screen")
+    }
+
+    /// Nothing frontmost, or a frontmost app with no window, is not an excuse
+    /// to type into whatever is there.
+    @Test("no readable focused window is treated as focus elsewhere")
+    func noWindow() {
+        let (focus, _) = guardWith(frames: [nil])
+        #expect(focus.rejectionReason(display: chatDisplay) == FocusGuard.elsewhereReason)
+    }
+
+    /// Without Accessibility the question cannot be answered at all, and the
+    /// message has to tell the user what to do about it.
+    @Test("without Accessibility typing is refused with a message about the grant")
+    func untrusted() {
+        let (focus, reads) = guardWith(trusted: false, frames: [windowOnChatScreen])
+        #expect(
+            focus.rejectionReason(display: chatDisplay)
+                == "Accessibility is required to confirm where typing would land")
+        // The window is never even read: there is no way to read it.
+        #expect(reads() == 0)
+    }
+}
+
+/// Batches sent for a chat's screen while focus is somewhere else.
+///
+/// Nothing here posts input. Every keyboard event is refused before it reaches
+/// the tap, the pointer event names a point off its display, and the
+/// controller holds nothing for `release-all` to let go of — so running these
+/// does not move the cursor or type into whatever the developer has open.
+@Suite("keyboard focus guard")
+@MainActor
+struct KeyboardFocusGuardTests {
+    /// The case root measured on a real Mac: text sent for chat A while chat
+    /// B's window is focused used to arrive in B.
+    @Test("keyboard events are refused when focus is on another screen")
+    func refusesKeyboard() async {
+        let (focus, _) = guardWith(frames: [windowOnOwnScreen])
+        let controller = InputController(focus: focus)
+
+        let result = await controller.deliver(
+            events: [
+                .event(.key(code: "KeyA", down: true, modifiers: [])),
+                .event(.keyPress(code: "Enter", modifiers: [])),
+                .event(.text("hello")),
+                .event(.click(button: .left, count: 1, point: .zero, modifiers: [.meta])),
+            ],
+            display: chatDisplay)
+
+        #expect(result.delivered == 0)
+        #expect(result.rejected.map(\.index) == [0, 1, 2, 3])
+        #expect(result.rejected.allSatisfy { $0.reason == FocusGuard.elsewhereReason })
+    }
+
+    /// Pointer events carry their own target, so the keyboard's problem is not
+    /// theirs: this one is judged by its coordinates, and the `release-all`
+    /// behind it still runs.
+    @Test("a pointer event and a release are judged on their own terms")
+    func pointerUnaffected() async {
+        let (focus, _) = guardWith(frames: [windowOnOwnScreen])
+        let controller = InputController(focus: focus)
+
+        let result = await controller.deliver(
+            events: [
+                .event(.text("hello")),
+                .event(.move(point: CGPoint(x: 9000, y: 9000))),
+                .event(.releaseAll),
+            ],
+            display: chatDisplay)
+
+        #expect(result.delivered == 1)
+        #expect(result.rejected[0].reason == FocusGuard.elsewhereReason)
+        #expect(result.rejected[1].reason.contains("outside display 37"))
+    }
+
+    /// Refusing a key-up would leave held down whatever its key-down pressed,
+    /// on the desktop the human is sitting at. It is judged like any other
+    /// event instead — here, by the key table.
+    @Test("a key-up is not refused for focus")
+    func keyUpIsNotGated() async {
+        let (focus, _) = guardWith(frames: [windowOnOwnScreen])
+        let controller = InputController(focus: focus)
+
+        let result = await controller.deliver(
+            events: [.event(.key(code: "KeyÅ", down: false, modifiers: []))],
+            display: chatDisplay)
+
+        #expect(result.rejected.count == 1)
+        #expect(result.rejected[0].reason.contains("unknown key code"))
+    }
+
+    /// Once focus has been found elsewhere the rest of the batch is refused on
+    /// that finding rather than racing the next read: a batch must not type
+    /// half a password into another window because focus flickered back.
+    @Test("the first refusal latches for the rest of the batch")
+    func latches() async {
+        let (focus, reads) = guardWith(frames: [windowOnOwnScreen, windowOnChatScreen])
+        let controller = InputController(focus: focus)
+
+        let result = await controller.deliver(
+            events: [
+                .event(.keyPress(code: "KeyA", modifiers: [])),
+                .event(.keyPress(code: "KeyB", modifiers: [])),
+                .event(.keyPress(code: "KeyC", modifiers: [])),
+            ],
+            display: chatDisplay)
+
+        #expect(result.delivered == 0)
+        #expect(result.rejected.count == 3)
+        #expect(reads() == 1)
+    }
+
+    @Test("without Accessibility keyboard events say which grant is missing")
+    func untrustedBatch() async {
+        let (focus, _) = guardWith(trusted: false, frames: [windowOnChatScreen])
+        let controller = InputController(focus: focus)
+
+        let result = await controller.deliver(
+            events: [.event(.text("hello"))], display: chatDisplay)
+
+        #expect(result.rejected[0].reason == FocusGuard.untrustedReason)
+    }
+}
+
+/// Typing while the human clicks away mid-sentence.
+///
+/// Driven through `TextDeliveryJob` with the same `FocusGuard` production
+/// uses, and with the posting injected: a real `InputController` text delivery
+/// would type this string into whatever the developer running the tests has
+/// focused.
+@Suite("typing follows focus nowhere")
+@MainActor
+struct TypingFocusTests {
+    @Test("focus moving mid-string stops the typing and reports how far it got")
+    func stopsMidString() async {
+        let recorder = TypingRecorder()
+        let (focus, _) = guardWith(
+            frames: [
+                windowOnChatScreen, windowOnChatScreen, windowOnChatScreen, windowOnOwnScreen,
+            ])
+        let job = TextDeliveryJob(
+            text: "abcdef", gap: .zero,
+            blocked: { focus.rejectionReason(display: chatDisplay) },
+            post: { grapheme, phase in recorder.record(grapheme, phase) })
+
+        let outcome = await job.run()
+
+        #expect(outcome == .stopped(reason: FocusGuard.elsewhereReason, typed: 3))
+        #expect(recorder.downs == ["a", "b", "c"])
+        #expect(recorder.ups == ["a", "b", "c"])
+    }
+
+    @Test("focus that stays put types the whole string")
+    func staysPut() async {
+        let recorder = TypingRecorder()
+        let (focus, _) = guardWith(frames: [windowOnChatScreen])
+        let job = TextDeliveryJob(
+            text: "abc", gap: .zero,
+            blocked: { focus.rejectionReason(display: chatDisplay) },
+            post: { grapheme, phase in recorder.record(grapheme, phase) })
+
+        #expect(await job.run() == .completed(typed: 3))
+        #expect(recorder.downs == ["a", "b", "c"])
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Launching
+// ---------------------------------------------------------------------------
+
+/// A bundle that resolves but is never started.
+@MainActor
+private func makeProbeBundle() throws -> String {
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("t3-launch-tests-\(UUID().uuidString)")
+        .appendingPathComponent("Probe.app")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    return directory.path
+}
+
+@Suite("launch preflight")
+@MainActor
+struct LaunchPreflightTests {
+    /// The bug: the helper launched first and checked Accessibility afterwards,
+    /// so without the grant the app opened on the user's own screen and there
+    /// was nothing left to do about it.
+    @Test("a launch onto a display without Accessibility throws before spawning")
+    func preflightsBeforeSpawning() async throws {
+        let app = try makeProbeBundle()
+        var spawned = false
+
+        do {
+            _ = try await AppLauncher.launch(
+                app: app, arguments: [], display: chatDisplay, isTrusted: { false },
+                spawn: { _, _ in
+                    spawned = true
+                    return 4242
+                })
+            Issue.record("expected the launch to be refused")
+        } catch let error as HelperError {
+            #expect(error.code == .permissionDenied)
+            #expect(error.message.contains("would open on your own screen"))
+        }
+
+        #expect(!spawned)
+    }
+
+    /// No display, no placement claim: a launch onto the shared desktop is not
+    /// a launch that failed to place anything.
+    @Test("a launch with no display reports no placement either way")
+    func noDisplayNoClaim() async throws {
+        let app = try makeProbeBundle()
+
+        let outcome = try await AppLauncher.launch(
+            app: app, arguments: [], display: nil, isTrusted: { false },
+            spawn: { _, _ in 4242 })
+
+        #expect(outcome.pid == 4242)
+        #expect(outcome.placedWindows == nil)
+        #expect(outcome.placed == nil)
+    }
+
+    @Test("an app that resolves to nothing is invalid input, not a permission problem")
+    func unresolvable() async {
+        await #expect(throws: HelperError.self) {
+            _ = try await AppLauncher.launch(
+                app: "/nonexistent/Nope.app", arguments: [], display: chatDisplay,
+                isTrusted: { true }, spawn: { _, _ in 1 })
+        }
+    }
+
+    @Test("placement is reported honestly")
+    func outcomeShape() {
+        #expect(AppLauncher.Outcome(pid: 1, placedWindows: 0).placed == false)
+        #expect(AppLauncher.Outcome(pid: 1, placedWindows: 2).placed == true)
+    }
+}
+
+@Suite("launched record")
+struct LaunchedRecordTests {
+    @Test("a placement is reported with its count")
+    func placement() throws {
+        let bytes = Record.launched(id: 4, pid: 4242, placedWindows: 2).encoded()
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: bytes.dropLast()) as? [String: Any])
+        #expect(object["pid"] as? Int == 4242)
+        #expect(object["placedWindows"] as? Int == 2)
+        #expect(object["placed"] as? Bool == true)
+    }
+
+    /// The case the server turns into a warning: the app started, and its
+    /// window is on whatever screen the app chose.
+    @Test("no window placed is reported as such, not as success")
+    func nothingPlaced() throws {
+        let bytes = Record.launched(id: 4, pid: 4242, placedWindows: 0).encoded()
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: bytes.dropLast()) as? [String: Any])
+        #expect(object["placedWindows"] as? Int == 0)
+        #expect(object["placed"] as? Bool == false)
+    }
+
+    /// A launch that named no display asked for no placement, so it claims
+    /// neither success nor failure at it.
+    @Test("a launch with no display omits the placement fields")
+    func omitted() throws {
+        let bytes = Record.launched(id: 4, pid: nil, placedWindows: nil).encoded()
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: bytes.dropLast()) as? [String: Any])
+        #expect(object["pid"] is NSNull)
+        #expect(object["placedWindows"] == nil)
+        #expect(object["placed"] == nil)
+    }
+}

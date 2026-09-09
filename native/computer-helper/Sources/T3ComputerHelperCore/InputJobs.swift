@@ -30,22 +30,31 @@ public struct TextDeliveryJob {
     public enum Outcome: Sendable, Equatable {
         case completed(typed: Int)
         case cancelled(typed: Int)
+        /// The precondition stopped holding partway through, carrying the
+        /// reason so the driver learns why the rest of the string is missing.
+        case stopped(reason: String, typed: Int)
     }
 
     private let graphemes: [String]
     private let gap: Duration
     private let post: (String, TextKeyPhase) -> Void
     private let pause: (Duration) async throws -> Void
+    private let blocked: @MainActor () -> String?
 
     /// - Parameters:
     ///   - pause: how the job waits out one gap. It must throw when the wait is
     ///     cancelled. The default sleeps, which is the production behaviour;
     ///     tests substitute it to drive cancellation without a clock.
+    ///   - blocked: consulted before every keystroke; a non-nil result stops
+    ///     the typing there and comes back as `stopped`. This is what keeps a
+    ///     string from following focus onto another screen halfway through, so
+    ///     it is checked per keystroke rather than once for the string.
     ///   - post: posts one half of one keystroke.
     public init(
         text: String,
         gap: Duration = .milliseconds(15),
         pause: ((Duration) async throws -> Void)? = nil,
+        blocked: (@MainActor () -> String?)? = nil,
         post: @escaping (String, TextKeyPhase) -> Void
     ) {
         // Graphemes, not scalars, so an emoji or a combining accent arrives
@@ -54,9 +63,11 @@ public struct TextDeliveryJob {
         self.gap = gap
         self.post = post
         self.pause = pause ?? { try await Task.sleep(for: $0) }
+        self.blocked = blocked ?? { nil }
     }
 
-    /// Types the text, stopping at the first cancellation.
+    /// Types the text, stopping at the first cancellation or at the first
+    /// keystroke the precondition refuses.
     ///
     /// A keystroke is atomic: once its key-down is out, the matching key-up is
     /// posted even when the wait between the two was cancelled, so cancelling
@@ -65,6 +76,7 @@ public struct TextDeliveryJob {
         var typed = 0
         for grapheme in graphemes {
             if Task.isCancelled { return .cancelled(typed: typed) }
+            if let reason = blocked() { return .stopped(reason: reason, typed: typed) }
             post(grapheme, .down)
             let cancelledMidKeystroke = await !waited()
             post(grapheme, .up)

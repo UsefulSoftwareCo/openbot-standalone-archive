@@ -342,11 +342,15 @@ public final class HelperService {
             emit(.ok(id: id))
 
         case "launch":
-            let target = command.optionalDisplayId().flatMap { displays.find($0) }
-            let pid = try await AppLauncher.launch(
+            // A named display that is not attached fails here rather than
+            // quietly launching onto whatever screen the user is looking at.
+            let target =
+                command.optionalString("displayId") == nil
+                ? nil : try requireDisplay(try command.displayId())
+            let outcome = try await AppLauncher.launch(
                 app: try command.string("app"), arguments: command.strings("args"),
                 display: target)
-            emit(.launched(id: id, pid: pid))
+            emit(.launched(id: id, pid: outcome.pid, placedWindows: outcome.placedWindows))
 
         case "request-permissions":
             // The only place a prompt may appear. Both calls are no-ops once

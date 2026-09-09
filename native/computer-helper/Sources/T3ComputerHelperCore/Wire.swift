@@ -159,7 +159,10 @@ public enum Record: Sendable {
     case windows(id: Int, windows: [WindowRecord])
     case ok(id: Int)
     case display(id: Int, display: DisplayRecord)
-    case launched(id: Int, pid: Int32?)
+    /// `placedWindows` is present exactly when a display was requested: it is
+    /// how many of the new app's windows were moved onto it, and zero is a
+    /// launch whose window is on whatever screen the app chose.
+    case launched(id: Int, pid: Int32?, placedWindows: Int?)
     case permissions(id: Int, permissions: PermissionsRecord)
     case inputResult(id: Int, delivered: Int, rejected: [InputRejection])
     case frame(id: Int?, displayId: UInt32, widthPx: Int, heightPx: Int, capturedAtMs: Double, payload: Data)
@@ -190,8 +193,15 @@ public enum Record: Sendable {
             return ["id": id, "type": "ok"]
         case let .display(id, display):
             return ["id": id, "type": "display", "display": display.json]
-        case let .launched(id, pid):
-            return ["id": id, "type": "launched", "pid": pid.map { Int($0) } ?? NSNull()]
+        case let .launched(id, pid, placedWindows):
+            var object: [String: Any] = [
+                "id": id, "type": "launched", "pid": pid.map { Int($0) } ?? NSNull(),
+            ]
+            if let placedWindows {
+                object["placedWindows"] = placedWindows
+                object["placed"] = placedWindows > 0
+            }
+            return object
         case let .permissions(id, permissions):
             return ["id": id, "type": "permissions", "permissions": permissions.json]
         case let .inputResult(id, delivered, rejected):

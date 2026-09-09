@@ -383,6 +383,15 @@ export type OpenbotComputerLaunchInput = typeof OpenbotComputerLaunchInput.Type;
 
 export const OpenbotComputerLaunchResult = Schema.Struct({
   pid: Schema.NullOr(Schema.Int),
+  /**
+   * How many of the new app's windows the backend moved onto the requested
+   * display. Absent when no display was requested, or when the backend cannot
+   * place windows at all; zero means the app started and its windows are
+   * wherever it put them, which is usually the screen the user is looking at.
+   */
+  placedWindows: Schema.optional(Schema.Int),
+  /** Whether any window reached the requested display. */
+  placed: Schema.optional(Schema.Boolean),
 });
 export type OpenbotComputerLaunchResult = typeof OpenbotComputerLaunchResult.Type;
 

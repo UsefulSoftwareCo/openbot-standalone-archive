@@ -325,6 +325,46 @@ describe("MacComputerBackend", () => {
     }),
   );
 
+  /**
+   * A launch that started an app but placed none of its windows is not a
+   * launch onto the requested display, and the caller has to be able to tell:
+   * the window is on whatever screen the app chose, usually the user's own.
+   */
+  it.effect("carries how many windows a launch actually placed", () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStub({
+        reply: () => ({ id: 1, type: "launched", pid: 4242, placedWindows: 0, placed: false }),
+      });
+
+      const result = yield* Effect.gen(function* () {
+        const backend = yield* ComputerBackend;
+        return yield* backend.launch({ app: "Safari", displayId: DISPLAY_ID });
+      }).pipe(Effect.provide(stub.layer));
+
+      expect(result).toEqual({ pid: 4242, placedWindows: 0, placed: false });
+      expect(yield* Queue.take(stub.sent)).toEqual({
+        type: "launch",
+        app: "Safari",
+        args: [],
+        displayId: DISPLAY_ID,
+      });
+    }),
+  );
+
+  /** An installed helper is only rebuilt when the user rebuilds it. */
+  it.effect("claims nothing about placement when the helper said nothing", () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStub({ reply: () => ({ id: 1, type: "launched", pid: 4242 }) });
+
+      const result = yield* Effect.gen(function* () {
+        const backend = yield* ComputerBackend;
+        return yield* backend.launch({ app: "Safari" });
+      }).pipe(Effect.provide(stub.layer));
+
+      expect(result).toEqual({ pid: 4242 });
+    }),
+  );
+
   it.effect("stops the capture when the caller's scope closes, and only shows its display", () =>
     Effect.gen(function* () {
       const stub = yield* makeStub({});

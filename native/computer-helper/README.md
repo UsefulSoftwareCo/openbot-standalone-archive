@@ -112,7 +112,7 @@ Every command carries an `id` that its reply echoes.
 | `input` `{displayId, events}`                           | `input-result` `{delivered, rejected}` — see below          |
 | `create-display` `{name, widthPx, heightPx, hiDpi}`     | `display`                                                   |
 | `destroy-display` `{displayId}`                         | `ok`                                                        |
-| `launch` `{app, args, displayId}`                       | `launched` `{pid}`                                          |
+| `launch` `{app, args, displayId}`                       | `launched` `{pid, placedWindows, placed}` — see below       |
 | `request-permissions`                                   | `permissions` — **the only command that may show a prompt** |
 | `shutdown`                                              | `ok`, then exit 0                                           |
 
@@ -135,6 +135,60 @@ answers its own request: the text event it stopped inside comes back as
 `{"index":N,"reason":"cancelled after 37 characters"}`, and the events it never
 reached as `"cancelled"`. `delivered` counts only the events that fully landed.
 Losing the driver and `shutdown` cancel the same way before releasing.
+
+### Keyboard events and the display they were sent for
+
+A click carries the coordinates that decide which window gets it. A key event
+does not: `CGEvent` posts it to whatever window has focus, on whatever screen.
+So an `input` batch naming a display cannot type "on" that display by posting
+alone — measured on a real Mac, text sent for one managed display arrives in a
+window on another the moment something else is frontmost.
+
+Every keyboard event in a batch is therefore checked first, inside the same
+serialized batch that posts it: the frontmost application's focused window
+(`kAXFocusedWindowAttribute`, falling back to `kAXMainWindowAttribute`) must
+overlap `CGDisplayBounds` of the display the batch named. When it does not, the
+event is not posted and comes back as
+`{"index":N,"reason":"keyboard focus is on another screen"}`, and so does every
+keyboard event behind it in that batch. Without Accessibility the question
+cannot be answered at all and the reason is
+`"Accessibility is required to confirm where typing would land"`.
+
+The check is re-read per keystroke, not once per batch: a long `text` event is
+minutes of typing, and focus moving partway through stops it with
+`"keyboard focus is on another screen after 37 characters"` rather than letting
+the rest of the string follow focus.
+
+Three deliberate exclusions. Pointer events carry their own target and are
+judged only by their coordinates — clicking is how a caller moves focus back. A
+key _up_ is always delivered, because it types nothing and refusing it would
+leave held down whatever its key-down pressed. `release-all` likewise.
+
+This is a guard, not isolation. The login session has one keyboard and one
+focused window; focus can still move between the read and the post. What it
+buys is that a batch aimed at a screen nothing on which has focus is refused
+outright instead of typed into someone else's window.
+
+### Launching onto a display
+
+`launch` with a `displayId` checks Accessibility **before** it starts anything
+and fails with `permission_denied` when the grant is missing. Without it the
+new window can be neither found nor moved, so launching first would put the app
+on the user's own screen and only then discover the request could not be
+honoured — and nothing can put that window back.
+
+With the grant, the helper waits up to ten seconds for the new process to open
+windows and moves each of them onto the display. The reply says what actually
+happened: `placedWindows` is how many were moved and `placed` is whether that
+was any at all. Both are absent when no display was requested. `placedWindows:
+0` means the app started and its windows are wherever the app put them; the
+server surfaces that as a warning rather than reporting a launch that landed on
+the requested screen.
+
+Placement is after the fact, and honestly so: the app is activated as it starts
+(that is what makes its window findable, and a background window takes no
+keyboard input), so an ordinary app start may paint its window on the main
+display for a moment before it is moved.
 
 Unsolicited: `{"type":"event","event":"displays-changed"｜"permissions-changed"}`
 and `frame` records while a capture is running. Failures are

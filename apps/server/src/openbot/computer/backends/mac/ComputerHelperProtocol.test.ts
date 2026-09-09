@@ -419,6 +419,36 @@ describe("decodeHelperRecord", () => {
     );
   });
 
+  it("reads how many windows a launch placed", () => {
+    expect(
+      expectSuccess(
+        decodeHelperRecord(
+          JSON.stringify({ id: 9, type: "launched", pid: 4242, placedWindows: 2, placed: true }),
+        ),
+      ),
+    ).toEqual({ id: 9, type: "launched", pid: 4242, placedWindows: 2, placed: true });
+
+    // The case the server has to warn about rather than celebrate.
+    expect(
+      expectSuccess(
+        decodeHelperRecord(
+          JSON.stringify({ id: 9, type: "launched", pid: 4242, placedWindows: 0, placed: false }),
+        ),
+      ),
+    ).toEqual({ id: 9, type: "launched", pid: 4242, placedWindows: 0, placed: false });
+  });
+
+  /**
+   * The installed helper bundle is only rebuilt when the user rebuilds it, so a
+   * server that has learned about placement still has to talk to one that has
+   * not.
+   */
+  it("accepts a launch reply from a helper that knows nothing about placement", () => {
+    expect(
+      expectSuccess(decodeHelperRecord(JSON.stringify({ id: 9, type: "launched", pid: 4242 }))),
+    ).toEqual({ id: 9, type: "launched", pid: 4242 });
+  });
+
   it("rejects a display id that names nothing", () => {
     const display = {
       id: "display-1",

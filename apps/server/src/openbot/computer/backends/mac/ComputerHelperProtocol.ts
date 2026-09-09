@@ -148,10 +148,18 @@ const HelperDisplayRecord = Schema.Struct({
   display: HelperDisplay,
 });
 
+/**
+ * The placement fields are optional in both directions. The helper omits them
+ * when the launch named no display and so asked for no placement, and a helper
+ * built before they existed omits them always — which must decode rather than
+ * fail, since the user's installed bundle is only rebuilt when they rebuild it.
+ */
 const HelperLaunchedRecord = Schema.Struct({
   id: Schema.Int,
   type: Schema.Literal("launched"),
   pid: Schema.NullOr(Schema.Int),
+  placedWindows: Schema.optional(Schema.Int),
+  placed: Schema.optional(Schema.Boolean),
 });
 
 const HelperPermissionsRecord = Schema.Struct({

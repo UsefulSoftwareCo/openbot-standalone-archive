@@ -49,7 +49,13 @@ public final class InputController {
     private let keystrokeGap = Duration.milliseconds(15)
     private let clickGapMicroseconds: UInt32 = 40_000
 
-    public init() {}
+    /// Decides whether a keystroke would land on the display the batch named.
+    /// Injected so the decision can be tested without a screen or a grant.
+    private let focus: FocusGuard
+
+    public init(focus: FocusGuard = FocusGuard()) {
+        self.focus = focus
+    }
 
     public var isTrusted: Bool { AXIsProcessTrusted() }
 
@@ -60,6 +66,9 @@ public final class InputController {
         /// A text event that cancellation stopped, and how many graphemes it
         /// managed to type first.
         case cancelled(typed: Int)
+        /// A text event that focus moved out from under partway through: the
+        /// reason, and how many graphemes had already been typed.
+        case focusMoved(reason: String, typed: Int)
     }
 
     /// Delivers a batch in order, reporting per-event rejections rather than
@@ -70,12 +79,21 @@ public final class InputController {
     /// event stops mid-string — and every event that did not run comes back as
     /// a rejection, so the driver is told what was dropped instead of having to
     /// infer it from a count.
+    ///
+    /// Keyboard events are additionally checked against `display` before they
+    /// are posted, because a key event has no target of its own and would
+    /// otherwise be typed into whatever is focused, on whatever screen. The
+    /// first refusal latches: once focus has been found elsewhere, every later
+    /// keyboard event in the batch is refused for the same reason rather than
+    /// racing the next read. Pointer events carry coordinates and are
+    /// unaffected — a click is how the caller moves focus back.
     public func deliver(
         events: [ParsedInputEvent], display: DisplayRecord
     ) async -> (delivered: Int, rejected: [InputRejection]) {
         var delivered = 0
         var rejected: [InputRejection] = []
         var cancelled = false
+        var keyboardBlocked: String?
         for (index, entry) in events.enumerated() {
             switch entry {
             case let .rejected(reason):
@@ -85,6 +103,13 @@ public final class InputController {
                     cancelled = true
                     rejected.append(InputRejection(index: index, reason: "cancelled"))
                     continue
+                }
+                if event.typesIntoFocusedWindow {
+                    keyboardBlocked = keyboardBlocked ?? focus.rejectionReason(display: display)
+                    if let reason = keyboardBlocked {
+                        rejected.append(InputRejection(index: index, reason: reason))
+                        continue
+                    }
                 }
                 switch await perform(event, on: display) {
                 case .delivered:
@@ -96,6 +121,11 @@ public final class InputController {
                     rejected.append(
                         InputRejection(
                             index: index, reason: "cancelled after \(typed) characters"))
+                case let .focusMoved(reason, typed):
+                    keyboardBlocked = reason
+                    rejected.append(
+                        InputRejection(
+                            index: index, reason: "\(reason) after \(typed) characters"))
                 }
             }
         }
@@ -165,11 +195,13 @@ public final class InputController {
             return .delivered
 
         case let .text(text):
-            switch await type(text) {
+            switch await type(text, on: display) {
             case .completed:
                 return .delivered
             case let .cancelled(typed):
                 return .cancelled(typed: typed)
+            case let .stopped(reason, typed):
+                return .focusMoved(reason: reason, typed: typed)
             }
 
         case .releaseAll:
@@ -317,10 +349,20 @@ public final class InputController {
     /// Virtual key 0 with an attached unicode string types the character
     /// whatever the active keyboard layout is, which no keycode table can do.
     /// The pacing and the cancellation live in `TextDeliveryJob`; this supplies
-    /// the posting.
-    private func type(_ text: String) async -> TextDeliveryJob.Outcome {
+    /// the posting and the per-keystroke focus check.
+    ///
+    /// The check is per keystroke, not per string: a 4096-character event is
+    /// two minutes of typing, and the human or another agent can take focus at
+    /// any point in it. Re-reading is what turns that from "the rest of the
+    /// sentence appears in someone else's window" into a rejection naming how
+    /// far it got.
+    private func type(_ text: String, on display: DisplayRecord) async -> TextDeliveryJob.Outcome {
         let source = self.source
-        let job = TextDeliveryJob(text: text, gap: keystrokeGap) { grapheme, phase in
+        let focus = self.focus
+        let job = TextDeliveryJob(
+            text: text, gap: keystrokeGap,
+            blocked: { focus.rejectionReason(display: display) }
+        ) { grapheme, phase in
             guard
                 let event = CGEvent(
                     keyboardEventSource: source, virtualKey: 0, keyDown: phase == .down)
@@ -330,5 +372,29 @@ public final class InputController {
             event.post(tap: .cghidEventTap)
         }
         return await job.run()
+    }
+}
+
+extension InputEvent {
+    /// True when this event would be delivered by focus rather than by
+    /// coordinates, and so must be checked against the display the batch named.
+    ///
+    /// A key *up* is deliberately excluded. It types nothing, and refusing one
+    /// would leave held down whatever the key-down before it pressed — on the
+    /// shared desktop, for the human sitting at it. `release-all` is excluded
+    /// for exactly the same reason.
+    ///
+    /// A click carrying modifiers is included even though its flags ride on the
+    /// mouse event and so reach the window under the cursor rather than the
+    /// focused one. That is the conservative reading of "a modifier is
+    /// keyboard": the cost is that a modified click into an unfocused screen is
+    /// refused until an ordinary click has moved focus there.
+    var typesIntoFocusedWindow: Bool {
+        switch self {
+        case let .key(_, down, _): return down
+        case .keyPress, .text: return true
+        case let .click(_, _, _, modifiers): return !modifiers.isEmpty
+        case .move, .button, .scroll, .releaseAll: return false
+        }
     }
 }
