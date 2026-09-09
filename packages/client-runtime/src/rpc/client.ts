@@ -53,6 +53,7 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.openbotProjectsSubscribe
   | typeof WS_METHODS.openbotKnowledgeSubscribe
   | typeof WS_METHODS.openbotComputerSubscribe
+  | typeof WS_METHODS.openbotChatComputerSubscribe
   | typeof WS_METHODS.subscribeTerminalEvents
   | typeof WS_METHODS.subscribeTerminalMetadata
   | typeof WS_METHODS.subscribePreviewEvents

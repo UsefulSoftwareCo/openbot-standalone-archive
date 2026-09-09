@@ -180,6 +180,12 @@ import {
   OpenbotComputerWindowFocusInput,
   OpenbotComputerWindowsListInput,
   OpenbotComputerWindowsListResult,
+  OpenbotChatComputer,
+  OpenbotChatComputerInput,
+  OpenbotChatComputerInputBatch,
+  OpenbotChatComputerLaunchInput,
+  OpenbotChatComputerSnapshotInput,
+  OpenbotChatComputerWindowFocusInput,
 } from "./openbotComputer.ts";
 import {
   ProjectListEntriesError,
@@ -438,6 +444,13 @@ export const WS_METHODS = {
   openbotComputerInput: "openbot.computer.input",
   openbotComputerControl: "openbot.computer.control",
   openbotComputerLaunch: "openbot.computer.launch",
+  openbotChatComputerGet: "openbot.chatComputer.get",
+  openbotChatComputerEnsure: "openbot.chatComputer.ensure",
+  openbotChatComputerSubscribe: "openbot.chatComputer.subscribe",
+  openbotChatComputerSnapshot: "openbot.chatComputer.snapshot",
+  openbotChatComputerWindowFocus: "openbot.chatComputer.window.focus",
+  openbotChatComputerLaunch: "openbot.chatComputer.launch",
+  openbotChatComputerInput: "openbot.chatComputer.input",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -1559,6 +1572,47 @@ export const WsOpenbotComputerLaunchRpc = Rpc.make(WS_METHODS.openbotComputerLau
   success: OpenbotComputerLaunchResult,
   error: OpenbotComputerRpcError,
 });
+/** The computer a chat owns, without provisioning it. */
+export const WsOpenbotChatComputerGetRpc = Rpc.make(WS_METHODS.openbotChatComputerGet, {
+  payload: OpenbotChatComputerInput,
+  success: OpenbotChatComputer,
+  error: OpenbotComputerRpcError,
+});
+/** Provisions the chat's display on first use, then describes it. */
+export const WsOpenbotChatComputerEnsureRpc = Rpc.make(WS_METHODS.openbotChatComputerEnsure, {
+  payload: OpenbotChatComputerInput,
+  success: OpenbotChatComputer,
+  error: OpenbotComputerRpcError,
+});
+export const WsOpenbotChatComputerSubscribeRpc = Rpc.make(WS_METHODS.openbotChatComputerSubscribe, {
+  payload: OpenbotChatComputerInput,
+  success: OpenbotChatComputer,
+  error: OpenbotComputerRpcError,
+  stream: true,
+});
+export const WsOpenbotChatComputerSnapshotRpc = Rpc.make(WS_METHODS.openbotChatComputerSnapshot, {
+  payload: OpenbotChatComputerSnapshotInput,
+  success: OpenbotComputerSnapshot,
+  error: OpenbotComputerRpcError,
+});
+export const WsOpenbotChatComputerWindowFocusRpc = Rpc.make(
+  WS_METHODS.openbotChatComputerWindowFocus,
+  {
+    payload: OpenbotChatComputerWindowFocusInput,
+    success: Schema.Struct({}),
+    error: OpenbotComputerRpcError,
+  },
+);
+export const WsOpenbotChatComputerLaunchRpc = Rpc.make(WS_METHODS.openbotChatComputerLaunch, {
+  payload: OpenbotChatComputerLaunchInput,
+  success: OpenbotComputerLaunchResult,
+  error: OpenbotComputerRpcError,
+});
+export const WsOpenbotChatComputerInputRpc = Rpc.make(WS_METHODS.openbotChatComputerInput, {
+  payload: OpenbotChatComputerInputBatch,
+  success: OpenbotComputerInputResult,
+  error: OpenbotComputerRpcError,
+});
 
 export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
   payload: Schema.Struct({}),
@@ -1653,6 +1707,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsOpenbotComputerInputRpc,
   WsOpenbotComputerControlRpc,
   WsOpenbotComputerLaunchRpc,
+  WsOpenbotChatComputerGetRpc,
+  WsOpenbotChatComputerEnsureRpc,
+  WsOpenbotChatComputerSubscribeRpc,
+  WsOpenbotChatComputerSnapshotRpc,
+  WsOpenbotChatComputerWindowFocusRpc,
+  WsOpenbotChatComputerLaunchRpc,
+  WsOpenbotChatComputerInputRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,

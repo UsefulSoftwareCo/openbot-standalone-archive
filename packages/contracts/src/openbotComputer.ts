@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 
 import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ExecutionEnvironmentPlatformOs } from "./environment.ts";
+import { OpenbotChannelId } from "./openbot.ts";
 
 /**
  * The computer an environment's agents act on, as a human sees and controls it.
@@ -491,3 +492,88 @@ export const OpenbotComputerStreamServerMessage = Schema.Union([
   Schema.Struct({ type: Schema.Literal("pong"), t: Schema.Number }),
 ]);
 export type OpenbotComputerStreamServerMessage = typeof OpenbotComputerStreamServerMessage.Type;
+
+// ---------------------------------------------------------------------------
+// The chat's computer
+// ---------------------------------------------------------------------------
+
+/**
+ * Every top-level chat owns one managed display, provisioned the first time
+ * something asks for it and reused for as long as the server runs. A child
+ * chat has no display of its own: it works on its parent's. The chat id is the
+ * stable name; the display id underneath is whatever the host handed out this
+ * process and is never persisted or shown as identity.
+ *
+ * On macOS that display is another screen on the one signed-in session, which
+ * still has a single pointer, keyboard, and frontmost app. On Linux it is a
+ * headless X session of its own. Neither is a sandbox.
+ */
+export const OpenbotChatComputerState = Schema.Literals([
+  /** Nothing has asked for this chat's display yet; nothing is captured. */
+  "idle",
+  /** The host is creating it. */
+  "provisioning",
+  /** The display exists and can be viewed and driven. */
+  "ready",
+  /** The host cannot provide one right now; `detail` says why. */
+  "unavailable",
+]);
+export type OpenbotChatComputerState = typeof OpenbotChatComputerState.Type;
+
+export const OpenbotChatComputer = Schema.Struct({
+  /** The chat whose computer this is: the top-level chat, even when asked
+      through one of its children. */
+  channelId: OpenbotChannelId,
+  channelName: Schema.String,
+  state: OpenbotChatComputerState,
+  /** Present only while `ready`. */
+  display: Schema.NullOr(OpenbotComputerDisplay),
+  /** Why the computer is unavailable, or a standing caveat while it is ready. */
+  detail: Schema.NullOr(Schema.String),
+  /** Windows the host attributes to this chat's display. Empty when the
+      backend cannot list windows. */
+  windows: Schema.Array(OpenbotComputerWindow),
+  controller: Schema.NullOr(OpenbotComputerController),
+  /** Whether launching an app onto this display can work right now (macOS
+      needs Accessibility to place the window; without it launch is refused
+      rather than landing on the user's own screen). */
+  canLaunch: Schema.Boolean,
+  checkedAt: IsoDateTime,
+});
+export type OpenbotChatComputer = typeof OpenbotChatComputer.Type;
+
+export const OpenbotChatComputerInput = Schema.Struct({
+  channelId: OpenbotChannelId,
+});
+export type OpenbotChatComputerInput = typeof OpenbotChatComputerInput.Type;
+
+/** Provision the chat's display if it does not exist yet, then describe it. */
+export const OpenbotChatComputerEnsureInput = OpenbotChatComputerInput;
+
+export const OpenbotChatComputerSnapshotInput = Schema.Struct({
+  channelId: OpenbotChannelId,
+  maxWidthPx: Schema.optional(Schema.Int),
+});
+export type OpenbotChatComputerSnapshotInput = typeof OpenbotChatComputerSnapshotInput.Type;
+
+export const OpenbotChatComputerWindowFocusInput = Schema.Struct({
+  channelId: OpenbotChannelId,
+  windowId: OpenbotComputerWindowId,
+});
+export type OpenbotChatComputerWindowFocusInput = typeof OpenbotChatComputerWindowFocusInput.Type;
+
+export const OpenbotChatComputerLaunchInput = Schema.Struct({
+  channelId: OpenbotChannelId,
+  app: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
+  args: Schema.optional(Schema.Array(Schema.String.check(Schema.isMaxLength(1024)))),
+});
+export type OpenbotChatComputerLaunchInput = typeof OpenbotChatComputerLaunchInput.Type;
+
+export const OpenbotChatComputerInputBatch = Schema.Struct({
+  channelId: OpenbotChannelId,
+  events: Schema.Array(OpenbotComputerInputEvent).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(MAX_COMPUTER_INPUT_BATCH),
+  ),
+});
+export type OpenbotChatComputerInputBatch = typeof OpenbotChatComputerInputBatch.Type;
