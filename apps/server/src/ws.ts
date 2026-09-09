@@ -1,3 +1,4 @@
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Encoding from "effect/Encoding";
@@ -612,12 +613,18 @@ const makeWsRpcLayer = (
       // Input and the lease from the typed socket belong to the human at
       // this client, so they share one identity for as long as the socket
       // lives: taking control in one tab and clicking in it is one viewer.
-      // The session id is what ties this socket to the frame socket of the
-      // same paired browser, so the lease taken on the live view authorizes
-      // the window picker and input that arrive here.
+      // Each RPC connection is its own viewer, because held keys, in-flight
+      // input and lease ownership belong to this socket alone: a second,
+      // idle socket from the same browser must not release them when it
+      // closes. The session id stays shared, because it is the authorization
+      // that ties this socket to the frame socket of the same paired browser,
+      // so the lease taken on the live view authorizes the window picker and
+      // input that arrive here.
+      const crypto = yield* Crypto.Crypto;
+      const connectionId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
       const computerViewer = {
         kind: "viewer",
-        viewerId: `rpc:${currentSessionId}`,
+        viewerId: `rpc:${currentSessionId}:${connectionId}`,
         sessionId: currentSessionId,
         label: clientOrigin.surface ?? "A client",
       } as const;
