@@ -3,6 +3,7 @@ import {
   NO_COMPUTER_CAPABILITIES,
   OpenbotChannelId,
   OpenbotComputerDisplayId,
+  OpenbotComputerError,
   OpenbotComputerWindowId,
   ProjectId,
   ProviderInstanceId,
@@ -15,8 +16,11 @@ import {
   type OpenbotComputerStatus,
   type OpenbotComputerWindow,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 
 import { OpenbotChannelStore } from "../OpenbotChannelStore.ts";
@@ -87,7 +91,12 @@ interface FakeHostOptions {
   readonly gate?: Deferred.Deferred<void>;
   /** Completed the moment `createDisplay` is entered. */
   readonly createStarted?: Deferred.Deferred<void>;
+  /** How many `createDisplay` calls fail before the host starts succeeding. */
+  readonly failCreates?: number;
 }
+
+/** What a host with no virtual display driver says. */
+const CREATE_FAILURE_DETAIL = "no virtual display driver";
 
 const makeFakeHost = (options: FakeHostOptions = {}) => {
   const displays: Array<OpenbotComputerDisplay> = [PHYSICAL_MAIN];
@@ -143,6 +152,12 @@ const makeFakeHost = (options: FakeHostOptions = {}) => {
         yield* Deferred.succeed(options.createStarted, undefined);
       }
       if (options.gate !== undefined) yield* Deferred.await(options.gate);
+      if (created.length <= (options.failCreates ?? 0)) {
+        return yield* new OpenbotComputerError({
+          code: "backend_unavailable",
+          message: CREATE_FAILURE_DETAIL,
+        });
+      }
       nextDisplay += 1;
       const display: OpenbotComputerDisplay = {
         id: OpenbotComputerDisplayId.make(`managed-${nextDisplay}`),
@@ -259,6 +274,70 @@ it.effect("concurrent ensure calls share one creation", () =>
     // Nobody re-listed the host's displays: the second caller waited on the
     // creation in flight instead of finding a finished one.
     assert.equal(host.listedDisplays(), 0);
+  }),
+);
+
+it.effect("an interrupted creator still settles the entry and its waiting peer", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const createStarted = yield* Deferred.make<void>();
+    const host = makeFakeHost({ gate, createStarted });
+
+    const [peerView, afterwards, abandoned] = yield* withService([solo], host.session, (service) =>
+      Effect.gen(function* () {
+        const creator = yield* service.ensure(solo.id).pipe(Effect.forkChild);
+        // The creator now owns the entry and is inside the host's create call.
+        yield* Deferred.await(createStarted);
+        // Started here, so the peer is parked on that creation rather than
+        // racing it.
+        const peer = yield* service
+          .ensure(solo.id)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+
+        // The viewer socket that asked for the screen goes away mid-creation.
+        // Signalled rather than awaited: `Fiber.interrupt` would block until
+        // the creator finishes, and the creator is still holding the gate.
+        yield* Effect.sync(() => creator.interruptUnsafe());
+        yield* Deferred.succeed(gate, undefined);
+
+        return [
+          yield* Fiber.join(peer),
+          yield* service.get(solo.id),
+          yield* Fiber.await(creator),
+        ] as const;
+      }),
+    );
+
+    assert.isTrue(Exit.isFailure(abandoned) && Cause.hasInterrupts(abandoned.cause));
+    assert.equal(host.created.length, 1);
+    assert.equal(peerView.state, "ready");
+    assert.equal(peerView.display?.kind, "managed-virtual");
+    // The abandoned creation is the chat's display, not an orphan: the map
+    // agrees with what the waiter was handed.
+    assert.equal(afterwards.state, "ready");
+    assert.equal(afterwards.display?.id, peerView.display?.id);
+    // Nobody re-listed the host: the peer waited on the creation in flight.
+    assert.equal(host.listedDisplays(), 0);
+  }),
+);
+
+it.effect("a creation failure frees the entry so the next ensure retries", () =>
+  Effect.gen(function* () {
+    const host = makeFakeHost({ failCreates: 1 });
+
+    const [refused, retried] = yield* withService([solo], host.session, (service) =>
+      Effect.gen(function* () {
+        const first = yield* service.ensure(solo.id);
+        return [first, yield* service.ensure(solo.id)] as const;
+      }),
+    );
+
+    assert.equal(refused.state, "unavailable");
+    assert.equal(refused.display, null);
+    assert.equal(refused.detail, CREATE_FAILURE_DETAIL);
+    assert.equal(retried.state, "ready");
+    assert.equal(retried.display?.kind, "managed-virtual");
+    assert.equal(host.created.length, 2);
   }),
 );
 

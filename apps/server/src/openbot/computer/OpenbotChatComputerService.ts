@@ -249,24 +249,40 @@ export const make = Effect.gen(function* () {
         continue;
       }
 
-      // Uninterruptible so an abandoned caller cannot leave a half-made screen
-      // behind, and so the waiters on `pending` always get an outcome.
-      const outcome = yield* Effect.exit(
-        Effect.uninterruptible(
-          session.createDisplay({
-            name: owner.name,
-            widthPx: CHAT_DISPLAY_WIDTH_PX,
-            heightPx: CHAT_DISPLAY_HEIGHT_PX,
-            hiDpi: true,
-          }),
-        ),
+      // Creation and its publication are one uninterruptible unit: once the
+      // host has been asked for a screen this fiber commits to finishing the
+      // allocation. The caller that triggered `ensure` is often a viewer
+      // socket that can close mid-creation, and an interrupt landing between
+      // the host's answer and the settlement below would strand a real
+      // display nobody owns while parking every later `ensure` on a `pending`
+      // that nobody will ever complete. An abandoned caller paying out the
+      // one-second creation is the cheaper outcome by far.
+      //
+      // The entry, the change note, and the Deferred all carry this one
+      // outcome, and the Deferred is completed last: waking a waiter first
+      // would let it hand a display back to a client that a following `get`
+      // still describes as `provisioning`. A failure leaves `unavailable`
+      // rather than `provisioning`, which is what lets the next `ensure` take
+      // this branch again and retry.
+      const outcome = yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          const exit = yield* Effect.exit(
+            session.createDisplay({
+              name: owner.name,
+              widthPx: CHAT_DISPLAY_WIDTH_PX,
+              heightPx: CHAT_DISPLAY_HEIGHT_PX,
+              hiDpi: true,
+            }),
+          );
+          const settled: ChatDisplayEntry = Exit.isSuccess(exit)
+            ? { kind: "ready", display: exit.value }
+            : { kind: "unavailable", detail: detailOfCause(exit.cause) };
+          yield* Ref.update(entries, (map) => new Map(map).set(owner.id, settled));
+          yield* PubSub.publish(changed, owner.id);
+          yield* Deferred.done(pending, exit);
+          return exit;
+        }),
       );
-      yield* Deferred.done(pending, outcome);
-      const settled: ChatDisplayEntry = Exit.isSuccess(outcome)
-        ? { kind: "ready", display: outcome.value }
-        : { kind: "unavailable", detail: detailOfCause(outcome.cause) };
-      yield* Ref.update(entries, (map) => new Map(map).set(owner.id, settled));
-      yield* PubSub.publish(changed, owner.id);
       if (Exit.isSuccess(outcome)) return outcome.value;
       return yield* Effect.failCause(outcome.cause);
     }
