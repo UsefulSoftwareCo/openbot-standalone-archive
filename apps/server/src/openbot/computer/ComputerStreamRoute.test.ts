@@ -335,6 +335,48 @@ describe("handleViewerSocket", () => {
     ),
   );
 
+  it.effect("gives up control of the old screen before switching, even when the switch fails", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { host, session: computer } = yield* makeTestSession();
+        const viewer = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-rhys",
+          canControl: true,
+        });
+        const inbound = yield* Queue.make<ComputerStreamFrame, Cause.Done>();
+        const reading = yield* Effect.forkChild(
+          handleViewerSocket(viewer, Stream.fromQueue(inbound), resolveTestChat).pipe(
+            Stream.takeUntil((frame) => typeof frame === "string" && frame.includes('"input-ack"')),
+            Stream.runCollect,
+          ),
+        );
+        // Controlling chat A, then asking for a chat this host cannot resolve.
+        yield* Queue.offer(inbound, send({ ...OPEN_MAIN, control: true }));
+        yield* Queue.offer(
+          inbound,
+          send({ ...OPEN_MAIN, channelId: OpenbotChannelId.make("chat-nowhere"), control: true }),
+        );
+        // Input meant for B must not be delivered to A.
+        yield* Queue.offer(
+          inbound,
+          send({ type: "input", seq: 7, events: [{ type: "text", text: "for B" }] }),
+        );
+
+        const messages = (yield* Fiber.join(reading)).map(parse);
+        expect(messages.some((message) => message.type === "status")).toBe(true);
+        expect(messages.findLast((message) => message.type === "controller")).toMatchObject({
+          controlling: false,
+        });
+        expect(messages.find((message) => message.type === "input-ack")).toMatchObject({
+          seq: 7,
+          result: { delivered: 0 },
+        });
+        expect(yield* host.delivered).toHaveLength(0);
+      }),
+    ),
+  );
+
   it.effect("ends the conversation when the client says close", () =>
     Effect.scoped(
       Effect.gen(function* () {

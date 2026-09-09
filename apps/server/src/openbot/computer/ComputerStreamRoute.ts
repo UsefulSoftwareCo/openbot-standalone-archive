@@ -166,20 +166,24 @@ export const handleViewerSocket = (
           case "open":
             // The chat is the only selector this socket accepts; the display
             // it resolves to is the chat's own, never a physical screen.
-            return resolveDisplay(message.channelId)
-              .pipe(
-                Effect.flatMap((display) =>
-                  viewer.open(display.id, {
-                    maxWidthPx: message.maxWidthPx,
-                    fps: message.fps,
-                    ...(message.quality === undefined ? {} : { quality: message.quality }),
-                  }),
-                ),
-              )
-              .pipe(
-                Effect.andThen(message.control ? viewer.takeControl : Effect.void),
-                Effect.catch((error) => send(statusFrame(error.message))),
-              );
+            //
+            // Control is given back BEFORE the new chat is resolved. Resolving
+            // can take a while (first use provisions a display) and can fail,
+            // and a viewer that meant to move to B must not keep driving A in
+            // the meantime or afterwards. Releasing also cancels any input
+            // still in flight for the old screen, so nothing "resumes" on B.
+            return viewer.releaseControl.pipe(
+              Effect.andThen(resolveDisplay(message.channelId)),
+              Effect.flatMap((display) =>
+                viewer.open(display.id, {
+                  maxWidthPx: message.maxWidthPx,
+                  fps: message.fps,
+                  ...(message.quality === undefined ? {} : { quality: message.quality }),
+                }),
+              ),
+              Effect.andThen(message.control ? viewer.takeControl : Effect.void),
+              Effect.catch((error) => send(statusFrame(error.message))),
+            );
           case "control":
             // Never queued behind input: releasing is what cancels the batch
             // that is running, so waiting for it would defeat the point.
