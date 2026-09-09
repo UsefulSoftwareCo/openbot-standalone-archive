@@ -2,6 +2,9 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   OPENBOT_COMPUTER_STREAM_PATH,
+  type OpenbotChannelId,
+  type OpenbotComputerDisplay,
+  OpenbotComputerError,
   type OpenbotComputerInputEvent,
   OpenbotComputerStreamClientMessage,
   OpenbotComputerStreamServerMessage,
@@ -22,6 +25,7 @@ import {
   failEnvironmentScopeRequired,
 } from "../../auth/http.ts";
 import type { ComputerFrame } from "./ComputerBackend.ts";
+import { OpenbotChatComputerService } from "./OpenbotChatComputer.ts";
 import { OpenbotComputerSession, type ComputerViewer } from "./OpenbotComputerSession.ts";
 
 /**
@@ -86,9 +90,40 @@ const OUTBOUND_CONTROL_LIMIT = 256;
  * returned stream ends when `inbound` ends or the client says `close`, which
  * is what closes the caller's scope and detaches the viewer.
  */
+/**
+ * What the socket needs to turn a chat into the one display that chat owns.
+ * The socket never carries a display id: a viewer names a chat, and this
+ * resolves (and on first use provisions) the chat's managed display. Failing
+ * is a value here so the viewer is told why and the conversation continues.
+ */
+export type ChatDisplayResolver = (
+  channelId: OpenbotChannelId,
+) => Effect.Effect<OpenbotComputerDisplay, OpenbotComputerError>;
+
+/** Resolves through the chat computer service, provisioning on first use. */
+export const chatDisplayResolver =
+  (chatComputer: OpenbotChatComputerService["Service"]): ChatDisplayResolver =>
+  (channelId) =>
+    chatComputer.ensure(channelId).pipe(
+      Effect.flatMap((computer) =>
+        computer.display === null
+          ? Effect.fail(
+              new OpenbotComputerError({
+                code:
+                  computer.state === "unavailable" ? "backend_unavailable" : "display_not_found",
+                message:
+                  computer.detail ??
+                  `${computer.channelName}'s screen is ${computer.state}; try again in a moment.`,
+              }),
+            )
+          : Effect.succeed(computer.display),
+      ),
+    );
+
 export const handleViewerSocket = (
   viewer: ComputerViewer,
   inbound: Stream.Stream<ComputerStreamFrame>,
+  resolveDisplay: ChatDisplayResolver,
 ): Stream.Stream<ComputerStreamFrame> =>
   Stream.unwrap(
     Effect.gen(function* () {
@@ -129,12 +164,18 @@ export const handleViewerSocket = (
       const apply = (message: OpenbotComputerStreamClientMessage) => {
         switch (message.type) {
           case "open":
-            return viewer
-              .open(message.displayId, {
-                maxWidthPx: message.maxWidthPx,
-                fps: message.fps,
-                ...(message.quality === undefined ? {} : { quality: message.quality }),
-              })
+            // The chat is the only selector this socket accepts; the display
+            // it resolves to is the chat's own, never a physical screen.
+            return resolveDisplay(message.channelId)
+              .pipe(
+                Effect.flatMap((display) =>
+                  viewer.open(display.id, {
+                    maxWidthPx: message.maxWidthPx,
+                    fps: message.fps,
+                    ...(message.quality === undefined ? {} : { quality: message.quality }),
+                  }),
+                ),
+              )
               .pipe(
                 Effect.andThen(message.control ? viewer.takeControl : Effect.void),
                 Effect.catch((error) => send(statusFrame(error.message))),
@@ -231,6 +272,7 @@ export const openbotComputerStreamRouteLayer = HttpRouter.add(
       return yield* failEnvironmentScopeRequired(AuthOrchestrationReadScope);
     }
     const computer = yield* OpenbotComputerSession;
+    const chatComputer = yield* OpenbotChatComputerService;
     const socket = yield* Effect.orDie(request.upgrade);
 
     yield* Effect.scoped(
@@ -251,9 +293,11 @@ export const openbotComputerStreamRouteLayer = HttpRouter.add(
         // Ends when the socket closes or the client says so; leaving this
         // effect closes the scope, which detaches the viewer, releases its
         // lease, and stops the capture if it was the last one watching.
-        yield* handleViewerSocket(viewer, Stream.fromQueue(received)).pipe(
-          Stream.runForEach(write),
-        );
+        yield* handleViewerSocket(
+          viewer,
+          Stream.fromQueue(received),
+          chatDisplayResolver(chatComputer),
+        ).pipe(Stream.runForEach(write));
       }),
     ).pipe(Effect.ignore);
 

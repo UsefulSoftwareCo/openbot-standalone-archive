@@ -5,6 +5,8 @@ import {
   AuthOrchestrationReadScope,
   AuthSessionId,
   OPENBOT_COMPUTER_STREAM_PATH,
+  OpenbotChannelId,
+  OpenbotComputerError,
   type OpenbotComputerStreamClientMessage,
   type OpenbotComputerStreamServerMessage,
 } from "@t3tools/contracts";
@@ -25,9 +27,11 @@ import {
   handleViewerSocket,
   openbotComputerStreamRouteLayer,
   viewerLabelFromUrl,
+  type ChatDisplayResolver,
   type ComputerStreamFrame,
 } from "./ComputerStreamRoute.ts";
 import type { ComputerFrame } from "./ComputerBackend.ts";
+import { OpenbotChatComputerService } from "./OpenbotChatComputer.ts";
 import { OpenbotComputerSession, type ComputerViewer } from "./OpenbotComputerSession.ts";
 import { MAIN_DISPLAY, frame, makeTestSession } from "./OpenbotComputerSessionService.testkit.ts";
 
@@ -38,9 +42,20 @@ const parse = (frame: ComputerStreamFrame): OpenbotComputerStreamServerMessage =
 
 const send = (message: OpenbotComputerStreamClientMessage): string => JSON.stringify(message);
 
+const CHAT_ID = OpenbotChannelId.make("chat-rhys");
+
+/** The test chat owns the test session's main display; every other chat name
+    is refused, which is the whole point of resolving through a chat. */
+const resolveTestChat: ChatDisplayResolver = (channelId) =>
+  channelId === CHAT_ID
+    ? Effect.succeed(MAIN_DISPLAY)
+    : Effect.fail(
+        new OpenbotComputerError({ code: "display_not_found", message: `no chat ${channelId}` }),
+      );
+
 const OPEN_MAIN: OpenbotComputerStreamClientMessage = {
   type: "open",
-  displayId: MAIN_DISPLAY.id,
+  channelId: CHAT_ID,
   maxWidthPx: 1280,
   fps: 10,
   control: false,
@@ -63,7 +78,7 @@ const converse = (
       canControl: options.canControl ?? true,
     });
     const inbound = yield* Queue.make<ComputerStreamFrame, Cause.Done>();
-    const outbound = handleViewerSocket(viewer, Stream.fromQueue(inbound));
+    const outbound = handleViewerSocket(viewer, Stream.fromQueue(inbound), resolveTestChat);
     for (const value of script) yield* Queue.offer(inbound, value);
     const frames = yield* outbound.pipe(Stream.take(expected), Stream.runCollect);
     return { host, computer, viewer, inbound, frames };
@@ -200,7 +215,7 @@ describe("handleViewerSocket", () => {
           canControl: false,
         });
         const inbound = yield* Queue.make<ComputerStreamFrame, Cause.Done>();
-        const outbound = handleViewerSocket(viewer, Stream.fromQueue(inbound));
+        const outbound = handleViewerSocket(viewer, Stream.fromQueue(inbound), resolveTestChat);
         yield* Queue.offer(inbound, send(OPEN_MAIN));
         // hello and the capturing status first, then the frame.
         const opening = yield* outbound.pipe(Stream.take(2), Stream.runCollect);
@@ -247,7 +262,11 @@ describe("handleViewerSocket", () => {
           // The client reads one frame and then stops until everything has been
           // produced, which is what a stalled socket looks like from in here.
           const stalled = yield* Ref.make(true);
-          const seen = yield* handleViewerSocket(viewer, Stream.fromQueue(inbound)).pipe(
+          const seen = yield* handleViewerSocket(
+            viewer,
+            Stream.fromQueue(inbound),
+            resolveTestChat,
+          ).pipe(
             Stream.mapEffect((value) =>
               Ref.getAndSet(stalled, false).pipe(
                 Effect.flatMap((wasFirst) =>
@@ -291,7 +310,7 @@ describe("handleViewerSocket", () => {
         });
         const inbound = yield* Queue.make<ComputerStreamFrame, Cause.Done>();
         const reading = yield* Effect.forkChild(
-          handleViewerSocket(viewer, Stream.fromQueue(inbound)).pipe(
+          handleViewerSocket(viewer, Stream.fromQueue(inbound), resolveTestChat).pipe(
             Stream.take(5),
             Stream.runCollect,
           ),
@@ -329,9 +348,11 @@ describe("handleViewerSocket", () => {
         yield* Queue.offer(inbound, send({ type: "ping", t: 1 }));
         yield* Queue.offer(inbound, send({ type: "close" }));
         // No `take`: the stream has to finish on its own or this never returns.
-        const frames = yield* handleViewerSocket(viewer, Stream.fromQueue(inbound)).pipe(
-          Stream.runCollect,
-        );
+        const frames = yield* handleViewerSocket(
+          viewer,
+          Stream.fromQueue(inbound),
+          resolveTestChat,
+        ).pipe(Stream.runCollect);
         expect(frames.map(parse)).toEqual([{ type: "pong", t: 1 }]);
       }),
     ),
@@ -349,9 +370,11 @@ describe("handleViewerSocket", () => {
         const inbound = yield* Queue.make<ComputerStreamFrame, Cause.Done>();
         yield* Queue.offer(inbound, send({ type: "ping", t: 2 }));
         yield* Queue.end(inbound);
-        const frames = yield* handleViewerSocket(viewer, Stream.fromQueue(inbound)).pipe(
-          Stream.runCollect,
-        );
+        const frames = yield* handleViewerSocket(
+          viewer,
+          Stream.fromQueue(inbound),
+          resolveTestChat,
+        ).pipe(Stream.runCollect);
         expect(frames.map(parse)).toEqual([{ type: "pong", t: 2 }]);
       }),
     ),
@@ -397,6 +420,10 @@ const requestStream = (
           Context.add(
             OpenbotComputerSession,
             OpenbotComputerSession.of({} as OpenbotComputerSession["Service"]),
+          ),
+          Context.add(
+            OpenbotChatComputerService,
+            OpenbotChatComputerService.of({} as OpenbotChatComputerService["Service"]),
           ),
         ),
       );
