@@ -2,6 +2,8 @@ import CoreGraphics
 import Foundation
 import Testing
 
+@preconcurrency import ScreenCaptureKit
+
 @testable import T3ComputerHelperCore
 
 @Suite("wheel mapping")
@@ -80,6 +82,37 @@ struct CaptureSizeTests {
             sourceWidthPx: 800, sourceHeightPx: 600, maxWidthPx: 4000)
         #expect(size.width == 800)
         #expect(size.height == 600)
+    }
+}
+
+@Suite("capture session lifetime")
+struct CaptureSessionTests {
+    /// The regression this guards: `SCStream` keeps its delegate and its
+    /// stream output weakly, so a `CaptureOutput` that only the caller's local
+    /// scope holds is deallocated the moment `start` returns, and every frame
+    /// is dropped with `stream output NOT found` while the stream still
+    /// reports itself as capturing. Constructing the stream needs no
+    /// permission — only `startCapture`, which this never calls, does.
+    @Test("a capture session keeps its stream output alive")
+    func sessionRetainsOutput() {
+        weak var probe: CaptureOutput?
+        var session: CaptureSession?
+        do {
+            let output = CaptureOutput(onImage: { _ in }, onStop: { _ in })
+            probe = output
+            let stream = SCStream(
+                filter: SCContentFilter(), configuration: SCStreamConfiguration(),
+                delegate: output)
+            try? stream.addStreamOutput(
+                output, type: .screen, sampleHandlerQueue: DispatchQueue(label: "test.capture"))
+            session = CaptureSession(
+                stream: stream, output: output, widthPx: 640, heightPx: 480)
+        }
+        #expect(probe != nil)
+        #expect(session?.output === probe)
+
+        session = nil
+        #expect(probe == nil)
     }
 }
 

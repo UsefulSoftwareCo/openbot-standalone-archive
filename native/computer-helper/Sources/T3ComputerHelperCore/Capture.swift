@@ -30,10 +30,13 @@ enum ImageCodec {
 
 /// Receives frames off ScreenCaptureKit's own queue.
 ///
+/// Whoever builds one of these must keep it alive for as long as the stream
+/// runs; see `CaptureSession`.
+///
 /// SAFETY: `@unchecked Sendable` because it holds only immutable state — a
 /// `CIContext`, which is documented as thread-safe, and two `@Sendable`
 /// closures.
-private final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
+final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private let context = CIContext(options: [.useSoftwareRenderer: false])
     private let onImage: @Sendable (CGImage) -> Void
     private let onStop: @Sendable (String) -> Void
@@ -69,13 +72,24 @@ private final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate, @
 }
 
 /// One display's live capture.
-private final class CaptureSession {
+///
+/// `output` is not bookkeeping. `SCStream(filter:configuration:delegate:)` and
+/// `addStreamOutput(_:type:sampleHandlerQueue:)` both hold what you hand them
+/// *weakly*, so the session is the only strong reference to the object that
+/// receives frames. Drop it and capture silently produces nothing: the stream
+/// still starts, `capture-start` still reports `capturing`, and
+/// ScreenCaptureKit logs `stream output NOT found. Dropping frame` for every
+/// frame until the stream stops. Releasing the session releases the stream and
+/// the output together, which is exactly what `stop` wants.
+final class CaptureSession {
     let stream: SCStream
+    let output: CaptureOutput
     let widthPx: Int
     let heightPx: Int
 
-    init(stream: SCStream, widthPx: Int, heightPx: Int) {
+    init(stream: SCStream, output: CaptureOutput, widthPx: Int, heightPx: Int) {
         self.stream = stream
+        self.output = output
         self.widthPx = widthPx
         self.heightPx = heightPx
     }
@@ -167,11 +181,14 @@ public final class CaptureManager {
 
         // A `capture-stop` that arrived while we were awaiting the start must
         // win, or the stop is silently undone by the stream we just built.
+        // No session is built here, so `output` dies with this scope — correct,
+        // because nothing should be delivered to it.
         guard generations[display.id] == generation else {
             try? await stream.stopCapture()
             return
         }
-        sessions[display.id] = CaptureSession(stream: stream, widthPx: width, heightPx: height)
+        sessions[display.id] = CaptureSession(
+            stream: stream, output: output, widthPx: width, heightPx: height)
     }
 
     /// Tears a capture down and waits for ScreenCaptureKit to acknowledge it.
