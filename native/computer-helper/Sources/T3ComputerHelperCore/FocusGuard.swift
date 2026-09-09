@@ -19,8 +19,13 @@ import CoreGraphics
 /// than typed into someone else's window.
 @MainActor
 public struct FocusGuard {
-    /// Reported when focus is readable and is somewhere else.
+    /// Reported when focus is readable and the focused window belongs to
+    /// another screen.
     public nonisolated static let elsewhereReason = "keyboard focus is on another screen"
+    /// Reported when nothing frontmost publishes a focused window, so there is
+    /// no window this can vouch for. Distinct from `elsewhereReason` because it
+    /// is a different thing to fix: click into the window you meant.
+    public nonisolated static let noFocusedWindowReason = "no window has keyboard focus"
     /// Reported when Accessibility is not granted, so focus cannot be read at
     /// all. Pointer events are unaffected: they carry their own target.
     public nonisolated static let untrustedReason =
@@ -28,6 +33,7 @@ public struct FocusGuard {
 
     private let isTrusted: @MainActor () -> Bool
     private let focusedWindowFrame: @MainActor () -> CGRect?
+    private let displayIds: @MainActor () -> [CGDirectDisplayID]
     private let boundsOfDisplay: @MainActor (CGDirectDisplayID) -> CGRect
 
     /// - Parameters:
@@ -35,81 +41,90 @@ public struct FocusGuard {
     ///     way to read focus, and the honest answer is to refuse to type.
     ///   - focusedWindowFrame: the frame, in the global point space
     ///     `CGDisplayBounds` uses, of the window a keystroke would reach.
+    ///   - displayIds: every screen the focused window could be on. Attribution
+    ///     needs a display's identity and its bounds and nothing else, so the
+    ///     ids and `boundsOfDisplay` are what is injected rather than whole
+    ///     `DisplayRecord`s.
     ///   - boundsOfDisplay: the bounds of one display.
     ///
-    /// All three are injected so the decision can be tested without a screen,
-    /// a grant, or whatever the developer running the tests has focused.
+    /// All four are injected so the decision can be tested without a screen, a
+    /// grant, or whatever the developer running the tests has focused.
     public init(
         isTrusted: @escaping @MainActor () -> Bool = { AXIsProcessTrusted() },
         focusedWindowFrame: @escaping @MainActor () -> CGRect? = FocusGuard
             .systemFocusedWindowFrame,
+        displayIds: @escaping @MainActor () -> [CGDirectDisplayID] = {
+            DisplayRegistry.onlineDisplayIds()
+        },
         boundsOfDisplay: @escaping @MainActor (CGDirectDisplayID) -> CGRect = {
             CGDisplayBounds($0)
         }
     ) {
         self.isTrusted = isTrusted
         self.focusedWindowFrame = focusedWindowFrame
+        self.displayIds = displayIds
         self.boundsOfDisplay = boundsOfDisplay
     }
 
     /// Why a keyboard event must not be posted at `display` right now, or nil
     /// when it may.
     ///
+    /// Typing is allowed only when `display` is the focused window's single
+    /// owner under `DisplayAttribution` — the same rule that decides which
+    /// screen `WindowInspector` lists that window on. A window mostly on the
+    /// user's own screen and one pixel over this display's edge is refused, and
+    /// so is one split exactly evenly between two screens: whose window it is
+    /// cannot be told, and typing into it would be a guess.
+    ///
     /// Read afresh for every keystroke rather than once per batch: focus moves
     /// while a sentence is being typed, and the rest of that sentence must not
     /// follow it.
     public func rejectionReason(display: DisplayRecord) -> String? {
         guard isTrusted() else { return FocusGuard.untrustedReason }
-        guard let frame = focusedWindowFrame() else { return FocusGuard.elsewhereReason }
-        return FocusGuard.windowIsOnDisplay(frame, displayBounds: boundsOfDisplay(display.id))
-            ? nil : FocusGuard.elsewhereReason
+        guard let frame = focusedWindowFrame() else { return FocusGuard.noFocusedWindowReason }
+        let owner = DisplayAttribution.owner(of: frame, among: screens(including: display.id))
+        return owner == display.id ? nil : FocusGuard.elsewhereReason
     }
 
-    /// True when a window's frame overlaps a display's bounds.
+    /// The screens the focused window is attributed among.
     ///
-    /// The same attribution `WindowInspector` uses to say which screen a window
-    /// is on, and it works for the same reason: AX states geometry in the
-    /// top-left, primary-anchored point space `CGDisplayBounds` also uses, so
-    /// the two frames compare without a coordinate flip.
-    ///
-    /// A window straddling two screens counts as being on both. That is the
-    /// permissive direction on purpose: the job here is to stop typing that
-    /// would plainly land on another screen, not to adjudicate a window
-    /// someone dragged half-way across the boundary.
-    public nonisolated static func windowIsOnDisplay(_ frame: CGRect, displayBounds: CGRect) -> Bool {
-        let overlap = frame.intersection(displayBounds)
-        return !overlap.isNull && overlap.width > 0 && overlap.height > 0
+    /// The requested display is always one of the candidates even if the screen
+    /// list no longer mentions it, so a display that vanished between the
+    /// caller resolving it and this read is judged by geometry rather than by
+    /// being missing.
+    private func screens(including target: CGDirectDisplayID) -> [DisplayAttribution.Screen] {
+        var ids = displayIds()
+        if !ids.contains(target) { ids.append(target) }
+        return ids.map { .init(id: $0, bounds: boundsOfDisplay($0)) }
     }
 
     /// The frontmost application's focused window, through Accessibility.
     ///
-    /// `kAXFocusedWindowAttribute` is the attribute that answers "where would a
-    /// keystroke go". `kAXMainWindowAttribute` is the fallback for apps that
-    /// keep no focused window while still owning the screen; without it a
-    /// perfectly ordinary app would look like nothing has focus and every
-    /// keystroke would be refused.
+    /// `kAXFocusedWindowAttribute` is the only attribute that answers "where
+    /// would a keystroke go". `kAXMainWindowAttribute` is deliberately not a
+    /// fallback: an app's main window is not necessarily the one taking input —
+    /// a frontmost palette or popup holds focus while the main window sits
+    /// behind it — so vouching with it would let a keystroke be approved
+    /// against a window that was never going to receive it.
     ///
     /// Returns nil when Accessibility is not granted, when nothing is
-    /// frontmost, or when the frontmost app publishes no window — all of which
-    /// mean the same thing to a caller: there is no window this can vouch for.
+    /// frontmost, or when the frontmost app publishes no focused window — all
+    /// of which mean the same thing to a caller: there is no window this can
+    /// vouch for.
     public static func systemFocusedWindowFrame() -> CGRect? {
         guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else {
             return nil
         }
         let application = AXUIElementCreateApplication(pid)
-        for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
-            var value: CFTypeRef?
-            guard
-                AXUIElementCopyAttributeValue(application, attribute as CFString, &value)
-                    == .success,
-                let value,
-                // `as? AXUIElement` succeeds for any CFType, so the type id is
-                // checked explicitly before the cast, as in `WindowInspector`.
-                CFGetTypeID(value) == AXUIElementGetTypeID()
-            else { continue }
-            let window = unsafeDowncast(value, to: AXUIElement.self)
-            if let frame = WindowInspector.frame(of: window) { return frame }
-        }
-        return nil
+        var value: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(
+                application, kAXFocusedWindowAttribute as CFString, &value) == .success,
+            let value,
+            // `as? AXUIElement` succeeds for any CFType, so the type id is
+            // checked explicitly before the cast, as in `WindowInspector`.
+            CFGetTypeID(value) == AXUIElementGetTypeID()
+        else { return nil }
+        return WindowInspector.frame(of: unsafeDowncast(value, to: AXUIElement.self))
     }
 }

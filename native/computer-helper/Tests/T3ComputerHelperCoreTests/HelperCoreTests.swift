@@ -568,11 +568,34 @@ struct InputJobQueueTests {
 private let chatDisplay = DisplayRecord(
     id: 37, name: "Chat A", kind: .managedVirtual, widthPx: 1280, heightPx: 800, scale: 1,
     main: false)
-/// Where that display sits in the global point space.
+/// The screen the developer is looking at, to the left of it.
+private let mainDisplay = DisplayRecord(
+    id: 1, name: "Built-in", kind: .physical, widthPx: 1512, heightPx: 982, scale: 1, main: true)
+/// Where those displays sit in the global point space.
 private let chatBounds = CGRect(x: 1512, y: 0, width: 1280, height: 800)
-/// A window on it, and one on the laptop's own screen.
+private let mainBounds = CGRect(x: 0, y: 0, width: 1512, height: 982)
+private let fixtureDisplays = [mainDisplay, chatDisplay]
+private func fixtureBounds(_ id: CGDirectDisplayID) -> CGRect {
+    switch id {
+    case chatDisplay.id: return chatBounds
+    case mainDisplay.id: return mainBounds
+    default: return .null
+    }
+}
+private let fixtureScreens = fixtureDisplays.map {
+    DisplayAttribution.Screen(id: $0.id, bounds: fixtureBounds($0.id))
+}
+
+/// A window on the chat's screen, and one on the laptop's own screen.
 private let windowOnChatScreen = CGRect(x: 1572, y: 60, width: 800, height: 600)
 private let windowOnOwnScreen = CGRect(x: 100, y: 100, width: 800, height: 600)
+/// Dragged across the boundary: 800 points of it on the main screen, one on the
+/// chat's.
+private let windowMostlyOnOwnScreen = CGRect(x: 712, y: 100, width: 801, height: 600)
+/// The mirror image: one point on the main screen, 799 on the chat's.
+private let windowMostlyOnChatScreen = CGRect(x: 1511, y: 100, width: 800, height: 600)
+/// Exactly half on each, which no rule can attribute.
+private let windowSplitEvenly = CGRect(x: 1412, y: 100, width: 200, height: 600)
 
 /// A guard that reads focus from a script instead of from Accessibility.
 @MainActor
@@ -584,7 +607,8 @@ private func guardWith(
         FocusGuard(
             isTrusted: { trusted },
             focusedWindowFrame: { reader.next() },
-            boundsOfDisplay: { id in id == chatDisplay.id ? chatBounds : .null }),
+            displayIds: { fixtureDisplays.map(\.id) },
+            boundsOfDisplay: fixtureBounds),
         { reader.reads }
     )
 }
@@ -604,32 +628,84 @@ private final class FrameReader {
     }
 }
 
-@Suite("focus geometry")
-struct FocusGeometryTests {
-    @Test("a window overlapping the display is on it")
-    func overlapping() {
-        #expect(FocusGuard.windowIsOnDisplay(windowOnChatScreen, displayBounds: chatBounds))
-        // Half on, half off still counts: the point is to stop typing that
-        // would plainly land elsewhere, not to adjudicate a dragged window.
-        #expect(
-            FocusGuard.windowIsOnDisplay(
-                CGRect(x: 1112, y: 0, width: 800, height: 600), displayBounds: chatBounds))
+@Suite("display attribution")
+struct DisplayAttributionTests {
+    @Test("a window wholly on one screen belongs to it")
+    func wholly() {
+        #expect(DisplayAttribution.owner(of: windowOnChatScreen, among: fixtureScreens) == 37)
+        #expect(DisplayAttribution.owner(of: windowOnOwnScreen, among: fixtureScreens) == 1)
     }
 
-    @Test("a window on another screen is not on it")
-    func elsewhere() {
-        #expect(!FocusGuard.windowIsOnDisplay(windowOnOwnScreen, displayBounds: chatBounds))
+    /// The regression: a window one point over the boundary is not "on" the
+    /// screen it barely touches, whoever is asking.
+    @Test("a straddling window belongs to the screen holding most of it")
+    func straddling() {
+        #expect(DisplayAttribution.owner(of: windowMostlyOnOwnScreen, among: fixtureScreens) == 1)
+        #expect(DisplayAttribution.owner(of: windowMostlyOnChatScreen, among: fixtureScreens) == 37)
+    }
+
+    /// Nothing to break the tie with, so there is no owner rather than an
+    /// arbitrary one that depends on the order the window server listed the
+    /// screens in.
+    @Test("a window split evenly belongs to neither")
+    func tie() {
+        #expect(DisplayAttribution.owner(of: windowSplitEvenly, among: fixtureScreens) == nil)
     }
 
     /// Touching edges are not an overlap: a window flush against the left edge
-    /// of this display is entirely on the one before it.
-    @Test("a zero-area touch is not an overlap")
-    func touching() {
+    /// of a display is entirely on the one before it.
+    @Test("no overlap and a zero-area touch have no owner")
+    func noOverlap() {
         #expect(
-            !FocusGuard.windowIsOnDisplay(
-                CGRect(x: 712, y: 0, width: 800, height: 600), displayBounds: chatBounds))
-        #expect(!FocusGuard.windowIsOnDisplay(.null, displayBounds: chatBounds))
-        #expect(!FocusGuard.windowIsOnDisplay(windowOnChatScreen, displayBounds: .null))
+            DisplayAttribution.owner(
+                of: CGRect(x: 712, y: 0, width: 800, height: 600), among: [fixtureScreens[1]])
+                == nil)
+        #expect(DisplayAttribution.owner(of: .null, among: fixtureScreens) == nil)
+        #expect(DisplayAttribution.owner(of: windowOnChatScreen, among: []) == nil)
+        #expect(
+            DisplayAttribution.owner(
+                of: windowOnChatScreen, among: [.init(id: 9, bounds: .null)]) == nil)
+    }
+
+    /// What `place` is checked with: a frame that could not be read is not
+    /// evidence that the window arrived.
+    @Test("an unreadable frame is not owned by anything")
+    func unreadableFrame() {
+        #expect(!DisplayAttribution.isOwned(nil, by: 37, among: fixtureScreens))
+        #expect(DisplayAttribution.isOwned(windowOnChatScreen, by: 37, among: fixtureScreens))
+        #expect(!DisplayAttribution.isOwned(windowMostlyOnOwnScreen, by: 37, among: fixtureScreens))
+        #expect(!DisplayAttribution.isOwned(windowSplitEvenly, by: 37, among: fixtureScreens))
+    }
+}
+
+/// The two consumers of attribution, asked the same questions.
+///
+/// They disagreed before: the guard accepted any positive overlap while the
+/// window list attributed a window to the screen holding most of it, so a
+/// window listed as being on the user's own screen was typed into as if it were
+/// on the chat's.
+@Suite("attribution agrees across its consumers")
+@MainActor
+struct AttributionAgreementTests {
+    @Test("the window list and the focus guard attribute the same frames alike")
+    func agree() {
+        let fixtures: [CGRect] = [
+            windowOnChatScreen, windowOnOwnScreen, windowMostlyOnChatScreen,
+            windowMostlyOnOwnScreen, windowSplitEvenly,
+            CGRect(x: 2000, y: 700, width: 400, height: 400),
+            CGRect(x: 5000, y: 5000, width: 100, height: 100),
+        ]
+
+        for frame in fixtures {
+            let listed = WindowInspector.bestDisplay(
+                for: frame, among: fixtureDisplays, bounds: fixtureBounds)
+            let (focus, _) = guardWith(frames: [frame])
+            let typeable = focus.rejectionReason(display: chatDisplay) == nil
+
+            #expect(
+                typeable == (listed?.id == chatDisplay.id),
+                "disagreed about \(frame): listed on \(String(describing: listed?.id))")
+        }
     }
 }
 
@@ -648,11 +724,33 @@ struct FocusGuardTests {
         #expect(focus.rejectionReason(display: chatDisplay) == "keyboard focus is on another screen")
     }
 
-    /// Nothing frontmost, or a frontmost app with no window, is not an excuse
-    /// to type into whatever is there.
-    @Test("no readable focused window is treated as focus elsewhere")
+    /// Nothing frontmost, a frontmost app with no focused window, or an app
+    /// whose only window is its main one rather than its focused one: none of
+    /// them is an excuse to type into whatever is there.
+    @Test("no readable focused window is refused, and says so in its own words")
     func noWindow() {
         let (focus, _) = guardWith(frames: [nil])
+        #expect(focus.rejectionReason(display: chatDisplay) == "no window has keyboard focus")
+    }
+
+    /// The straddling cases, through the guard rather than through attribution
+    /// directly: this is the decision that used to let a window one point over
+    /// the edge collect the chat's typing.
+    @Test("a window mostly on the user's own screen is refused")
+    func mostlyElsewhere() {
+        let (focus, _) = guardWith(frames: [windowMostlyOnOwnScreen])
+        #expect(focus.rejectionReason(display: chatDisplay) == FocusGuard.elsewhereReason)
+    }
+
+    @Test("a window mostly on the chat's screen is accepted")
+    func mostlyHere() {
+        let (focus, _) = guardWith(frames: [windowMostlyOnChatScreen])
+        #expect(focus.rejectionReason(display: chatDisplay) == nil)
+    }
+
+    @Test("a window split evenly between two screens is refused")
+    func splitEvenly() {
+        let (focus, _) = guardWith(frames: [windowSplitEvenly])
         #expect(focus.rejectionReason(display: chatDisplay) == FocusGuard.elsewhereReason)
     }
 
@@ -880,6 +978,66 @@ struct LaunchPreflightTests {
     func outcomeShape() {
         #expect(AppLauncher.Outcome(pid: 1, placedWindows: 0).placed == false)
         #expect(AppLauncher.Outcome(pid: 1, placedWindows: 2).placed == true)
+    }
+}
+
+/// Which windows a launch may move.
+///
+/// The bug this guards: `launch` enumerated every window of the pid it got
+/// back, and an app that ignores `createsNewApplicationInstance` hands back the
+/// process the user is already working in — so their open windows were dragged
+/// onto a chat's screen and counted as the launch's own.
+@Suite("launch window ownership")
+@MainActor
+struct LaunchWindowOwnershipTests {
+    @Test("every window of a process the launch created is the launch's own")
+    func freshProcess() {
+        #expect(AppLauncher.newWindowIds([11, 12], openBeforeLaunch: nil) == [11, 12])
+        // Even one Accessibility could not name: there is nobody else's window
+        // in a process that did not exist a moment ago.
+        #expect(AppLauncher.newWindowIds([0], openBeforeLaunch: nil) == [0])
+        #expect(AppLauncher.newWindowIds([], openBeforeLaunch: nil).isEmpty)
+    }
+
+    @Test("a reused process keeps the windows it already had")
+    func reusedProcess() {
+        #expect(AppLauncher.newWindowIds([11, 12, 13], openBeforeLaunch: [11, 12]) == [13])
+        #expect(AppLauncher.newWindowIds([11, 12], openBeforeLaunch: [11, 12]).isEmpty)
+    }
+
+    /// An unnameable window in a reused process cannot be told from one that
+    /// was already open, and the safe direction is to leave it alone: a
+    /// placement not made is reported, a window moved out from under the user
+    /// is not undoable.
+    @Test("a window Accessibility cannot name is left alone in a reused process")
+    func unnameableInReusedProcess() {
+        #expect(AppLauncher.newWindowIds([0, 13], openBeforeLaunch: [11]) == [13])
+        #expect(AppLauncher.newWindowIds([0], openBeforeLaunch: []).isEmpty)
+    }
+}
+
+/// The check `WindowInspector.place` makes after it moves a window.
+///
+/// `AXUIElementSetAttributeValue` reports only that the app took the message.
+/// The frame is read back and attributed, by the same rule the window list and
+/// the focus guard use, and only that decides whether a window is counted as
+/// placed.
+@Suite("placement is verified, not assumed")
+struct PlacementCheckTests {
+    @Test("a window that arrived counts, one that did not does not")
+    func verifies() {
+        #expect(
+            DisplayAttribution.isOwned(
+                CGRect(x: 1572, y: 60, width: 1160, height: 680), by: chatDisplay.id,
+                among: fixtureScreens))
+        // The app accepted the move and put the window back on the main screen.
+        #expect(!DisplayAttribution.isOwned(windowOnOwnScreen, by: chatDisplay.id, among: fixtureScreens))
+        // The app clamped the move to a minimum size and only a sliver crossed.
+        #expect(
+            !DisplayAttribution.isOwned(
+                windowMostlyOnOwnScreen, by: chatDisplay.id, among: fixtureScreens))
+        // The frame could not be read back at all.
+        #expect(!DisplayAttribution.isOwned(nil, by: chatDisplay.id, among: fixtureScreens))
     }
 }
 

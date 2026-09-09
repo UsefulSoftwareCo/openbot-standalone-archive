@@ -47,6 +47,13 @@ public final class DisplayRegistry {
     }
 
     /// Every screen on this session.
+    public func list() -> [DisplayRecord] {
+        DisplayRegistry.onlineDisplayIds()
+            .enumerated()
+            .map { index, id in record(for: id, ordinal: index + 1) }
+    }
+
+    /// The ids of every screen on this session, in the window server's order.
     ///
     /// The *online* list, not the active one. Measured on macOS 26.5: while the
     /// screen is locked `CGGetActiveDisplayList` reports zero displays and
@@ -55,15 +62,17 @@ public final class DisplayRegistry {
     /// their Mac, which reads as a broken host rather than a locked one.
     /// Secondary displays in a mirroring set are dropped so a mirrored pair is
     /// one entry, which is what the active list was giving us.
-    public func list() -> [DisplayRecord] {
+    ///
+    /// Static because attribution needs the screen list without needing the
+    /// registry that owns the virtual ones: `FocusGuard` runs inside an input
+    /// batch and asks only where the screens are.
+    public static func onlineDisplayIds() -> [CGDirectDisplayID] {
         var count: UInt32 = 0
         guard CGGetOnlineDisplayList(0, nil, &count) == .success, count > 0 else { return [] }
         var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
         guard CGGetOnlineDisplayList(count, &ids, &count) == .success else { return [] }
         return ids.prefix(Int(count))
             .filter { CGDisplayMirrorsDisplay($0) == kCGNullDirectDisplay }
-            .enumerated()
-            .map { index, id in record(for: id, ordinal: index + 1) }
     }
 
     public func find(_ id: CGDirectDisplayID) -> DisplayRecord? {

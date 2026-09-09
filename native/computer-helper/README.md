@@ -145,13 +145,25 @@ alone — measured on a real Mac, text sent for one managed display arrives in a
 window on another the moment something else is frontmost.
 
 Every keyboard event in a batch is therefore checked first, inside the same
-serialized batch that posts it: the frontmost application's focused window
-(`kAXFocusedWindowAttribute`, falling back to `kAXMainWindowAttribute`) must
-overlap `CGDisplayBounds` of the display the batch named. When it does not, the
-event is not posted and comes back as
+serialized batch that posts it. The frontmost application's focused window
+(`kAXFocusedWindowAttribute`, and only that attribute) must be _owned_ by the
+display the batch named: owned means the screen whose `CGDisplayBounds` holds
+the largest part of that window's frame, which is the same single-owner rule
+that decides which display a window is listed under in `windows`. A window
+dragged mostly onto your own screen and one point over the chat's edge belongs
+to yours, and typing sent for the chat is refused; a window split exactly evenly
+between two screens belongs to neither and is refused as well. When it is not
+owned, the event is not posted and comes back as
 `{"index":N,"reason":"keyboard focus is on another screen"}`, and so does every
-keyboard event behind it in that batch. Without Accessibility the question
-cannot be answered at all and the reason is
+keyboard event behind it in that batch.
+
+Two other reasons appear the same way. When nothing frontmost publishes a
+focused window the reason is `"no window has keyboard focus"`:
+`kAXMainWindowAttribute` is deliberately not a fallback, because an app's main
+window is not necessarily the one taking input — a frontmost palette or popup
+holds focus while the main window sits behind it — so vouching with it would
+approve a keystroke against a window that was never going to receive it.
+Without Accessibility the question cannot be answered at all and the reason is
 `"Accessibility is required to confirm where typing would land"`.
 
 The check is re-read per keystroke, not once per batch: a long `text` event is
@@ -177,13 +189,31 @@ new window can be neither found nor moved, so launching first would put the app
 on the user's own screen and only then discover the request could not be
 honoured — and nothing can put that window back.
 
-With the grant, the helper waits up to ten seconds for the new process to open
-windows and moves each of them onto the display. The reply says what actually
-happened: `placedWindows` is how many were moved and `placed` is whether that
-was any at all. Both are absent when no display was requested. `placedWindows:
-0` means the app started and its windows are wherever the app put them; the
-server surfaces that as a warning rather than reporting a launch that landed on
-the requested screen.
+With the grant, the helper waits up to ten seconds for the launch's own windows
+to appear and moves each of them onto the display. The reply says what actually
+happened: `placedWindows` is how many of those windows are on the chat's screen
+afterwards and `placed` is whether that was any at all. Both are absent when no
+display was requested.
+
+Counted, not attempted. Setting a window's frame through Accessibility reports
+only that the app accepted the message, so each window's frame is read back and
+attributed to a display by the same single-owner rule the focus guard and the
+`windows` list use; a window that would not move, was clamped to a size that
+does not fit, or was put back by its app is not counted. `placedWindows: 0`
+therefore covers both "no window of ours appeared in ten seconds" and "windows
+appeared and none of them stayed" — the app started and its windows are
+wherever the app put them, and the server surfaces that as a warning rather
+than reporting a launch that landed on the requested screen. Which windows
+failed and the Accessibility error codes go to the helper's stderr log; the
+reply's shape does not change.
+
+Only the launch's own windows are moved. `createsNewApplicationInstance` is a
+request an app may refuse, in which case the pid that comes back is a process
+that was already running — the one you are working in. The helper compares that
+pid against the processes it saw before spawning and, when it was already
+there, treats every window that process already had as yours: those are left
+exactly where they are, are never counted, and nothing is ever closed, hidden
+or terminated. Only windows the launch itself opened are placed.
 
 Placement is after the fact, and honestly so: the app is activated as it starts
 (that is what makes its window findable, and a background window takes no

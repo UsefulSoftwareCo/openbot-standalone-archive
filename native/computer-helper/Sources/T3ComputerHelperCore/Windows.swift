@@ -34,14 +34,13 @@ public enum WindowInspector {
             let pid = application.processIdentifier
             let app = application.localizedName ?? "unknown"
             for element in windowElements(pid: pid) {
-                var windowNumber: CGWindowID = 0
-                _ = _AXUIElementGetWindow(element, &windowNumber)
+                let number = windowNumber(of: element)
                 guard let frame = frame(of: element) else { continue }
                 let display = bestDisplay(for: frame, among: displays)
                 let local = display.map { localFrame(frame, on: $0) } ?? frame
                 records.append(
                     WindowRecord(
-                        id: "\(pid):\(windowNumber)",
+                        id: "\(pid):\(number)",
                         displayId: display?.id,
                         title: stringAttribute(element, kAXTitleAttribute) ?? "",
                         app: app,
@@ -69,9 +68,7 @@ public enum WindowInspector {
             throw HelperError(.invalidInput, "'\(windowId)' is not a 'pid:windowId' handle")
         }
         for element in windowElements(pid: pid) {
-            var candidate: CGWindowID = 0
-            _ = _AXUIElementGetWindow(element, &candidate)
-            guard candidate == number else { continue }
+            guard windowNumber(of: element) == number else { continue }
             AXUIElementSetAttributeValue(element, kAXMainAttribute as CFString, kCFBooleanTrue)
             AXUIElementPerformAction(element, kAXRaiseAction as CFString)
             NSRunningApplication(processIdentifier: pid)?.activate()
@@ -80,23 +77,72 @@ public enum WindowInspector {
         throw HelperError(.windowNotFound, "no window \(windowId) is open")
     }
 
-    /// Moves one window onto a display, used after launching an app there.
+    /// What a move achieved, which is not what asking for it achieved: an app
+    /// may refuse a frame, clamp it, or accept the call and put the window
+    /// somewhere else entirely.
+    public struct Placement: Sendable, Equatable {
+        /// True when the window is attributed to the requested display now.
+        public let landed: Bool
+        /// Why the request itself did not go through, when it did not: the AX
+        /// result codes, for the log. A window can fail to land with no detail
+        /// at all — every call succeeded and the app moved itself back.
+        public let detail: String?
+
+        public init(landed: Bool, detail: String?) {
+            self.landed = landed
+            self.detail = detail
+        }
+    }
+
+    /// Moves one window onto a display, used after launching an app there, and
+    /// reports whether it is there afterwards.
     ///
     /// Nothing in macOS carries "open this on that screen": an app places its
     /// own new windows from a saved position, almost always on the main
     /// display. Spotting the window and moving it is the only way to honour the
     /// caller's intent.
-    public static func place(_ window: AXUIElement, on display: DisplayRecord, inset: CGFloat) {
+    ///
+    /// The frame is read back rather than assumed. `AXUIElementSetAttributeValue`
+    /// reports only that the app accepted the message: a window pinned to a
+    /// size, a full-screen space, or an app that repositions itself all end
+    /// with the window somewhere the caller did not ask for, and a launch that
+    /// counted the attempts would claim a screen it never reached.
+    public static func place(_ window: AXUIElement, on display: DisplayRecord, inset: CGFloat)
+        -> Placement
+    {
         let bounds = CGDisplayBounds(display.id)
         var origin = CGPoint(x: bounds.minX + inset, y: bounds.minY + inset)
         var size = CGSize(width: bounds.width - inset * 2, height: bounds.height - inset * 2)
+        var failures: [String] = []
         if let value = AXValueCreate(.cgPoint, &origin) {
-            AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, value)
+            let result = AXUIElementSetAttributeValue(
+                window, kAXPositionAttribute as CFString, value)
+            if result != .success { failures.append("position AXError \(result.rawValue)") }
         }
         if let value = AXValueCreate(.cgSize, &size) {
-            AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value)
+            let result = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value)
+            if result != .success { failures.append("size AXError \(result.rawValue)") }
         }
         AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+        return Placement(
+            landed: isPlaced(window, on: display),
+            detail: failures.isEmpty ? nil : failures.joined(separator: ", "))
+    }
+
+    /// Whether a window is on `display` right now, by the same attribution
+    /// `list` and `FocusGuard` use.
+    ///
+    /// Also read a beat after a move: some apps accept a frame and then adjust
+    /// it, so one read immediately after the set is not the last word.
+    public static func isPlaced(_ window: AXUIElement, on display: DisplayRecord) -> Bool {
+        DisplayAttribution.isOwned(frame(of: window), by: display.id, among: onlineScreens())
+    }
+
+    /// Every screen on this session, as attribution candidates.
+    static func onlineScreens() -> [DisplayAttribution.Screen] {
+        DisplayRegistry.onlineDisplayIds().map {
+            .init(id: $0, bounds: CGDisplayBounds($0))
+        }
     }
 
     public static func windowElements(pid: pid_t) -> [AXUIElement] {
@@ -112,8 +158,7 @@ public enum WindowInspector {
     public static func windowNumbers(pid: pid_t) -> Set<CGWindowID> {
         var numbers: Set<CGWindowID> = []
         for element in windowElements(pid: pid) {
-            var number: CGWindowID = 0
-            _ = _AXUIElementGetWindow(element, &number)
+            let number = windowNumber(of: element)
             // 0 means AX could not name the window. Keeping it would make every
             // unnameable new window look like one that was already there.
             if number != 0 { numbers.insert(number) }
@@ -121,17 +166,26 @@ public enum WindowInspector {
         return numbers
     }
 
-    /// AX states geometry in the same top-left, primary-anchored point space as
-    /// `CGDisplayBounds`, so frames compare without a coordinate flip.
-    static func bestDisplay(for frame: CGRect, among displays: [DisplayRecord]) -> DisplayRecord? {
-        var best: (display: DisplayRecord, area: CGFloat)?
-        for display in displays {
-            let overlap = CGDisplayBounds(display.id).intersection(frame)
-            guard !overlap.isNull else { continue }
-            let area = overlap.width * overlap.height
-            if area > (best?.area ?? 0) { best = (display, area) }
-        }
-        return best?.display
+    /// The CoreGraphics id of one window, or 0 when AX cannot name it.
+    public static func windowNumber(of element: AXUIElement) -> CGWindowID {
+        var number: CGWindowID = 0
+        _ = _AXUIElementGetWindow(element, &number)
+        return number
+    }
+
+    /// The display a window is listed under, by the shared attribution rule.
+    ///
+    /// `bounds` is injected so the mapping can be exercised on fixtures — and
+    /// so a test can prove this and `FocusGuard` answer the same question the
+    /// same way, which is the whole reason both go through
+    /// `DisplayAttribution`.
+    static func bestDisplay(
+        for frame: CGRect, among displays: [DisplayRecord],
+        bounds: (CGDirectDisplayID) -> CGRect = { CGDisplayBounds($0) }
+    ) -> DisplayRecord? {
+        let screens = displays.map { DisplayAttribution.Screen(id: $0.id, bounds: bounds($0.id)) }
+        guard let owner = DisplayAttribution.owner(of: frame, among: screens) else { return nil }
+        return displays.first { $0.id == owner }
     }
 
     /// A global point-space frame in one display's pixel space, which is the
