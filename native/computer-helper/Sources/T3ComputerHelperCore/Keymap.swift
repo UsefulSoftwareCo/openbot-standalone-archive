@@ -81,6 +81,41 @@ public enum Keymap {
     public static func flags(for modifiers: [InputModifier]) -> CGEventFlags {
         modifiers.reduce(into: CGEventFlags()) { $0.insert(flag(for: $1)) }
     }
+
+    /// The modifier mask an event carries because these keys are held.
+    ///
+    /// Non-modifier keys contribute nothing, so a held `KeyA` does not colour
+    /// the events after it, and an empty held set is an empty mask rather than
+    /// whatever the session happens to think is down.
+    public static func heldFlags(for keys: Set<CGKeyCode>) -> CGEventFlags {
+        keys.reduce(into: CGEventFlags()) { flags, key in
+            if let flag = flag(forHeldKey: key) { flags.insert(flag) }
+        }
+    }
+
+    /// The flags one key event carries: what the caller asked for, plus what is
+    /// held, with the key's own modifier bit decided by the event itself.
+    ///
+    /// A modifier announces its own state. Its down must carry its flag or the
+    /// app sees a keypress without the modifier it is announcing; its up must
+    /// clear it, or every app downstream keeps believing the modifier is still
+    /// held. The up only clears it when nothing else is holding it — the twin
+    /// Shift stays down if it is down.
+    ///
+    /// - Parameter held: the keys the helper knows are down, including `key`
+    ///   itself on an up event that has not been recorded yet.
+    public static func keyEventFlags(
+        for key: CGKeyCode, down: Bool, held: Set<CGKeyCode>, extra: CGEventFlags = []
+    ) -> CGEventFlags {
+        var flags = extra.union(heldFlags(for: held))
+        guard let own = flag(forHeldKey: key) else { return flags }
+        if down {
+            flags.insert(own)
+        } else if !heldFlags(for: held.subtracting([key])).contains(own) {
+            flags.remove(own)
+        }
+        return flags
+    }
 }
 
 /// Pure coordinate and wheel arithmetic, kept out of the event-posting code so

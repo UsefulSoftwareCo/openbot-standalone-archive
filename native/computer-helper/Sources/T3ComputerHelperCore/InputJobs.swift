@@ -37,7 +37,7 @@ public struct TextDeliveryJob {
 
     private let graphemes: [String]
     private let gap: Duration
-    private let post: (String, TextKeyPhase) -> Void
+    private let post: @MainActor (String, TextKeyPhase) -> Void
     private let pause: (Duration) async throws -> Void
     private let blocked: @MainActor () -> String?
 
@@ -49,13 +49,15 @@ public struct TextDeliveryJob {
     ///     the typing there and comes back as `stopped`. This is what keeps a
     ///     string from following focus onto another screen halfway through, so
     ///     it is checked per keystroke rather than once for the string.
-    ///   - post: posts one half of one keystroke.
+    ///   - post: posts one half of one keystroke. Main-actor isolated, so it
+    ///     can read the caller's held-modifier state as it goes rather than
+    ///     working from a snapshot taken before the first keystroke.
     public init(
         text: String,
         gap: Duration = .milliseconds(15),
         pause: ((Duration) async throws -> Void)? = nil,
         blocked: (@MainActor () -> String?)? = nil,
-        post: @escaping (String, TextKeyPhase) -> Void
+        post: @escaping @MainActor (String, TextKeyPhase) -> Void
     ) {
         // Graphemes, not scalars, so an emoji or a combining accent arrives
         // whole rather than as its pieces.

@@ -165,6 +165,90 @@ struct KeymapTests {
     }
 }
 
+/// The flags a synthesised event carries.
+///
+/// This is the whole reason text can go missing while the batch reports every
+/// event delivered. A `CGEvent` made from a `.combinedSessionState` source
+/// starts life with that session's modifier flags, so any event posted without
+/// assigning `flags` types Command-something instead of a character. The
+/// helper's policy is that only the keys it is itself holding may colour an
+/// event, and it is pure arithmetic, so it is tested here rather than by
+/// posting into whatever the developer has focused.
+@Suite("modifier flag policy")
+struct ModifierFlagTests {
+    private static let shiftLeft: CGKeyCode = 56
+    private static let shiftRight: CGKeyCode = 60
+    private static let commandLeft: CGKeyCode = 55
+    private static let keyA: CGKeyCode = 0
+
+    /// The case the live failure was in: nothing is held, so a keystroke must
+    /// carry an empty mask, not whatever the session state believes.
+    @Test("holding nothing is an empty mask, not an inherited one")
+    func nothingHeld() {
+        #expect(Keymap.heldFlags(for: []).rawValue == 0)
+        #expect(Keymap.heldFlags(for: [Self.keyA]).rawValue == 0)
+    }
+
+    @Test("a text keystroke carries exactly the held modifiers")
+    func textFlagsAreTheHeldModifiers() {
+        #expect(Keymap.heldFlags(for: [Self.commandLeft]) == .maskCommand)
+        #expect(
+            Keymap.heldFlags(for: [Self.commandLeft, Self.shiftLeft, Self.keyA])
+                == CGEventFlags([.maskCommand, .maskShift]))
+    }
+
+    /// `key-press KeyA meta` puts Command on that key event only. It never
+    /// enters the held set, so the text event behind it in the batch is typed
+    /// with no modifier at all.
+    @Test("a key-press modifier rides its own event and holds nothing after it")
+    func keyPressModifierDoesNotLinger() {
+        let held: Set<CGKeyCode> = []
+        #expect(
+            Keymap.keyEventFlags(for: Self.keyA, down: true, held: held, extra: .maskCommand)
+                == .maskCommand)
+        #expect(
+            Keymap.keyEventFlags(for: Self.keyA, down: false, held: held, extra: .maskCommand)
+                == .maskCommand)
+        #expect(Keymap.heldFlags(for: held).rawValue == 0)
+    }
+
+    @Test("a modifier's own down carries its flag")
+    func modifierDown() {
+        #expect(
+            Keymap.keyEventFlags(for: Self.commandLeft, down: true, held: []) == .maskCommand)
+    }
+
+    /// The controller records the release after it posts it, so the held set
+    /// still lists the key on its own up event. The up must clear the flag
+    /// anyway, or every app downstream keeps treating Command as down.
+    @Test("a modifier's own up clears its flag even while the held set still lists it")
+    func modifierUpClearsItsOwnFlag() {
+        #expect(
+            Keymap.keyEventFlags(for: Self.commandLeft, down: false, held: [Self.commandLeft])
+                .rawValue == 0)
+        // An explicit modifiers list on the up event does not resurrect it.
+        #expect(
+            Keymap.keyEventFlags(
+                for: Self.commandLeft, down: false, held: [Self.commandLeft], extra: .maskCommand
+            ).rawValue == 0)
+    }
+
+    @Test("releasing one Shift keeps the flag while its twin is down")
+    func twinModifierStaysHeld() {
+        #expect(
+            Keymap.keyEventFlags(
+                for: Self.shiftLeft, down: false, held: [Self.shiftLeft, Self.shiftRight])
+                == .maskShift)
+    }
+
+    @Test("an ordinary key-up still carries the modifiers that are held")
+    func ordinaryKeyUpKeepsHeldModifiers() {
+        #expect(
+            Keymap.keyEventFlags(for: Self.keyA, down: false, held: [Self.commandLeft])
+                == .maskCommand)
+    }
+}
+
 @Suite("record framing")
 struct RecordFramingTests {
     @Test("a frame declares its payload length and the bytes follow the newline")

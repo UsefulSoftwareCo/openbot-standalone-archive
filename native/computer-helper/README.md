@@ -181,6 +181,20 @@ focused window; focus can still move between the read and the post. What it
 buys is that a batch aimed at a screen nothing on which has focus is refused
 outright instead of typed into someone else's window.
 
+### Modifiers on a synthesised event
+
+Every event the helper posts is given its flags outright. A `CGEvent` built from
+the shared event source starts life with the login session's modifier state, and
+that state lags what was posted a moment before it, so an event that trusts it
+can arrive as a shortcut instead of a character.
+
+A `text` event therefore carries only the modifiers this helper is itself
+holding — a `key` `down` with no matching `up` behind it, and nothing else. A
+`key-press` puts its `modifiers` on that one keystroke and holds none of them
+after it, so a `text` event later in the same batch types plain. A held
+modifier's own `key` `up` is posted without the flag it is releasing, which is
+what stops it colouring the events after it.
+
 ### Launching onto a display
 
 `launch` with a `displayId` checks Accessibility **before** it starts anything

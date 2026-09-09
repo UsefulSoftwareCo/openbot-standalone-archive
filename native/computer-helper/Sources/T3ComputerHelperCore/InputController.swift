@@ -267,17 +267,15 @@ public final class InputController {
             postButton(button, down: false, at: lastGlobalPoint, clickState: 1)
         }
         heldButtons.removeAll()
-        for key in heldKeys {
+        // Popped rather than iterated: each release must be posted with the
+        // keys that are *still* down, or releasing Command and then Shift posts
+        // the Shift up still carrying `.maskCommand`.
+        while let key = heldKeys.popFirst() {
             postKey(key, down: false, extra: [])
         }
-        heldKeys.removeAll()
     }
 
-    private func heldFlags() -> CGEventFlags {
-        heldKeys.reduce(into: CGEventFlags()) { flags, key in
-            if let flag = Keymap.flag(forHeldKey: key) { flags.insert(flag) }
-        }
-    }
+    private func heldFlags() -> CGEventFlags { Keymap.heldFlags(for: heldKeys) }
 
     private func move(to point: CGPoint) {
         CGWarpMouseCursorPosition(point)
@@ -336,11 +334,7 @@ public final class InputController {
     private func postKey(_ key: CGKeyCode, down: Bool, extra: CGEventFlags) {
         guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down)
         else { return }
-        var flags = extra.union(heldFlags())
-        // A modifier's own down event must carry its flag, or the app sees the
-        // keypress without the modifier it is announcing.
-        if down, let own = Keymap.flag(forHeldKey: key) { flags.insert(own) }
-        event.flags = flags
+        event.flags = Keymap.keyEventFlags(for: key, down: down, held: heldKeys, extra: extra)
         event.post(tap: .cghidEventTap)
     }
 
@@ -362,13 +356,22 @@ public final class InputController {
         let job = TextDeliveryJob(
             text: text, gap: keystrokeGap,
             blocked: { focus.rejectionReason(display: display) }
-        ) { grapheme, phase in
+        ) { [self] grapheme, phase in
             guard
                 let event = CGEvent(
                     keyboardEventSource: source, virtualKey: 0, keyDown: phase == .down)
             else { return }
             let units = Array(grapheme.utf16)
             event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+            // Assigned, never inherited. A `CGEvent` built from a
+            // `.combinedSessionState` source starts life with that session's
+            // modifier flags, and a `key-press` with `meta` just before this
+            // can still have Command latched there. Observed: a batch of
+            // click, `key-press KeyA meta`, text, click reported four events
+            // delivered, the clicks landed, and the field stayed empty —
+            // "Typed in A" had gone out as Cmd-T, Cmd-y, Cmd-p. Only what this
+            // helper is itself holding may colour a keystroke.
+            event.flags = heldFlags()
             event.post(tap: .cghidEventTap)
         }
         return await job.run()
