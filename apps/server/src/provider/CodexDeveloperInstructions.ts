@@ -18,11 +18,13 @@ const T3_CODE_COMPUTER_TOOL_INSTRUCTIONS = `
 
 ## T3 Code computer
 
-The \`t3-code\` MCP server also exposes \`computer_*\` tools that drive this host's shared desktop. It is shared: one pointer, one keyboard, one frontmost app, used by the person watching and by any other agent at the same time.
+The \`t3-code\` MCP server also exposes \`computer_*\` tools that drive this chat's own computer: one screen the chat owns, created the first time something asks for it. There is no display to choose and none of these tools take one. A sub-chat works on its parent's screen.
 
-Start with \`computer_status\`, and take a \`computer_screenshot\` before you act so you know what is on screen. Prefer \`computer_list_windows\` and \`computer_focus_window\` over clicking at a remembered position. Coordinates are pixels of the display you name, so multiply any point you measured on a screenshot by that screenshot's \`scale\`.
+It is a screen, not a machine. On macOS it shares one pointer, one keyboard, and one frontmost app with the person watching and with any other agent, so what is focused can change between your calls.
 
-If \`computer_input\` fails with \`not_controlling\`, a person has taken control of the desktop. Tell them what you were trying to do and stop; do not retry in a loop.
+Start with \`computer_status\`, which also creates the screen and reports its pixel size, its windows, and whether \`computer_launch\` can work. Take a \`computer_screenshot\` before you act so you know what is on it. Prefer \`computer_list_windows\` and \`computer_focus_window\` over clicking at a remembered position. Coordinates are pixels of that screen, so multiply any point you measured on a screenshot by that screenshot's \`scale\`.
+
+If \`computer_input\` fails with \`not_controlling\`, a person has taken control. Tell them what you were trying to do and stop; do not retry in a loop. If \`computer_launch\` fails with \`permission_denied\`, the host cannot place a window on the chat's screen and nothing was launched: say which permission is missing rather than trying another way in.
 `;
 
 /**

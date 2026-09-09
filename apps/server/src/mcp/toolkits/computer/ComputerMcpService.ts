@@ -1,30 +1,25 @@
 import {
   COMPUTER_SCREENSHOT_DEFAULT_MAX_WIDTH_PX,
+  COMPUTER_SHARED_FOCUS_LIMITATION,
   OpenbotComputerMcpFailure,
   type ComputerFocusWindowInput,
   type ComputerInputInput,
   type ComputerInputResult,
   type ComputerLaunchInput,
   type ComputerLaunchResult,
-  type ComputerListWindowsInput,
   type ComputerListWindowsResult,
-  type ComputerManageDisplayInput,
-  type ComputerManageDisplayRequest,
-  type ComputerManageDisplayResult,
   type ComputerScreenshotInput,
   type ComputerScreenshotResult,
   type ComputerStatusResult,
-  type OpenbotComputerDisplay,
-  type OpenbotComputerDisplayId,
+  type OpenbotChatComputer,
   type OpenbotComputerError,
-  type OpenbotComputerStatus,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-import { OpenbotComputerSession } from "../../../openbot/computer/OpenbotComputerSession.ts";
+import { OpenbotChatComputerService } from "../../../openbot/computer/OpenbotChatComputer.ts";
 import {
   McpInvocationContext,
   requireMcpCapability,
@@ -32,44 +27,48 @@ import {
 } from "../../McpInvocationContext.ts";
 
 /**
- * The agent's side of the shared desktop.
+ * The agent's side of its chat's computer.
  *
- * Every operation goes through the same `OpenbotComputerSession` the human
- * viewer uses, so agent input joins the person's own input in one ordered
- * per-display queue under one lease. Nothing here holds control across calls: a
- * batch takes the lease if it is free and gives it straight back, and a person
- * who has taken control makes the batch fail rather than losing the pointer to
- * an agent mid-sentence.
+ * A thread never names a display: the chat it belongs to owns exactly one
+ * screen, and `OpenbotChatComputerService` decides which one that is, creates
+ * it on first use, and refuses anything aimed elsewhere. Underneath, the lease
+ * is unchanged — agent input joins the person's own input in one ordered queue,
+ * nothing here holds control across calls, and a person who has taken control
+ * makes the batch fail rather than losing the pointer to an agent mid-sentence.
  */
 export class ComputerMcpService extends Context.Service<
   ComputerMcpService,
   {
-    readonly status: Effect.Effect<ComputerStatusResult, OpenbotComputerMcpFailure>;
+    /** Also what provisions the chat's screen: the first tool call in a chat
+        is usually this one, and an agent that has to ask twice for a computer
+        that exists to be created is worse than a status call with a side
+        effect. */
+    readonly status: (
+      scope: McpInvocationScope,
+    ) => Effect.Effect<ComputerStatusResult, OpenbotComputerMcpFailure>;
     readonly screenshot: (
+      scope: McpInvocationScope,
       input: ComputerScreenshotInput,
     ) => Effect.Effect<ComputerScreenshotResult, OpenbotComputerMcpFailure>;
     readonly listWindows: (
-      input: ComputerListWindowsInput,
+      scope: McpInvocationScope,
     ) => Effect.Effect<ComputerListWindowsResult, OpenbotComputerMcpFailure>;
     /** Returns the window list after the change, which is the only honest
-        confirmation that focus landed where it was asked to. Takes the calling
-        scope because raising a window moves focus on the shared desktop: it
-        goes through the lease, so it fails while a person is controlling. */
+        confirmation that focus landed where it was asked to. Raising a window
+        moves focus on a shared desktop, so it goes through the lease and fails
+        while a person is controlling. */
     readonly focusWindow: (
       scope: McpInvocationScope,
       input: ComputerFocusWindowInput,
     ) => Effect.Effect<ComputerListWindowsResult, OpenbotComputerMcpFailure>;
-    /** Takes the calling scope because input is attributed: the thread becomes
-        the named controller for the length of the batch. */
+    /** Input is attributed: the thread becomes the named controller for the
+        length of the batch. */
     readonly input: (
       scope: McpInvocationScope,
       input: ComputerInputInput,
     ) => Effect.Effect<ComputerInputResult, OpenbotComputerMcpFailure>;
-    readonly manageDisplay: (
-      input: ComputerManageDisplayInput,
-    ) => Effect.Effect<ComputerManageDisplayResult, OpenbotComputerMcpFailure>;
-    /** Also lease-bound: launching activates the new app on the one screen the
-        person may be using. */
+    /** Also lease-bound: launching activates the new app on a screen the
+        person may be watching. */
     readonly launch: (
       scope: McpInvocationScope,
       input: ComputerLaunchInput,
@@ -116,63 +115,15 @@ export const toComputerMcpFailure = (error: OpenbotComputerError): OpenbotComput
         : error.message,
   });
 
-/**
- * Turns the flat tool input into the variant it meant. The schema cannot say
- * "widthPx only with create" without becoming an `anyOf` that MCP clients
- * reject, so the pairing is checked here, once, before anything reaches a
- * backend.
- */
-const parseManageDisplay = (
-  input: ComputerManageDisplayInput,
-): Effect.Effect<ComputerManageDisplayRequest, OpenbotComputerMcpFailure> => {
-  if (input.action === "create") {
-    return input.widthPx === undefined || input.heightPx === undefined
-      ? Effect.fail(
-          new OpenbotComputerMcpFailure({
-            code: "invalid_input",
-            message: "Creating a display needs both widthPx and heightPx.",
-          }),
-        )
-      : Effect.succeed({
-          action: "create",
-          name: input.name,
-          widthPx: input.widthPx,
-          heightPx: input.heightPx,
-          hiDpi: input.hiDpi,
-        });
-  }
-  return input.displayId === undefined
-    ? Effect.fail(
-        new OpenbotComputerMcpFailure({
-          code: "invalid_input",
-          message: "Destroying a display needs the displayId of a managed display.",
-        }),
-      )
-    : Effect.succeed({ action: "destroy", displayId: input.displayId });
-};
-
-const summarizeStatus = (status: OpenbotComputerStatus): ComputerStatusResult => ({
-  host: status.host,
-  session: status.session,
-  availability: status.availability,
-  detail: status.detail,
-  permissions: status.permissions,
-  setup:
-    status.setup === null
-      ? null
-      : {
-          ready: status.setup.ready,
-          missing: status.setup.dependencies
-            .filter((dependency) => !dependency.present)
-            .map((dependency) => dependency.name),
-          install: status.setup.dependencies.flatMap((dependency) =>
-            dependency.present || dependency.install === null ? [] : [dependency.install],
-          ),
-          notes: status.setup.notes,
-        },
-  capabilities: status.capabilities,
-  displays: status.displays,
-  controller: status.controller,
+const summarize = (computer: OpenbotChatComputer): ComputerStatusResult => ({
+  chat: computer.channelName,
+  state: computer.state,
+  display: computer.display,
+  detail: computer.detail,
+  windows: computer.windows,
+  controller: computer.controller,
+  canLaunch: computer.canLaunch,
+  sharing: COMPUTER_SHARED_FOCUS_LIMITATION,
 });
 
 /** The lease identity of one thread's tool call. Focus, launch, and input all
@@ -186,51 +137,47 @@ const agentSource = (scope: McpInvocationScope) =>
   }) as const;
 
 const make = Effect.gen(function* () {
-  const session = yield* OpenbotComputerSession;
+  const chatComputer = yield* OpenbotChatComputerService;
 
-  /** Names the known displays when it fails: acting on the wrong screen is
-      worse than one extra round trip. */
-  const resolveDisplay = Effect.fn("ComputerMcpService.resolveDisplay")(function* (
-    displayId: OpenbotComputerDisplayId | undefined,
-  ) {
-    const displays = yield* session.listDisplays.pipe(Effect.mapError(toComputerMcpFailure));
-    const target: OpenbotComputerDisplay | undefined =
-      displayId === undefined
-        ? (displays.find((display) => display.main) ?? displays[0])
-        : displays.find((display) => display.id === displayId);
-    if (target === undefined) {
-      return yield* new OpenbotComputerMcpFailure({
-        code: "display_not_found",
-        message:
-          displays.length === 0
-            ? "This computer reports no displays."
-            : `No display ${displayId ?? "(main)"}. Known displays: ${displays
-                .map((display) => `${display.id} (${display.name})`)
-                .join(", ")}.`,
-      });
-    }
-    return target;
-  });
+  /** Which chat's computer this thread works on. Everything else in this file
+      starts here, so a tool can never reach a screen another chat owns. */
+  const channelFor = (scope: McpInvocationScope) =>
+    chatComputer.channelForThread(scope.threadId).pipe(Effect.mapError(toComputerMcpFailure));
 
   const listWindows: ComputerMcpService["Service"]["listWindows"] = Effect.fn(
     "ComputerMcpService.listWindows",
-  )(function* (input) {
-    const windows = yield* session
-      .listWindows(input.displayId)
+  )(function* (scope) {
+    const channelId = yield* channelFor(scope);
+    const computer = yield* chatComputer
+      .ensure(channelId)
       .pipe(Effect.mapError(toComputerMcpFailure));
-    return { windows };
+    return { windows: computer.windows };
   });
 
   return ComputerMcpService.of({
-    status: session.status.pipe(
-      Effect.map(summarizeStatus),
-      Effect.withSpan("ComputerMcpService.status"),
-    ),
-    screenshot: Effect.fn("ComputerMcpService.screenshot")(function* (input) {
-      const target = yield* resolveDisplay(input.displayId);
+    status: Effect.fn("ComputerMcpService.status")(function* (scope) {
+      const channelId = yield* channelFor(scope);
+      const computer = yield* chatComputer
+        .ensure(channelId)
+        .pipe(Effect.mapError(toComputerMcpFailure));
+      return summarize(computer);
+    }),
+    screenshot: Effect.fn("ComputerMcpService.screenshot")(function* (scope, input) {
+      const channelId = yield* channelFor(scope);
+      // The chat's screen is also the coordinate space, so its width is what
+      // turns image pixels back into points `computer_input` accepts.
+      const computer = yield* chatComputer
+        .ensure(channelId)
+        .pipe(Effect.mapError(toComputerMcpFailure));
+      if (computer.display === null) {
+        return yield* new OpenbotComputerMcpFailure({
+          code: "backend_unavailable",
+          message: computer.detail ?? `This chat has no computer to capture (${computer.state}).`,
+        });
+      }
       const maxWidthPx = input.maxWidthPx ?? COMPUTER_SCREENSHOT_DEFAULT_MAX_WIDTH_PX;
-      const snapshot = yield* session
-        .snapshot({ displayId: target.id, maxWidthPx })
+      const snapshot = yield* chatComputer
+        .snapshot(channelId, maxWidthPx)
         .pipe(Effect.mapError(toComputerMcpFailure));
       const widthPx = snapshot.widthPx;
       const heightPx = snapshot.heightPx;
@@ -250,52 +197,45 @@ const make = Effect.gen(function* () {
           widthPx,
           heightPx,
         },
-        displayId: target.id,
-        scale: target.widthPx / widthPx,
+        displayId: computer.display.id,
+        scale: computer.display.widthPx / widthPx,
         capturedAt: snapshot.capturedAt,
         caveat: snapshot.caveat,
       } as const;
     }),
     listWindows,
     focusWindow: Effect.fn("ComputerMcpService.focusWindow")(function* (scope, input) {
-      yield* session
-        .focusWindow(agentSource(scope), input.windowId)
+      const channelId = yield* channelFor(scope);
+      yield* chatComputer
+        .focusWindow(agentSource(scope), channelId, input.windowId)
         .pipe(Effect.mapError(toComputerMcpFailure));
-      return yield* listWindows({});
+      return yield* listWindows(scope);
     }),
     input: Effect.fn("ComputerMcpService.input")(function* (scope, batch) {
-      return yield* session
-        .agentInput(agentSource(scope), batch.displayId, batch.events)
+      const channelId = yield* channelFor(scope);
+      return yield* chatComputer
+        .input(agentSource(scope), channelId, batch.events)
         .pipe(Effect.mapError(toComputerMcpFailure));
-    }),
-    manageDisplay: Effect.fn("ComputerMcpService.manageDisplay")(function* (input) {
-      const request = yield* parseManageDisplay(input);
-      const display =
-        request.action === "create"
-          ? yield* session
-              .createDisplay({
-                ...(request.name === undefined ? {} : { name: request.name }),
-                widthPx: request.widthPx,
-                heightPx: request.heightPx,
-                ...(request.hiDpi === undefined ? {} : { hiDpi: request.hiDpi }),
-              })
-              .pipe(Effect.mapError(toComputerMcpFailure))
-          : yield* session
-              .destroyDisplay(request.displayId)
-              .pipe(Effect.mapError(toComputerMcpFailure), Effect.as(null));
-      const displays = yield* session.listDisplays.pipe(Effect.mapError(toComputerMcpFailure));
-      return { action: request.action, display, displays };
     }),
     launch: Effect.fn("ComputerMcpService.launch")(function* (scope, input) {
-      const target = yield* resolveDisplay(input.displayId);
-      const launched = yield* session
-        .launch(agentSource(scope), {
+      const channelId = yield* channelFor(scope);
+      const computer = yield* chatComputer
+        .ensure(channelId)
+        .pipe(Effect.mapError(toComputerMcpFailure));
+      if (computer.display === null) {
+        return yield* new OpenbotComputerMcpFailure({
+          code: "backend_unavailable",
+          message:
+            computer.detail ?? `This chat has no computer to launch onto (${computer.state}).`,
+        });
+      }
+      const launched = yield* chatComputer
+        .launch(agentSource(scope), channelId, {
           app: input.app,
           ...(input.args === undefined ? {} : { args: input.args }),
-          displayId: target.id,
         })
         .pipe(Effect.mapError(toComputerMcpFailure));
-      return { pid: launched.pid, displayId: target.id };
+      return { pid: launched.pid, displayId: computer.display.id };
     }),
   });
 });

@@ -2,16 +2,13 @@ import * as Schema from "effect/Schema";
 
 import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
-  OpenbotComputerAvailability,
-  OpenbotComputerCapabilities,
+  MAX_COMPUTER_INPUT_BATCH,
+  OpenbotChatComputerState,
   OpenbotComputerController,
   OpenbotComputerDisplay,
   OpenbotComputerDisplayId,
-  OpenbotComputerHost,
-  OpenbotComputerInputBatch,
+  OpenbotComputerInputEvent,
   OpenbotComputerInputResult,
-  OpenbotComputerPermissions,
-  OpenbotComputerSessionKind,
   OpenbotComputerWindow,
   OpenbotComputerWindowId,
 } from "./openbotComputer.ts";
@@ -20,13 +17,22 @@ import {
  * The agent-facing projection of the computer contract, used by the `t3-code`
  * MCP `computer_*` tools.
  *
+ * Every tool here is scoped to the computer of the chat the calling thread
+ * belongs to, so nothing an agent sends names a display: there is exactly one
+ * screen it can reach, the chat owns it, and it is created on first use.
+ *
  * These are deliberately not the wire schemas the client uses. A tool schema is
  * read by a model, so every field carries its own description, the status is
  * compacted to what a decision needs, and a screenshot names the scale factor
- * that maps its pixels back to display pixels. Everything an agent sends
- * (input batches above all) stays the wire schema, because agent input lands in
- * the same per-display queue as the human's.
+ * that maps its pixels back to display pixels.
  */
+
+/**
+ * The one limitation a model has to plan around, repeated wherever it decides
+ * something: the chat's screen is a screen, not a sandbox.
+ */
+export const COMPUTER_SHARED_FOCUS_LIMITATION =
+  "This chat's computer is its own screen, not its own machine. On macOS it shares one pointer, one keyboard, and one frontmost app with the person and with any other agent, so focus can move between your calls: check with computer_list_windows and computer_focus_window before you type.";
 
 /** Longest edge a `computer_screenshot` defaults to. Big enough to read UI
     text, small enough that a full-resolution desktop does not dominate the
@@ -36,48 +42,37 @@ export const COMPUTER_SCREENSHOT_DEFAULT_MAX_WIDTH_PX = 1280;
 /** Hard ceiling on a screenshot's width, whatever the display measures. */
 export const COMPUTER_SCREENSHOT_MAX_WIDTH_PX = 1920;
 
-/** Host setup, compacted to the two things an agent can say out loud: whether
-    the computer is usable, and the exact commands that would fix it. */
-export const ComputerSetupSummary = Schema.Struct({
-  ready: Schema.Boolean,
-  /** Names of the tools this host is missing. Empty when `ready`. */
-  missing: Schema.Array(Schema.String),
-  /** One shell command per missing tool, where one is known. */
-  install: Schema.Array(Schema.String),
-  notes: Schema.Array(Schema.String),
-});
-export type ComputerSetupSummary = typeof ComputerSetupSummary.Type;
-
-/** Windows are omitted here on purpose: they change on every focus and belong
-    to `computer_list_windows`, which the agent should call right before it
-    acts on one. */
+/** The calling chat's computer, as the agent that works in that chat sees it. */
 export const ComputerStatusResult = Schema.Struct({
-  host: OpenbotComputerHost,
-  session: OpenbotComputerSessionKind,
-  availability: OpenbotComputerAvailability,
-  /** Why the computer is not ready, or a warning while it is. */
+  /** The chat this computer belongs to. A sub-chat reports its parent's, which
+      is the screen it actually works on. */
+  chat: Schema.String,
+  state: OpenbotChatComputerState,
+  /** The chat's screen, including the pixel size input coordinates are in.
+      Null unless the state is `ready`. */
+  display: Schema.NullOr(OpenbotComputerDisplay),
+  /** Why the computer is unavailable, or a standing caveat while it is ready. */
   detail: Schema.NullOr(Schema.String),
-  permissions: OpenbotComputerPermissions,
-  setup: Schema.NullOr(ComputerSetupSummary),
-  capabilities: OpenbotComputerCapabilities,
-  displays: Schema.Array(OpenbotComputerDisplay),
+  /** The windows on the chat's screen right now. */
+  windows: Schema.Array(OpenbotComputerWindow),
   /** Who holds the single input lease right now. When a person holds it, agent
       input is rejected until they stop controlling. */
   controller: Schema.NullOr(OpenbotComputerController),
+  /** Whether `computer_launch` can work right now. False on macOS until the
+      person grants Accessibility; `detail` says so. */
+  canLaunch: Schema.Boolean,
+  /** Always `COMPUTER_SHARED_FOCUS_LIMITATION`, so the constraint is in front
+      of the model at the moment it plans. */
+  sharing: Schema.String,
 });
 export type ComputerStatusResult = typeof ComputerStatusResult.Type;
 
 export const ComputerScreenshotInput = Schema.Struct({
-  displayId: Schema.optional(
-    OpenbotComputerDisplayId.annotate({
-      description: "Which display to capture. Defaults to the main display.",
-    }),
-  ),
   maxWidthPx: Schema.optional(
     Schema.Int.check(
       Schema.isBetween({ minimum: 160, maximum: COMPUTER_SCREENSHOT_MAX_WIDTH_PX }),
     ).annotate({
-      description: `Downscale the capture to this width before encoding. Defaults to ${COMPUTER_SCREENSHOT_DEFAULT_MAX_WIDTH_PX}. Pass the display's own width to read coordinates straight off the image.`,
+      description: `Downscale the capture to this width before encoding. Defaults to ${COMPUTER_SCREENSHOT_DEFAULT_MAX_WIDTH_PX}. Pass the screen's own width, from computer_status, to read coordinates straight off the image.`,
     }),
   ),
 });
@@ -110,15 +105,6 @@ export const ComputerScreenshotResult = Schema.Struct({
 });
 export type ComputerScreenshotResult = typeof ComputerScreenshotResult.Type;
 
-export const ComputerListWindowsInput = Schema.Struct({
-  displayId: Schema.optional(
-    OpenbotComputerDisplayId.annotate({
-      description: "Only list windows on this display. Defaults to every display.",
-    }),
-  ),
-});
-export type ComputerListWindowsInput = typeof ComputerListWindowsInput.Type;
-
 export const ComputerListWindowsResult = Schema.Struct({
   windows: Schema.Array(OpenbotComputerWindow),
 });
@@ -131,67 +117,19 @@ export const ComputerFocusWindowInput = Schema.Struct({
 });
 export type ComputerFocusWindowInput = typeof ComputerFocusWindowInput.Type;
 
-/** An agent's batch is exactly the human's batch: one schema, one per-display
-    queue, one ordering. */
-export const ComputerInputInput = OpenbotComputerInputBatch;
+/** The events are exactly the human's events, and they land in the same
+    per-display queue under the same lease; only the target is implied rather
+    than named. */
+export const ComputerInputInput = Schema.Struct({
+  events: Schema.Array(OpenbotComputerInputEvent).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(MAX_COMPUTER_INPUT_BATCH),
+  ),
+});
 export type ComputerInputInput = typeof ComputerInputInput.Type;
 
 export const ComputerInputResult = OpenbotComputerInputResult;
 export type ComputerInputResult = typeof ComputerInputResult.Type;
-
-/**
- * One flat object rather than a create/destroy union, because a `Schema.Union`
- * serialises to `anyOf` and an MCP tool whose input schema is not an object
- * makes clients reject the whole server. `action` decides which of the other
- * fields are required; the server parses this into
- * `ComputerManageDisplayRequest` and refuses the mismatched combinations.
- */
-export const ComputerManageDisplayInput = Schema.Struct({
-  action: Schema.Literals(["create", "destroy"]).annotate({
-    description:
-      "'create' requires widthPx and heightPx; 'destroy' requires displayId of a managed display.",
-  }),
-  displayId: Schema.optional(
-    OpenbotComputerDisplayId.annotate({
-      description:
-        "For 'destroy': a managed display created earlier. Physical displays cannot be destroyed.",
-    }),
-  ),
-  name: Schema.optional(
-    TrimmedNonEmptyString.check(Schema.isMaxLength(64)).annotate({
-      description: "For 'create': the label shown in the display picker.",
-    }),
-  ),
-  widthPx: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 640, maximum: 7680 }))),
-  heightPx: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 480, maximum: 4320 }))),
-  hiDpi: Schema.optional(
-    Schema.Boolean.annotate({
-      description: "For 'create' on macOS: render at 2x. Ignored elsewhere.",
-    }),
-  ),
-});
-export type ComputerManageDisplayInput = typeof ComputerManageDisplayInput.Type;
-
-/** What the flat tool input means once the action and its fields agree. */
-export type ComputerManageDisplayRequest =
-  | {
-      readonly action: "create";
-      readonly name?: string | undefined;
-      readonly widthPx: number;
-      readonly heightPx: number;
-      readonly hiDpi?: boolean | undefined;
-    }
-  | { readonly action: "destroy"; readonly displayId: OpenbotComputerDisplayId };
-
-export const ComputerManageDisplayResult = Schema.Struct({
-  action: Schema.Literals(["create", "destroy"]),
-  /** The display just created; null after a destroy. */
-  display: Schema.NullOr(OpenbotComputerDisplay),
-  /** Every display after the change, so the next call can target one without
-      another round trip. */
-  displays: Schema.Array(OpenbotComputerDisplay),
-});
-export type ComputerManageDisplayResult = typeof ComputerManageDisplayResult.Type;
 
 export const ComputerLaunchInput = Schema.Struct({
   app: TrimmedNonEmptyString.check(Schema.isMaxLength(512)).annotate({
@@ -199,19 +137,13 @@ export const ComputerLaunchInput = Schema.Struct({
       "An application name or bundle path on macOS ('Safari'), an executable on Linux ('xterm').",
   }),
   args: Schema.optional(Schema.Array(Schema.String.check(Schema.isMaxLength(1024)))),
-  displayId: Schema.optional(
-    OpenbotComputerDisplayId.annotate({
-      description: "Which display the new window should open on. Defaults to the main display.",
-    }),
-  ),
 });
 export type ComputerLaunchInput = typeof ComputerLaunchInput.Type;
 
 export const ComputerLaunchResult = Schema.Struct({
   /** Null when the platform launched the app without reporting a process. */
   pid: Schema.NullOr(Schema.Int),
-  /** The display the app was launched on, resolved from the input or the main
-      display, so the next screenshot looks at the right screen. */
+  /** The chat's screen the app was launched onto. */
   displayId: OpenbotComputerDisplayId,
 });
 export type ComputerLaunchResult = typeof ComputerLaunchResult.Type;

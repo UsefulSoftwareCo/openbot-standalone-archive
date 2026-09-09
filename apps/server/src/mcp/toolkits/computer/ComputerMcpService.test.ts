@@ -1,19 +1,21 @@
 import { assert, it } from "@effect/vitest";
 import {
   EnvironmentId,
-  NO_COMPUTER_CAPABILITIES,
+  OpenbotChannelId,
   OpenbotComputerDisplayId,
   OpenbotComputerError,
+  OpenbotComputerWindowId,
   ProviderInstanceId,
   ThreadId,
+  type OpenbotChatComputer,
   type OpenbotComputerDisplay,
   type OpenbotComputerInputEvent,
-  type OpenbotComputerStatus,
+  type OpenbotComputerWindow,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-import { OpenbotComputerSession } from "../../../openbot/computer/OpenbotComputerSession.ts";
+import { OpenbotChatComputerService } from "../../../openbot/computer/OpenbotChatComputer.ts";
 import {
   McpInvocationContext,
   type McpCapability,
@@ -22,8 +24,8 @@ import {
 import * as ComputerMcp from "./ComputerMcpService.ts";
 
 const threadId = ThreadId.make("thread:computer-caller");
-const mainDisplayId = OpenbotComputerDisplayId.make("1");
-const secondDisplayId = OpenbotComputerDisplayId.make("2");
+const channelId = OpenbotChannelId.make("channel:parent");
+const chatDisplayId = OpenbotComputerDisplayId.make("managed-1");
 
 const scopeWith = (capabilities: ReadonlyArray<McpCapability>): McpInvocationScope => ({
   environmentId: EnvironmentId.make("environment:computer-test"),
@@ -34,60 +36,47 @@ const scopeWith = (capabilities: ReadonlyArray<McpCapability>): McpInvocationSco
   issuedAt: 1,
 });
 
-const mainDisplay: OpenbotComputerDisplay = {
-  id: mainDisplayId,
-  name: "Built-in Retina Display",
-  kind: "physical",
-  widthPx: 3024,
-  heightPx: 1964,
-  scale: 2,
-  main: true,
-  managed: false,
-};
-
-const managedDisplay: OpenbotComputerDisplay = {
-  id: secondDisplayId,
-  name: "Agent workspace",
+const chatDisplay: OpenbotComputerDisplay = {
+  id: chatDisplayId,
+  name: "Research bot",
   kind: "managed-virtual",
-  widthPx: 1440,
-  heightPx: 900,
-  scale: 1,
+  widthPx: 1680,
+  heightPx: 1050,
+  scale: 2,
   main: false,
   managed: true,
 };
 
-const status: OpenbotComputerStatus = {
-  host: { label: "studio", platform: "darwin" },
-  session: "signed-in-desktop",
-  availability: "ready",
+const chatWindow: OpenbotComputerWindow = {
+  id: OpenbotComputerWindowId.make("window:safari"),
+  displayId: chatDisplayId,
+  title: "Safari",
+  app: "Safari",
+  pid: 501,
+  x: 0,
+  y: 0,
+  width: 1200,
+  height: 800,
+  focused: false,
+  minimized: false,
+};
+
+const chatComputer: OpenbotChatComputer = {
+  channelId,
+  channelName: "Research bot",
+  state: "ready",
+  display: chatDisplay,
   detail: null,
-  permissions: {
-    screenCapture: "granted",
-    accessibility: "denied",
-    detail: "Grant it in Settings",
-  },
-  setup: {
-    ready: false,
-    dependencies: [
-      { name: "ffmpeg", present: false, path: null, install: "brew install ffmpeg" },
-      { name: "xdotool", present: false, path: null, install: null },
-      { name: "Xvfb", present: true, path: "/usr/bin/Xvfb", install: null },
-    ],
-    notes: ["Wayland is not supported."],
-  },
-  capabilities: { ...NO_COMPUTER_CAPABILITIES, stream: true, input: true, windows: true },
-  displays: [mainDisplay],
-  windows: [],
+  windows: [chatWindow],
   controller: { kind: "viewer", label: "Rhys", since: "2026-09-08T10:00:00.000Z" },
-  lastCaptureAt: "2026-09-08T10:00:01.000Z",
-  lastError: null,
+  canLaunch: true,
   checkedAt: "2026-09-08T10:00:02.000Z",
 };
 
 const run = <A, E>(
   effect: Effect.Effect<A, E, ComputerMcp.ComputerMcpService | McpInvocationContext>,
   options: {
-    readonly session: Partial<OpenbotComputerSession["Service"]>;
+    readonly chatComputer: Partial<OpenbotChatComputerService["Service"]>;
     readonly capabilities?: ReadonlyArray<McpCapability>;
   },
 ) =>
@@ -96,9 +85,10 @@ const run = <A, E>(
     Effect.provide(
       ComputerMcp.layer.pipe(
         Layer.provide(
-          Layer.mock(OpenbotComputerSession)(
-            options.session satisfies Partial<OpenbotComputerSession["Service"]>,
-          ),
+          Layer.mock(OpenbotChatComputerService)({
+            channelForThread: () => Effect.succeed(channelId),
+            ...options.chatComputer,
+          } satisfies Partial<OpenbotChatComputerService["Service"]>),
         ),
       ),
     ),
@@ -107,8 +97,11 @@ const run = <A, E>(
 it.effect("refuses every computer tool when the credential withholds the capability", () =>
   Effect.gen(function* () {
     const failure = yield* run(
-      ComputerMcp.withComputerAccess((service) => service.status),
-      { session: { status: Effect.succeed(status) }, capabilities: ["preview", "orchestration"] },
+      ComputerMcp.withComputerAccess((service, scope) => service.status(scope)),
+      {
+        chatComputer: { ensure: () => Effect.succeed(chatComputer) },
+        capabilities: ["preview", "orchestration"],
+      },
     ).pipe(Effect.flip);
 
     assert.equal(failure._tag, "OpenbotComputerMcpFailure");
@@ -117,55 +110,68 @@ it.effect("refuses every computer tool when the credential withholds the capabil
   }),
 );
 
-it.effect("projects status down to what a decision needs, with install commands", () =>
+it.effect("status describes the calling thread's chat computer and provisions it", () =>
   Effect.gen(function* () {
-    const result = yield* run(
-      ComputerMcp.withComputerAccess((service) => service.status),
-      { session: { status: Effect.succeed(status) } },
-    );
+    const ensured: Array<string> = [];
 
-    assert.equal(result.session, "signed-in-desktop");
-    assert.equal(result.availability, "ready");
-    assert.equal(result.permissions.accessibility, "denied");
-    assert.deepEqual(result.setup, {
-      ready: false,
-      missing: ["ffmpeg", "xdotool"],
-      install: ["brew install ffmpeg"],
-      notes: ["Wayland is not supported."],
-    });
-    assert.deepEqual(result.displays, [mainDisplay]);
-    assert.deepEqual(result.controller, status.controller);
-    // Windows move on every focus, so they belong to computer_list_windows.
-    assert.isUndefined((result as { windows?: unknown }).windows);
-  }),
-);
-
-it.effect("reports the scale that maps screenshot pixels back to display pixels", () =>
-  Effect.gen(function* () {
     const result = yield* run(
-      ComputerMcp.withComputerAccess((service) => service.screenshot({})),
+      ComputerMcp.withComputerAccess((service, scope) => service.status(scope)),
       {
-        session: {
-          listDisplays: Effect.succeed([managedDisplay, mainDisplay]),
-          snapshot: () =>
-            Effect.succeed({
-              mimeType: "image/jpeg" as const,
-              dataBase64: "ZmFrZQ==",
-              widthPx: 1512,
-              heightPx: 982,
-              displayId: mainDisplayId,
-              capturedAt: "2026-09-08T10:00:03.000Z",
-              caveat: null,
+        chatComputer: {
+          ensure: (id) =>
+            Effect.sync(() => {
+              ensured.push(id);
+              return chatComputer;
             }),
         },
       },
     );
 
-    // Main display is picked over the first entry, and 3024 / 1512 says a point
-    // measured on the image doubles to reach the display.
-    assert.equal(result.displayId, mainDisplayId);
+    assert.deepEqual(ensured, [channelId]);
+    assert.equal(result.chat, "Research bot");
+    assert.equal(result.state, "ready");
+    assert.equal(result.display?.widthPx, 1680);
+    assert.deepEqual(result.windows, [chatWindow]);
+    assert.deepEqual(result.controller, chatComputer.controller);
+    assert.equal(result.canLaunch, true);
+    assert.include(result.sharing, "one frontmost app");
+    // Nothing in the result names a display the agent could target instead.
+    assert.isUndefined((result as { displays?: unknown }).displays);
+  }),
+);
+
+it.effect("reports the scale that maps screenshot pixels back to the chat display", () =>
+  Effect.gen(function* () {
+    const captured: Array<readonly [string, number | undefined]> = [];
+
+    const result = yield* run(
+      ComputerMcp.withComputerAccess((service, scope) => service.screenshot(scope, {})),
+      {
+        chatComputer: {
+          ensure: () => Effect.succeed(chatComputer),
+          snapshot: (id, maxWidthPx) =>
+            Effect.sync(() => {
+              captured.push([id, maxWidthPx]);
+              return {
+                mimeType: "image/jpeg" as const,
+                dataBase64: "ZmFrZQ==",
+                widthPx: 840,
+                heightPx: 525,
+                displayId: chatDisplayId,
+                capturedAt: "2026-09-08T10:00:03.000Z",
+                caveat: null,
+              };
+            }),
+        },
+      },
+    );
+
+    // The chat is named, never a display, and 1680 / 840 says a point measured
+    // on the image doubles to reach the screen.
+    assert.deepEqual(captured, [[channelId, 1280]]);
+    assert.equal(result.displayId, chatDisplayId);
     assert.equal(result.scale, 2);
-    assert.equal(result.image.widthPx, 1512);
+    assert.equal(result.image.widthPx, 840);
     assert.equal(result.image.data, "ZmFrZQ==");
   }),
 );
@@ -178,19 +184,17 @@ it.effect("passes an input batch through untouched and names the agent as contro
     ];
     const seen: Array<{
       readonly label: string;
-      readonly displayId: string;
+      readonly channelId: string;
       readonly events: ReadonlyArray<OpenbotComputerInputEvent>;
     }> = [];
 
     const result = yield* run(
-      ComputerMcp.withComputerAccess((service, scope) =>
-        service.input(scope, { displayId: mainDisplayId, events }),
-      ),
+      ComputerMcp.withComputerAccess((service, scope) => service.input(scope, { events })),
       {
-        session: {
-          agentInput: (source, displayId, batch) =>
+        chatComputer: {
+          input: (source, id, batch) =>
             Effect.sync(() => {
-              seen.push({ label: source.label, displayId, events: batch });
+              seen.push({ label: source.label, channelId: id, events: batch });
               return { delivered: batch.length, rejected: [] };
             }),
         },
@@ -199,7 +203,7 @@ it.effect("passes an input batch through untouched and names the agent as contro
 
     assert.deepEqual(result, { delivered: 2, rejected: [] });
     assert.deepEqual(seen, [
-      { label: ComputerMcp.agentControllerLabel(threadId), displayId: mainDisplayId, events },
+      { label: ComputerMcp.agentControllerLabel(threadId), channelId, events },
     ]);
   }),
 );
@@ -208,14 +212,11 @@ it.effect("turns a human's control into a not_controlling failure that says to s
   Effect.gen(function* () {
     const failure = yield* run(
       ComputerMcp.withComputerAccess((service, scope) =>
-        service.input(scope, {
-          displayId: mainDisplayId,
-          events: [{ type: "key-press", key: "Enter" }],
-        }),
+        service.input(scope, { events: [{ type: "key-press", key: "Enter" }] }),
       ),
       {
-        session: {
-          agentInput: () =>
+        chatComputer: {
+          input: () =>
             Effect.fail(
               new OpenbotComputerError({
                 code: "not_controlling",
@@ -232,76 +233,75 @@ it.effect("turns a human's control into a not_controlling failure that says to s
   }),
 );
 
-it.effect("creates a managed display and returns the list it now belongs to", () =>
+it.effect("focusing a window off the chat's screen keeps the backend's refusal", () =>
   Effect.gen(function* () {
-    const result = yield* run(
-      ComputerMcp.withComputerAccess((service) =>
-        service.manageDisplay({
-          action: "create",
-          name: "Agent workspace",
-          widthPx: 1440,
-          heightPx: 900,
+    const failure = yield* run(
+      ComputerMcp.withComputerAccess((service, scope) =>
+        service.focusWindow(scope, {
+          windowId: OpenbotComputerWindowId.make("window:on-the-persons-screen"),
         }),
       ),
       {
-        session: {
-          createDisplay: () => Effect.succeed(managedDisplay),
-          listDisplays: Effect.succeed([mainDisplay, managedDisplay]),
+        chatComputer: {
+          focusWindow: () =>
+            Effect.fail(
+              new OpenbotComputerError({
+                code: "window_not_found",
+                message: "Window window:on-the-persons-screen is not on Research bot's computer.",
+              }),
+            ),
         },
       },
-    );
+    ).pipe(Effect.flip);
 
-    assert.equal(result.action, "create");
-    assert.deepEqual(result.display, managedDisplay);
-    assert.deepEqual(result.displays, [mainDisplay, managedDisplay]);
+    assert.equal(failure.code, "window_not_found");
+    assert.include(failure.message, "not on Research bot's computer");
   }),
 );
 
-it.effect("destroys the named display and reports no created display", () =>
+it.effect("launches onto the chat's screen without being told which one", () =>
   Effect.gen(function* () {
-    const destroyed: Array<string> = [];
+    const launched: Array<{ readonly channelId: string; readonly app: string }> = [];
 
     const result = yield* run(
-      ComputerMcp.withComputerAccess((service) =>
-        service.manageDisplay({ action: "destroy", displayId: secondDisplayId }),
-      ),
+      ComputerMcp.withComputerAccess((service, scope) => service.launch(scope, { app: "Safari" })),
       {
-        session: {
-          destroyDisplay: (id) => Effect.sync(() => void destroyed.push(id)),
-          listDisplays: Effect.succeed([mainDisplay]),
+        chatComputer: {
+          ensure: () => Effect.succeed(chatComputer),
+          launch: (_source, id, input) =>
+            Effect.sync(() => {
+              launched.push({ channelId: id, app: input.app });
+              return { pid: 4321 };
+            }),
         },
       },
     );
 
-    assert.deepEqual(destroyed, [secondDisplayId]);
-    assert.equal(result.action, "destroy");
-    assert.equal(result.display, null);
-    assert.deepEqual(result.displays, [mainDisplay]);
+    assert.deepEqual(launched, [{ channelId, app: "Safari" }]);
+    assert.deepEqual(result, { pid: 4321, displayId: chatDisplayId });
   }),
 );
 
-it.effect("refuses a manage_display call whose fields do not match its action", () =>
+it.effect("says why there is nothing to capture when the chat has no computer", () =>
   Effect.gen(function* () {
     const failure = yield* run(
-      ComputerMcp.withComputerAccess((service) => service.manageDisplay({ action: "create" })),
-      { session: {} },
+      ComputerMcp.withComputerAccess((service, scope) => service.screenshot(scope, {})),
+      {
+        chatComputer: {
+          ensure: () =>
+            Effect.succeed({
+              ...chatComputer,
+              state: "unavailable",
+              display: null,
+              windows: [],
+              canLaunch: false,
+              detail: "The helper is not running.",
+            } satisfies OpenbotChatComputer),
+        },
+      },
     ).pipe(Effect.flip);
 
-    assert.equal(failure.code, "invalid_input");
-    assert.include(failure.message, "widthPx");
-  }),
-);
-
-it.effect("names the known displays when the requested one is gone", () =>
-  Effect.gen(function* () {
-    const failure = yield* run(
-      ComputerMcp.withComputerAccess((service) =>
-        service.screenshot({ displayId: secondDisplayId }),
-      ),
-      { session: { listDisplays: Effect.succeed([mainDisplay]) } },
-    ).pipe(Effect.flip);
-
-    assert.equal(failure.code, "display_not_found");
-    assert.include(failure.message, mainDisplayId);
+    assert.equal(failure.code, "backend_unavailable");
+    assert.include(failure.message, "The helper is not running.");
   }),
 );
