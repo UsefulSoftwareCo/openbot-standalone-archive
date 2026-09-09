@@ -50,13 +50,11 @@ Two things are worth knowing:
 
 ## A headless machine
 
-On a server with no desktop, add a **managed display** from the display picker.
-T3 Code starts an X server and a window manager for it, and agents can open apps
-onto it with the `computer_launch` tool. The X server picks its own display
-number from the ones that are free, so a managed display is named `:60` on one
-machine and `:2` on another; the display picker shows the name it got. Managed
-displays are temporary: they and everything running on them stop when the T3
-Code server stops.
+On a server with no desktop, each chat still gets its own screen: the first time
+anyone opens that chat's computer view, T3 Code starts an X server and a window
+manager for it automatically, and its agent can open apps onto it with the
+`computer_launch` tool. These managed sessions are temporary and stop, along
+with everything running on them, when the T3 Code server stops.
 
 ## Wayland
 

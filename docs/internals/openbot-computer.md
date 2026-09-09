@@ -26,3 +26,12 @@ diagnostic mode; `T3CODE_COMPUTER_HELPER_LAUNCH=child` selects it.
 The consequence to know about: ad-hoc signing pins a grant to the code hash, so
 every rebuild drops both grants. `scripts/make-signing-identity.sh` creates the
 stable certificate that avoids it, and should be run before granting anything.
+
+## Why launched windows are placed, not claimed
+
+The reference client's `WindowAdopter` opens a 30 s window after launch and
+adopts whatever new window appears in it, on the theory that a slow-to-map app
+window still counts as "from this launch". That claim is global: any window
+that happens to map in that window — a person's own app, a dialog from
+something else entirely — gets moved onto the launcher's screen. This was not
+ported. A chat's launch only ever places the window it itself opened.

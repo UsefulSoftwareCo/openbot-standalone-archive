@@ -1,53 +1,50 @@
 # Computer
 
-The computer view shows the desktop of the machine your T3 Code server runs on,
-live. It is your real desktop, not a sandbox: one pointer, one keyboard, and the
-same windows you would see sitting in front of it. Open it from the computer
-card in the conversation details rail.
+Every top-level chat — a standalone chat or a project's main chat — has its own
+screen: a virtual display on macOS, a headless X session on Linux. T3 Code
+creates it the first time anyone opens that chat's computer view. A child chat
+has no screen of its own; it works on its parent's. Open one from the
+computer card in the conversation rail.
 
 ## Taking control
 
-Watching is always safe. To use the desktop yourself, choose **Take control**.
-While you hold control the pointer and keyboard follow you, agents are refused,
-and everyone else looking at the same computer sees that you are controlling.
-Choose **Stop controlling** when you are done; agents can act again immediately.
-Keys you are holding are released for you when you stop, close the view, or
-switch away.
+Watching is always safe. To use the screen yourself, choose **Take control**.
+While you hold control the pointer and keyboard follow you and agents in that
+chat are refused. Choose **Stop controlling** when done; the agent can act
+again immediately. Keys you are holding are released when you stop, close the
+view, or switch away.
 
-## Displays and windows
+## Windows and opening apps
 
-The display picker lists every screen the computer has. You can add a **managed
-display** — an extra virtual screen on macOS, or a headless X screen on Linux —
-to give work its own space without covering what is on your monitor. Managed
-displays are temporary and disappear when the server stops.
-
-The window list shows what is open. Selecting a window raises it and brings its
-app to the front.
+The window list shows what is open on this chat's screen; selecting one raises
+it. **Open app** launches onto this chat's screen, not wherever you are looking.
 
 ## Letting agents use it
 
-Agents reach the same desktop through the `computer_*` tools: they can look,
-click, type, focus a window, add a managed display, and open an app. Because the
-desktop is shared, an agent's input waits for you and is refused outright while
-you are controlling.
+Agents reach a chat's screen through the `computer_*` tools, automatically
+scoped to the chat they run in — there is nothing to select. The screen is
+shared, so an agent's input waits for you and is refused while you control it.
 
-Turn this off with **Settings → Integrations → Agent computer access** in T3 Code
-(the same server setting applies to OpenBot). You keep the computer view either
-way; only the agents lose it.
+Turn this off with **Settings → Integrations → Agent computer access** (the
+same server setting applies to OpenBot). You keep the view either way; only
+agents lose it.
 
 ## Permissions on macOS
 
-macOS asks for two separate grants, both for **T3 Computer Helper**:
+macOS asks for two separate grants, both for **T3 Computer Helper**. Granting
+one does not grant the other, and the view says which is missing:
 
-- **System Settings → Privacy & Security → Screen Recording** to see the screen.
-- **System Settings → Privacy & Security → Accessibility** to move the pointer
-  and type.
+- **Screen Recording** (Privacy & Security) to see the screen.
+- **Accessibility** (Privacy & Security) to move the pointer, type, and place
+  windows — without it, opening an app is refused rather than landing
+  somewhere unexpected.
 
-Granting one does not grant the other, and the computer view says which one is
-missing.
+## A shared session, honestly
 
-## Linux
+On macOS, every chat's screen is an extra screen on the one session you are
+signed into, which still has one pointer, one keyboard, and one frontmost app —
+shared between you at the Mac and every chat's agent. Nothing is isolated or
+sandboxed; it is more desks in the same room, not a room of your own.
 
-Linux needs a few packages and works either on your existing X11 session or on a
-headless one T3 Code starts for itself. Wayland-only sessions are not supported.
-See [Computer on Linux](./computer-linux.md).
+On Linux, a managed screen is a separate X server with its own pointer, so it
+does not compete for input. See [Computer on Linux](./computer-linux.md).

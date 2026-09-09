@@ -187,21 +187,18 @@ across every registered toolkit.
 
 ## Computer
 
-The computer is the host's _shared_ desktop session, not a desktop per agent: one
-pointer, one keyboard, one frontmost app, and a managed display (macOS virtual
-display, headless X screen) is one more screen of that same session. Input from
-every source lands in one ordered per-display queue behind a single lease. A
-human who takes control holds it until they stop; an agent batch takes the free
-lease, delivers, releases. An agent that tries while a person controls fails with
-`not_controlling`, which its tool description tells it to report, not retry.
+Each top-level chat (standalone or project main) owns one managed screen —
+macOS virtual display, headless X session on Linux — created lazily and named
+after the chat. A child chat has none of its own; it acts on its parent's.
+Ownership is a `Map<channelId, displayId>` in memory only: ids are ephemeral
+per process, so a restart recreates every chat's screen instead of reattaching.
 
-Agents reach it through the `t3-code` MCP `computer_*` tools, gated on the
-`computer` capability that
-[`McpSessionRegistry`](../../apps/server/src/mcp/McpSessionRegistry.ts) withholds
-when `enableAgentComputerAccess` is off. `computer_screenshot` is registered by
-hand in [`McpHttpServer`](../../apps/server/src/mcp/McpHttpServer.ts) so its JPEG
-leaves as an MCP image block; its `scale` maps image pixels back to the display
-pixels input expects.
+The screen is still the host's _shared_ desktop session, not a sandbox: one
+pointer, one keyboard, one frontmost app, shared with the machine and every
+other chat. Input lands in one ordered per-display queue behind a single
+lease, unchanged: a human who takes control holds it until they stop; an
+agent batch takes the free lease, delivers, releases, and fails with
+`not_controlling` if a person holds it.
 
 ## Skills
 
