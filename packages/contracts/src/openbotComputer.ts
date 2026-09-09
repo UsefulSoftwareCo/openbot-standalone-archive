@@ -421,9 +421,13 @@ export type OpenbotComputerStreamProfile = typeof OpenbotComputerStreamProfile.T
 
 /** Text frames from the viewer. Binary frames are never sent upstream. */
 export const OpenbotComputerStreamClientMessage = Schema.Union([
+  /** Opens the screen of one chat. The server resolves the chat to the display
+      it owns (provisioning it on first use) and binds this viewer to that
+      display; no raw display selector crosses this socket, so a viewer can
+      never aim at a physical screen or another chat's screen. */
   Schema.Struct({
     type: Schema.Literal("open"),
-    displayId: OpenbotComputerDisplayId,
+    channelId: OpenbotChannelId,
     ...OpenbotComputerStreamProfile.fields,
     /** Ask for the input lease on open. */
     control: Schema.Boolean,
