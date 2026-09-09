@@ -96,7 +96,10 @@ import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts"
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import { OpenbotChannelService } from "./openbot/OpenbotChannelService.ts";
 import { OpenbotChatComputerService } from "./openbot/computer/OpenbotChatComputer.ts";
-import { OpenbotComputerSession } from "./openbot/computer/OpenbotComputerSession.ts";
+import {
+  type ComputerInputSource,
+  OpenbotComputerSession,
+} from "./openbot/computer/OpenbotComputerSession.ts";
 import {
   archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
@@ -522,9 +525,11 @@ function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) 
 
 const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
-  clientOrigin: OrchestrationClientOrigin,
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+  // Minted by the route, because this layer's lifetime is not the socket's;
+  // see the route for who detaches it.
+  computerViewer: Extract<ComputerInputSource, { kind: "viewer" }>,
 ) =>
   ServerWsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -610,29 +615,6 @@ const makeWsRpcLayer = (
       // The chat-scoped view of the same session: every surface above this
       // names a chat, never a display the host happens to have.
       const openbotChatComputer = yield* OpenbotChatComputerService;
-      // Input and the lease from the typed socket belong to the human at
-      // this client, so they share one identity for as long as the socket
-      // lives: taking control in one tab and clicking in it is one viewer.
-      // Each RPC connection is its own viewer, because held keys, in-flight
-      // input and lease ownership belong to this socket alone: a second,
-      // idle socket from the same browser must not release them when it
-      // closes. The session id stays shared, because it is the authorization
-      // that ties this socket to the frame socket of the same paired browser,
-      // so the lease taken on the live view authorizes the window picker and
-      // input that arrive here.
-      const crypto = yield* Crypto.Crypto;
-      const connectionId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
-      const computerViewer = {
-        kind: "viewer",
-        viewerId: `rpc:${currentSessionId}:${connectionId}`,
-        sessionId: currentSessionId,
-        label: clientOrigin.surface ?? "A client",
-      } as const;
-      // This source has no frame socket to close on its behalf, so the socket's
-      // own scope is what gives the lease and any held keys back. Without it a
-      // client that took control here and then went away leaves the computer
-      // locked to a connection that no longer exists.
-      yield* Effect.addFinalizer(() => openbotComputer.detachSource(computerViewer));
       const pullRequests = yield* PullRequestService.PullRequestService;
       const usage = yield* UsageService.UsageService;
       const projectService = yield* ProjectService.ProjectService;
@@ -2964,15 +2946,34 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         const clientAnalyticsProps = readClientAnalyticsProps(request);
         yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
         yield* analytics.record("client.connected", clientAnalyticsProps);
+        // Input and the lease from the typed socket belong to the human at
+        // this client, so they share one identity for as long as the socket
+        // lives: taking control in one tab and clicking in it is one viewer.
+        // Each RPC connection is its own viewer, because held keys, in-flight
+        // input and lease ownership belong to this socket alone: a second,
+        // idle socket from the same browser must not release them when it
+        // closes. The session id stays shared, because it is the authorization
+        // that ties this socket to the frame socket of the same paired browser,
+        // so the lease taken on the live view authorizes the window picker and
+        // input that arrive here.
+        const openbotComputer = yield* OpenbotComputerSession;
+        const crypto = yield* Crypto.Crypto;
+        const connectionId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+        const computerViewer = {
+          kind: "viewer",
+          viewerId: `rpc:${session.sessionId}:${connectionId}`,
+          sessionId: session.sessionId,
+          label: clientOrigin.surface ?? "A client",
+        } as const;
         const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(ServerWsRpcGroup, {
           disableTracing: true,
         }).pipe(
           Effect.provide(
             makeWsRpcLayer(
               session,
-              clientOrigin,
               clientAnalyticsProps,
               previewAutomationBroker,
+              computerViewer,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderMaintenanceRunner.layer),
@@ -3003,10 +3004,23 @@ export const websocketRpcRouteLayer = Layer.unwrap(
             ),
           ),
         );
+        // The socket's real lifetime is this acquireUseRelease, not the layer
+        // above: `Effect.provide` builds that layer in a memo scope belonging to
+        // the effect it provides, which closes when `toHttpEffectWebsocket`
+        // returns, long before the client goes away. So anything that must
+        // outlive the upgrade and end with the connection lives here, next to
+        // `markDisconnected`, which is observed firing at real close.
+        // Detach first: the lease and whatever this connection left pressed are
+        // freed the moment the session is marked gone. `detachSource` only frees
+        // the lease when this connection owns it, so another socket of the same
+        // browser keeps its control.
         return yield* Effect.acquireUseRelease(
           sessions.markConnected(session.sessionId),
           () => rpcWebSocketHttpEffect,
-          () => sessions.markDisconnected(session.sessionId),
+          () =>
+            openbotComputer
+              .detachSource(computerViewer)
+              .pipe(Effect.andThen(sessions.markDisconnected(session.sessionId))),
         );
       }).pipe(
         Effect.catchTags({
