@@ -921,6 +921,111 @@ describe("OpenbotComputerSessionService", () => {
       ),
   );
 
+  it.effect("seeds a viewer that joins an idle display with its latest frame", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { host, session: computer } = yield* session();
+        const first = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-rhys",
+          canControl: false,
+        });
+        yield* first.open(MAIN_DISPLAY.id, PROFILE);
+        // hello, capturing.
+        yield* take(first, 2);
+        yield* host.emitFrame(frame(MAIN_DISPLAY.id, 7));
+        expect((yield* take(first, 1)).filter(isFrame).map((f) => f.capturedAtMs)).toEqual([7]);
+
+        const second = yield* computer.attachViewer({
+          label: "iPad",
+          sessionId: "session-ipad",
+          canControl: false,
+        });
+        yield* second.open(MAIN_DISPLAY.id, PROFILE);
+
+        // Nothing has moved on the desktop since, so the only picture the
+        // joiner can get is the one the running capture already produced.
+        const seen = yield* take(second, 2);
+        expect(serverMessages(seen).map((message) => message.type)).toEqual(["hello"]);
+        expect(seen.filter(isFrame).map((f) => f.capturedAtMs)).toEqual([7]);
+        expect((yield* host.started).length).toBe(1);
+      }),
+    ),
+  );
+
+  it.effect("a viewer that switches display never gets the picture of the screen it left", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { host, session: computer } = yield* session();
+        const stayer = yield* computer.attachViewer({
+          label: "Rhys",
+          sessionId: "session-rhys",
+          canControl: false,
+        });
+        const mover = yield* computer.attachViewer({
+          label: "iPad",
+          sessionId: "session-ipad",
+          canControl: false,
+        });
+        yield* stayer.open(MAIN_DISPLAY.id, PROFILE);
+        yield* mover.open(MAIN_DISPLAY.id, PROFILE);
+        yield* take(stayer, 2);
+        yield* take(mover, 1);
+        yield* host.emitFrame(frame(MAIN_DISPLAY.id, 1));
+        yield* take(stayer, 1);
+        yield* take(mover, 1);
+
+        // The main capture keeps running for the viewer that stayed, so its
+        // latest frame is still there to be handed to the wrong screen.
+        yield* mover.open(SIDE_DISPLAY.id, PROFILE);
+        yield* host.emitFrame(frame(SIDE_DISPLAY.id, 2));
+
+        const seen = yield* take(mover, 3);
+        expect(serverMessages(seen).map((message) => message.type)).toEqual(["geometry", "status"]);
+        expect(seen.filter(isFrame).map((f) => f.displayId)).toEqual([SIDE_DISPLAY.id]);
+        expect(seen.filter(isFrame).map((f) => f.capturedAtMs)).toEqual([2]);
+
+        // Coming back is joining the display's current picture, not replaying
+        // this viewer's own history.
+        yield* mover.open(MAIN_DISPLAY.id, PROFILE);
+        const back = yield* take(mover, 2);
+        expect(serverMessages(back).map((message) => message.type)).toEqual(["geometry"]);
+        expect(back.filter(isFrame).map((f) => f.capturedAtMs)).toEqual([1]);
+      }),
+    ),
+  );
+
+  it.effect("a joiner that restarts the capture at a wider profile waits for its first frame", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { host, session: computer } = yield* session();
+        const modest = yield* computer.attachViewer({
+          label: "Phone",
+          sessionId: "session-phone",
+          canControl: false,
+        });
+        yield* modest.open(MAIN_DISPLAY.id, PROFILE);
+        yield* take(modest, 2);
+        yield* host.emitFrame(frame(MAIN_DISPLAY.id, 3));
+        yield* take(modest, 1);
+
+        const greedy = yield* computer.attachViewer({
+          label: "Desktop",
+          sessionId: "session-desktop",
+          canControl: false,
+        });
+        yield* greedy.open(MAIN_DISPLAY.id, BIG_PROFILE);
+        yield* host.emitFrame(frame(MAIN_DISPLAY.id, 4));
+
+        // hello, superseded, capturing, and only the new capture's own frame:
+        // frame 3 belonged to the capture that was just torn down.
+        const seen = yield* take(greedy, 4);
+        expect(seen.filter(isFrame).map((f) => f.capturedAtMs)).toEqual([4]);
+        expect((yield* host.started).length).toBe(2);
+      }),
+    ),
+  );
+
   it.effect("keeps window focus and launching with whoever holds control", () =>
     Effect.scoped(
       Effect.gen(function* () {

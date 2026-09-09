@@ -282,6 +282,12 @@ interface ViewerRecord {
 interface CaptureRecord {
   readonly profile: CaptureProfile;
   readonly scope: Scope.Closeable;
+  /** The most recent frame this capture produced, handed to a viewer that joins
+      a display nothing is happening on. The slot belongs to the capture rather
+      than the display, so stopping the capture or restarting it at another
+      profile drops the stale picture along with the record; nobody has to
+      remember to clear it. */
+  readonly latest: Ref.Ref<ComputerFrame | null>;
 }
 
 /** One connection. Two tabs of the same person hold their own keys down. */
@@ -877,10 +883,12 @@ export const make = Effect.gen(function* () {
         );
         return;
       }
-      yield* Ref.update(captures, (map) => new Map(map).set(displayId, { profile, scope }));
+      const latest = yield* Ref.make<ComputerFrame | null>(null);
+      yield* Ref.update(captures, (map) => new Map(map).set(displayId, { profile, scope, latest }));
       yield* started.frames.pipe(
         Stream.runForEach((frame) =>
           recordFrameCaptured(frame.capturedAtMs).pipe(
+            Effect.andThen(Ref.set(latest, frame)),
             Effect.andThen(
               viewerList.pipe(
                 Effect.flatMap((records) =>
@@ -1227,6 +1235,19 @@ export const make = Effect.gen(function* () {
                 yield* reconcileCaptureLocked(previous);
               }
               yield* reconcileCaptureLocked(displayId);
+              // The backend drops idle frames, so joining a capture that is
+              // already running would show nothing until the desktop moved.
+              // Only the record now under `displayId` is consulted, which is
+              // either the capture this viewer just joined or one started a
+              // moment ago with an empty slot, so the seed is always the
+              // current picture of the display it just bound to. The sliding
+              // frame queue bounds it, and a fanout racing this seed costs at
+              // most a duplicate of the frame already on screen.
+              const capture = (yield* Ref.get(captures)).get(displayId);
+              if (capture !== undefined) {
+                const seed = yield* Ref.get(capture.latest);
+                if (seed !== null) yield* Queue.offer(frames, seed);
+              }
             }),
           );
         });
