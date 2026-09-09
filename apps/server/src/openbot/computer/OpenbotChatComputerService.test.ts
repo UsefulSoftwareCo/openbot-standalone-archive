@@ -22,6 +22,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Scheduler from "effect/Scheduler";
 
 import { OpenbotChannelStore } from "../OpenbotChannelStore.ts";
 import type { OpenbotChatComputerShape } from "./OpenbotChatComputer.ts";
@@ -319,6 +320,100 @@ it.effect("an interrupted creator still settles the entry and its waiting peer",
     // Nobody re-listed the host: the peer waited on the creation in flight.
     assert.equal(host.listedDisplays(), 0);
   }),
+);
+
+/**
+ * How many operations the creator fiber may run before the runtime yields it.
+ * Three is the smallest budget that still makes progress: one operation goes
+ * on resuming the fiber, one on the next real step, and the third trips the
+ * yield check, so the creator advances exactly one step per scheduler turn and
+ * the test can look at the service between any two of its steps. A budget of
+ * one or two never gets past resuming, and the fiber stalls forever.
+ */
+const ONE_STEP_PER_TURN = 3;
+
+/** How many scheduler turns the test will spend waiting for something to
+    happen. Bounded so a stranded entry fails an assertion instead of hanging
+    the run; the fake host answers synchronously, so a healthy service needs
+    two orders of magnitude fewer than this. */
+const MAX_TURNS = 2000;
+
+it.effect(
+  "a creator interrupted before it asks the host still settles the entry and its waiting peer",
+  () =>
+    Effect.gen(function* () {
+      const createStarted = yield* Deferred.make<void>();
+      const host = makeFakeHost({ createStarted });
+
+      const [peerView, afterwards, abandoned] = yield* withService(
+        [solo],
+        host.session,
+        (service) =>
+          Effect.gen(function* () {
+            const creator = yield* service
+              .ensure(solo.id)
+              .pipe(
+                Effect.provideService(Scheduler.MaxOpsBeforeYield, ONE_STEP_PER_TURN),
+                Effect.forkChild,
+              );
+
+            // Step the creator forward until it has published `provisioning` but
+            // has not yet reached the host. That window is the one an interrupt
+            // used to fall into: the entry names this fiber as the owner, and
+            // nothing has been asked of the host that would make it settle.
+            let caught = false;
+            for (let turn = 0; turn < MAX_TURNS && !caught; turn += 1) {
+              const view = yield* service.get(solo.id);
+              const entered = yield* Deferred.isDone(createStarted);
+              if (view.state === "provisioning" && host.created.length === 0 && !entered) {
+                // The viewer socket that asked for the screen goes away. Signalled
+                // rather than awaited, exactly as a closing socket does.
+                yield* Effect.sync(() => creator.interruptUnsafe());
+                caught = true;
+              } else {
+                yield* Effect.yieldNow;
+              }
+            }
+            assert.isTrue(
+              caught,
+              "the creator never published `provisioning` before reaching the host, so the window under test was never entered",
+            );
+
+            // Started while the entry still belongs to the interrupted creator, so
+            // the peer parks on that creation rather than finding a finished one.
+            const peer = yield* service
+              .ensure(solo.id)
+              .pipe(Effect.forkChild({ startImmediately: true }));
+
+            let settled = peer.pollUnsafe();
+            for (let turn = 0; turn < MAX_TURNS && settled === undefined; turn += 1) {
+              yield* Effect.yieldNow;
+              settled = peer.pollUnsafe();
+            }
+            assert.isDefined(
+              settled,
+              "the peer never came back: the interrupted creator left the entry provisioning with nobody to complete it",
+            );
+
+            return [
+              yield* Fiber.join(peer),
+              yield* service.get(solo.id),
+              yield* Fiber.await(creator),
+            ] as const;
+          }),
+      );
+
+      assert.isTrue(Exit.isFailure(abandoned) && Cause.hasInterrupts(abandoned.cause));
+      // The interrupt was held off until the entry was settled, so the host was
+      // asked exactly once and the answer went to the waiter.
+      assert.equal(host.created.length, 1);
+      assert.equal(peerView.state, "ready");
+      assert.equal(peerView.display?.kind, "managed-virtual");
+      assert.equal(afterwards.state, "ready");
+      assert.equal(afterwards.display?.id, peerView.display?.id);
+      // Nobody re-listed the host: the peer waited on the creation in flight.
+      assert.equal(host.listedDisplays(), 0);
+    }),
 );
 
 it.effect("a creation failure frees the entry so the next ensure retries", () =>

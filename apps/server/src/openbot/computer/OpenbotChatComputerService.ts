@@ -80,6 +80,13 @@ type AcquireDecision =
     }
   | { readonly kind: "create" };
 
+/** What one pass of `acquire` came back with: the chat's display, or a
+    remembered display the host has since lost, which sends the caller round
+    the loop for a fresh decision. */
+type AcquirePass =
+  | { readonly kind: "resolved"; readonly display: OpenbotComputerDisplay }
+  | { readonly kind: "retry" };
+
 /** The one sentence a person or an agent can read out of a failed creation. */
 const detailOfCause = (cause: Cause.Cause<OpenbotComputerError>): string => {
   const squashed = Cause.squash(cause);
@@ -206,66 +213,86 @@ export const make = Effect.gen(function* () {
     owner: OpenbotChannel,
   ): Effect.fn.Return<OpenbotComputerDisplay, OpenbotComputerError> {
     for (;;) {
+      // Outside the mask on purpose: a `Deferred` nobody has been told about
+      // is not ownership, and dropping the fiber here costs nothing.
       const pending = yield* Deferred.make<OpenbotComputerDisplay, OpenbotComputerError>();
-      const decision = yield* Ref.modify(
-        entries,
-        (map): readonly [AcquireDecision, ReadonlyMap<OpenbotChannelId, ChatDisplayEntry>] => {
-          const entry = map.get(owner.id);
-          if (entry?.kind === "ready") return [{ kind: "listed", display: entry.display }, map];
-          if (entry?.kind === "provisioning")
-            return [{ kind: "await", pending: entry.pending }, map];
-          return [
-            { kind: "create" },
-            new Map(map).set(owner.id, { kind: "provisioning", pending }),
-          ];
-        },
-      );
 
-      if (decision.kind === "await") return yield* Deferred.await(decision.pending);
-
-      if (decision.kind === "listed") {
-        // Display ids are the host's, and a helper restart or a signed-out
-        // session takes them with it. The listing is the only evidence the
-        // remembered screen still exists, and it refreshes its geometry.
-        const listed = yield* session.listDisplays;
-        const live = listed.find((display) => display.id === decision.display.id);
-        if (live !== undefined) {
-          yield* Ref.update(entries, (map) => {
-            const entry = map.get(owner.id);
-            return entry?.kind === "ready" && entry.display.id === live.id
-              ? new Map(map).set(owner.id, { kind: "ready", display: live })
-              : map;
-          });
-          return live;
-        }
-        yield* Ref.update(entries, (map) => {
-          const entry = map.get(owner.id);
-          if (entry?.kind !== "ready" || entry.display.id !== decision.display.id) return map;
-          const next = new Map(map);
-          next.delete(owner.id);
-          return next;
-        });
-        yield* PubSub.publish(changed, owner.id);
-        continue;
-      }
-
-      // Creation and its publication are one uninterruptible unit: once the
-      // host has been asked for a screen this fiber commits to finishing the
-      // allocation. The caller that triggered `ensure` is often a viewer
-      // socket that can close mid-creation, and an interrupt landing between
-      // the host's answer and the settlement below would strand a real
-      // display nobody owns while parking every later `ensure` on a `pending`
-      // that nobody will ever complete. An abandoned caller paying out the
+      // The mask is where ownership lives. The `Ref.modify` below is the
+      // moment this fiber becomes the one every later caller waits on, and
+      // from there the entry can only be settled by this fiber, so publishing
+      // it and settling it are one committed unit. An interrupt anywhere in
+      // between — a viewer socket closing before the host has even been asked
+      // — would leave the map holding a `provisioning` whose `Deferred` nobody
+      // completes, and park every later `ensure` and `acquire` on it for the
+      // life of the process. Asking the host is inside that unit too: an
+      // interrupt between the host's answer and the settlement would strand a
+      // real display nobody owns, and an abandoned caller paying out the
       // one-second creation is the cheaper outcome by far.
+      //
+      // `restore` marks the two passes that own nothing and so must not make
+      // an interrupt wait: a caller parked on somebody else's creation, and a
+      // caller re-listing a display it only remembers. Neither has anything to
+      // settle if it goes away.
       //
       // The entry, the change note, and the Deferred all carry this one
       // outcome, and the Deferred is completed last: waking a waiter first
       // would let it hand a display back to a client that a following `get`
       // still describes as `provisioning`. A failure leaves `unavailable`
       // rather than `provisioning`, which is what lets the next `ensure` take
-      // this branch again and retry.
-      const outcome = yield* Effect.uninterruptible(
+      // the create branch again and retry.
+      const pass = yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
+          const decision = yield* Ref.modify(
+            entries,
+            (map): readonly [AcquireDecision, ReadonlyMap<OpenbotChannelId, ChatDisplayEntry>] => {
+              const entry = map.get(owner.id);
+              if (entry?.kind === "ready") return [{ kind: "listed", display: entry.display }, map];
+              if (entry?.kind === "provisioning")
+                return [{ kind: "await", pending: entry.pending }, map];
+              return [
+                { kind: "create" },
+                new Map(map).set(owner.id, { kind: "provisioning", pending }),
+              ];
+            },
+          );
+
+          if (decision.kind === "await") {
+            const display = yield* restore(Deferred.await(decision.pending));
+            return { kind: "resolved", display } satisfies AcquirePass;
+          }
+
+          if (decision.kind === "listed") {
+            return yield* restore(
+              Effect.gen(function* () {
+                // Display ids are the host's, and a helper restart or a
+                // signed-out session takes them with it. The listing is the
+                // only evidence the remembered screen still exists, and it
+                // refreshes its geometry.
+                const listed = yield* session.listDisplays;
+                const live = listed.find((display) => display.id === decision.display.id);
+                if (live !== undefined) {
+                  yield* Ref.update(entries, (map) => {
+                    const entry = map.get(owner.id);
+                    return entry?.kind === "ready" && entry.display.id === live.id
+                      ? new Map(map).set(owner.id, { kind: "ready", display: live })
+                      : map;
+                  });
+                  return { kind: "resolved", display: live } satisfies AcquirePass;
+                }
+                yield* Ref.update(entries, (map) => {
+                  const entry = map.get(owner.id);
+                  if (entry?.kind !== "ready" || entry.display.id !== decision.display.id)
+                    return map;
+                  const next = new Map(map);
+                  next.delete(owner.id);
+                  return next;
+                });
+                yield* PubSub.publish(changed, owner.id);
+                return { kind: "retry" } satisfies AcquirePass;
+              }),
+            );
+          }
+
           const exit = yield* Effect.exit(
             session.createDisplay({
               name: owner.name,
@@ -280,11 +307,14 @@ export const make = Effect.gen(function* () {
           yield* Ref.update(entries, (map) => new Map(map).set(owner.id, settled));
           yield* PubSub.publish(changed, owner.id);
           yield* Deferred.done(pending, exit);
-          return exit;
+          if (Exit.isSuccess(exit)) {
+            return { kind: "resolved", display: exit.value } satisfies AcquirePass;
+          }
+          return yield* Effect.failCause(exit.cause);
         }),
       );
-      if (Exit.isSuccess(outcome)) return outcome.value;
-      return yield* Effect.failCause(outcome.cause);
+
+      if (pass.kind === "resolved") return pass.display;
     }
   });
 
