@@ -105,6 +105,10 @@ function summarizeDeltaItem(item: OrchestrationV2TurnItem): string | null {
       return `- Checkpoint: ${item.files.length} files`;
     case "handoff":
       return `- Handoff: ${compactText(item.summary ?? item.strategy)}`;
+    // A thread this conversation started is durable context: without it a
+    // rebuilt history silently forgets work that is still running elsewhere.
+    case "thread_created":
+      return `- Created thread ${item.targetThreadId}${item.title === null ? "" : ` (${compactText(item.title)})`}.`;
     default:
       return null;
   }

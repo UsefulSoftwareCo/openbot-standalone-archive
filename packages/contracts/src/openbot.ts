@@ -8,6 +8,7 @@ import {
   RuntimeRequestId,
   ThreadId,
   TrimmedNonEmptyString,
+  TurnItemId,
 } from "./baseSchemas.ts";
 import { ChatAttachment, PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "./chatAttachment.ts";
 import { ModelSelection } from "./modelSelection.ts";
@@ -379,12 +380,32 @@ export const OpenbotChannelSetModelInput = Schema.Struct({
 });
 export type OpenbotChannelSetModelInput = typeof OpenbotChannelSetModelInput.Type;
 
+/**
+ * A durable record of something that happened in a project chat, shown in the
+ * timeline and handed to the agent as context. One `thread_created` turn item
+ * on the parent thread is the single source of truth for both, so the person
+ * and the model always see the same set of child threads.
+ */
+export const OpenbotChannelEvent = Schema.Struct({
+  id: TurnItemId,
+  type: Schema.Literal("thread_created"),
+  /** ISO 8601 instant. */
+  createdAt: Schema.String,
+  targetThreadId: ThreadId,
+  /** Null when the created thread is not an OpenBot chat, so it cannot be opened here. */
+  targetChannelId: Schema.NullOr(OpenbotChannelId),
+  title: Schema.String,
+});
+export type OpenbotChannelEvent = typeof OpenbotChannelEvent.Type;
+
 export const OpenbotChannelView = Schema.Struct({
   channel: OpenbotChannel,
   status: OpenbotChannelStatus,
   messages: Schema.Array(OpenbotIncomingMessage),
   deliveries: Schema.Array(OpenbotDelivery),
   pendingRequests: Schema.Array(OpenbotPendingRequest),
+  /** Project chats only; standalone chats carry none. */
+  events: Schema.Array(OpenbotChannelEvent),
   /** ISO time until which the thread is snoozed, or null. Mirrors the v2 thread state. */
   snoozedUntil: Schema.NullOr(Schema.String),
 });

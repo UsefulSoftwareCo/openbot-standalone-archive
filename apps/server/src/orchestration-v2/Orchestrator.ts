@@ -5177,17 +5177,29 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               }),
           ),
         );
-      const parentRun = parentProjection.runs.find(
-        (candidate) => candidate.id === command.parentRunId,
-      );
-      const parentNode = parentProjection.nodes.find(
-        (candidate) => candidate.id === command.parentNodeId,
-      );
+      if ((command.parentRunId === null) !== (command.parentNodeId === null)) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "parentRunId and parentNodeId must both be set or both be null.",
+        });
+      }
+      // An app surface creates threads outside any turn, so there is no parent
+      // run to attach the record to; the item stands on its own in the timeline.
+      const parentRun =
+        command.parentRunId === null
+          ? undefined
+          : parentProjection.runs.find((candidate) => candidate.id === command.parentRunId);
+      const parentNode =
+        command.parentNodeId === null
+          ? undefined
+          : parentProjection.nodes.find((candidate) => candidate.id === command.parentNodeId);
       if (
-        parentRun === undefined ||
-        parentNode === undefined ||
-        parentNode.runId !== command.parentRunId ||
-        parentRun.rootNodeId !== command.parentNodeId
+        command.parentRunId !== null &&
+        (parentRun === undefined ||
+          parentNode === undefined ||
+          parentNode.runId !== command.parentRunId ||
+          parentRun.rootNodeId !== command.parentNodeId)
       ) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
@@ -5213,14 +5225,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
 
+      // Reuse the saved item so multiple creation paths commit their command
+      // receipt without adding another timeline row or changing its timestamp.
+      const existingItem = parentProjection.turnItems.find(
+        (item) => item.type === "thread_created" && item.targetThreadId === command.targetThreadId,
+      );
+
       const now = yield* DateTime.now;
-      const parentProviderTurn = providerTurnForRun(parentProjection, parentRun);
-      const turnItem: OrchestrationV2TurnItem = {
+      const parentProviderTurn =
+        parentRun === undefined ? undefined : providerTurnForRun(parentProjection, parentRun);
+      const turnItem: OrchestrationV2TurnItem = existingItem ?? {
         id: idAllocator.derive.createdThreadTurnItem({ commandId: command.commandId }),
         threadId: command.parentThreadId,
         runId: command.parentRunId,
         nodeId: command.parentNodeId,
-        providerThreadId: parentRun.providerThreadId,
+        providerThreadId: parentRun?.providerThreadId ?? null,
         providerTurnId: parentProviderTurn?.id ?? null,
         nativeItemRef: null,
         parentItemId: null,
@@ -5243,9 +5262,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       )({
         type: "turn-item.updated",
         threadId: command.parentThreadId,
-        runId: command.parentRunId,
-        nodeId: command.parentNodeId,
-        providerInstanceId: parentRun.providerInstanceId,
+        ...(command.parentRunId === null ? {} : { runId: command.parentRunId }),
+        ...(command.parentNodeId === null ? {} : { nodeId: command.parentNodeId }),
+        providerInstanceId:
+          parentRun?.providerInstanceId ?? parentProjection.thread.modelSelection.instanceId,
         occurredAt: now,
         payload: turnItem,
       });

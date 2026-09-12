@@ -71,6 +71,7 @@ const viewFor = (channel: OpenbotChannel): OpenbotChannelView => ({
   messages: [],
   deliveries: [],
   pendingRequests: [],
+  events: [],
   snoozedUntil: "2026-01-02T00:00:00.000Z",
 });
 

@@ -1,5 +1,7 @@
 import { UserMessageBubble } from "@t3tools/ui/message-bubble";
 import type {
+  OpenbotChannelEvent,
+  OpenbotChannelId,
   OpenbotChannelView as ChannelViewData,
   OpenbotDelivery,
   EnvironmentId,
@@ -9,7 +11,15 @@ import type {
 import { cn } from "@t3tools/ui/cn";
 import { ScrollArea } from "@t3tools/ui/scroll-area";
 import { Spinner } from "@t3tools/ui/spinner";
-import { AlertCircle, ArrowRightLeft, Clock3, CornerUpLeft, MessageSquare } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowRightLeft,
+  ChevronRight,
+  Clock3,
+  CornerUpLeft,
+  MessageSquare,
+  MessagesSquare,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useSnoozeActive } from "./ChatHeader";
@@ -20,7 +30,9 @@ import { Markdown } from "./Markdown";
 
 type TimelineEntry =
   | { readonly kind: "incoming"; readonly at: number; readonly message: OpenbotIncomingMessage }
-  | { readonly kind: "delivery"; readonly at: number; readonly delivery: OpenbotDelivery };
+  | { readonly kind: "delivery"; readonly at: number; readonly delivery: OpenbotDelivery }
+  // A thread this conversation started, shown where it was branched off.
+  | { readonly kind: "thread"; readonly at: number; readonly event: OpenbotChannelEvent };
 
 function buildTimeline(view: ChannelViewData): ReadonlyArray<TimelineEntry> {
   const entries: Array<TimelineEntry> = [
@@ -37,6 +49,11 @@ function buildTimeline(view: ChannelViewData): ReadonlyArray<TimelineEntry> {
         at: Date.parse(delivery.createdAt),
         delivery,
       })),
+    ...view.events.map((event): TimelineEntry => ({
+      kind: "thread",
+      at: Date.parse(event.createdAt),
+      event,
+    })),
   ];
   return entries.toSorted((left, right) => left.at - right.at);
 }
@@ -176,11 +193,16 @@ export function ChannelView({
   view,
   environmentId,
   onContinue,
+  channelNames,
+  onSelectChannel,
 }: {
   readonly view: ChannelViewData;
   readonly environmentId: EnvironmentId;
   /** Re-send a message's text through the ordinary send path (retry / ask again). */
   readonly onContinue: (message: OpenbotIncomingMessage) => void;
+  /** Live chat names, so a renamed thread reads correctly instead of its recorded title. */
+  readonly channelNames?: ReadonlyMap<OpenbotChannelId, string>;
+  readonly onSelectChannel?: (channelId: OpenbotChannelId) => void;
 }) {
   const hasPendingQuestion = view.pendingRequests.length > 0;
   const timeline = buildTimeline(view);
@@ -300,6 +322,56 @@ export function ChannelView({
                       </time>
                     </div>
                   </article>
+                );
+              }
+              if (entry.kind === "thread") {
+                const { event } = entry;
+                const target = event.targetChannelId;
+                const name =
+                  (target === null ? undefined : channelNames?.get(target)) ?? event.title;
+                const body = (
+                  <>
+                    <span
+                      aria-hidden
+                      className="-mt-1 ml-1 size-4 shrink-0 rounded-bl-md border-border border-b border-l"
+                    />
+                    <MessagesSquare className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                        Thread created
+                        <time dateTime={event.createdAt}>{formatTime(event.createdAt)}</time>
+                      </span>
+                      <span className="truncate font-medium text-foreground text-sm">{name}</span>
+                    </span>
+                    {target === null ? null : (
+                      <span className="mt-0.5 flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground">
+                        Open thread
+                        <ChevronRight className="size-3" />
+                      </span>
+                    )}
+                  </>
+                );
+                const row =
+                  "flex min-h-9 w-full max-w-full min-w-0 items-start gap-2 rounded-md px-1 py-1 text-left";
+                // A thread outside this OpenBot install has nowhere to go, so the
+                // record reads as plain history rather than a dead control.
+                return target === null ? (
+                  <div key={`thread:${event.id}`} className={row}>
+                    {body}
+                  </div>
+                ) : (
+                  <button
+                    key={`thread:${event.id}`}
+                    type="button"
+                    onClick={() => onSelectChannel?.(target)}
+                    aria-label={`Open thread ${name}`}
+                    className={cn(
+                      row,
+                      "outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+                    )}
+                  >
+                    {body}
+                  </button>
                 );
               }
               const id = rowId({ type: "delivery", deliveryId: entry.delivery.id });

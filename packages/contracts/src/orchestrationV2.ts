@@ -2364,8 +2364,13 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.created.record"),
     commandId: CommandId,
     parentThreadId: ThreadId,
-    parentRunId: RunId,
-    parentNodeId: NodeId,
+    /**
+     * The parent turn that created the thread, or null when the creation came
+     * from an app surface with no run of its own (an OpenBot chat's UI). Both
+     * must be null together or set together; the dispatcher rejects a mix.
+     */
+    parentRunId: Schema.NullOr(RunId),
+    parentNodeId: Schema.NullOr(NodeId),
     targetThreadId: ThreadId,
     targetRunId: Schema.NullOr(RunId),
   }),

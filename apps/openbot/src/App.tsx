@@ -124,6 +124,11 @@ export function App() {
         : (projects.find((project) => project.id === activeChannel.openbotProjectId) ?? null),
     [activeChannel, projects],
   );
+  // A thread's recorded title is a snapshot; the timeline shows its current name.
+  const channelNames = useMemo(
+    () => new Map(channels.map((channel) => [channel.id, channel.name] as const)),
+    [channels],
+  );
   const parentChannel =
     activeChannel?.parentChannelId === undefined || activeChannel.parentChannelId === null
       ? null
@@ -307,6 +312,8 @@ export function App() {
             <ChannelView
               view={view}
               environmentId={environmentId}
+              channelNames={channelNames}
+              onSelectChannel={openChannel}
               onContinue={(message) =>
                 void sendMessage(environmentId, {
                   channelId: activeChannel.id,
