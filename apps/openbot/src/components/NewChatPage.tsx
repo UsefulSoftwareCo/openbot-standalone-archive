@@ -22,7 +22,7 @@ import {
 } from "./NewChatPage.logic";
 
 const controlClass =
-  "h-7 rounded-md border border-border bg-background px-1.5 text-foreground text-xs disabled:opacity-64";
+  "h-7 max-w-44 cursor-pointer rounded-md border-0 bg-transparent px-1.5 text-muted-foreground text-xs outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-64";
 
 /**
  * The draft page: a composer with no chat behind it yet. The first message
@@ -141,6 +141,68 @@ export function NewChatPage({
           environmentId={environmentId}
           disabled={disabled || modelSelection?.model.trim() === ""}
           autoFocus
+          controls={
+            <div className="flex min-w-0 items-center gap-1">
+              <select
+                aria-label="Project"
+                className={controlClass}
+                value={projectId ?? ""}
+                disabled={locked}
+                onChange={(event) =>
+                  setProjectId(
+                    projects.find((entry) => entry.id === event.target.value)?.id ?? null,
+                  )
+                }
+              >
+                <option value="">No project</option>
+                {projects.map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                aria-label="Provider"
+                className={controlClass}
+                value={modelSelection?.instanceId ?? ""}
+                disabled={locked}
+                onChange={(event) =>
+                  setModelSelection(providerModelSelection(providers, event.target.value))
+                }
+              >
+                <option value="">Automatic</option>
+                {providers.map((provider) => (
+                  <option key={provider.instanceId} value={provider.instanceId}>
+                    {provider.displayName ?? provider.instanceId}
+                  </option>
+                ))}
+              </select>
+              {modelSelection !== undefined && (
+                <>
+                  <input
+                    aria-label="Model"
+                    list={modelListId}
+                    className={controlClass}
+                    value={modelSelection.model}
+                    disabled={locked}
+                    onChange={(event) =>
+                      setModelSelection({ ...modelSelection, model: event.target.value })
+                    }
+                  />
+                  <datalist id={modelListId}>
+                    {providers
+                      .find((provider) => provider.instanceId === modelSelection.instanceId)
+                      ?.models.map((model) => (
+                        <option key={model.slug} value={model.slug}>
+                          {model.name}
+                        </option>
+                      ))}
+                  </datalist>
+                </>
+              )}
+              {providersFailed && <span role="alert">Could not load provider choices.</span>}
+            </div>
+          }
           onSend={sendFirstMessage}
         />
         {error !== null && (
@@ -151,64 +213,6 @@ export function NewChatPage({
             {error}
           </p>
         )}
-        <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-2 px-4 pb-4 text-muted-foreground text-xs">
-          <select
-            aria-label="Project"
-            className={controlClass}
-            value={projectId ?? ""}
-            disabled={locked}
-            onChange={(event) =>
-              setProjectId(projects.find((entry) => entry.id === event.target.value)?.id ?? null)
-            }
-          >
-            <option value="">No project</option>
-            {projects.map((entry) => (
-              <option key={entry.id} value={entry.id}>
-                {entry.name}
-              </option>
-            ))}
-          </select>
-          <select
-            aria-label="Provider"
-            className={controlClass}
-            value={modelSelection?.instanceId ?? ""}
-            disabled={locked}
-            onChange={(event) =>
-              setModelSelection(providerModelSelection(providers, event.target.value))
-            }
-          >
-            <option value="">Automatic</option>
-            {providers.map((provider) => (
-              <option key={provider.instanceId} value={provider.instanceId}>
-                {provider.displayName ?? provider.instanceId}
-              </option>
-            ))}
-          </select>
-          {modelSelection !== undefined && (
-            <>
-              <input
-                aria-label="Model"
-                list={modelListId}
-                className={controlClass}
-                value={modelSelection.model}
-                disabled={locked}
-                onChange={(event) =>
-                  setModelSelection({ ...modelSelection, model: event.target.value })
-                }
-              />
-              <datalist id={modelListId}>
-                {providers
-                  .find((provider) => provider.instanceId === modelSelection.instanceId)
-                  ?.models.map((model) => (
-                    <option key={model.slug} value={model.slug}>
-                      {model.name}
-                    </option>
-                  ))}
-              </datalist>
-            </>
-          )}
-          {providersFailed && <span role="alert">Could not load provider choices.</span>}
-        </div>
       </div>
     </div>
   );

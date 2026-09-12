@@ -12,8 +12,8 @@ import {
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { Button } from "@t3tools/ui/button";
 import { Textarea } from "@t3tools/ui/textarea";
-import { ArrowUp, Paperclip } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { ArrowUp, Plus } from "lucide-react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import * as Effect from "effect/Effect";
 import * as Random from "effect/Random";
 import * as Schema from "effect/Schema";
@@ -25,6 +25,7 @@ export function Composer({
   environmentId,
   disabled,
   autoFocus = false,
+  controls,
   onSend,
 }: {
   readonly channelName: string;
@@ -32,6 +33,8 @@ export function Composer({
   readonly disabled: boolean;
   /** Takes the caret on mount; for a view whose only job is this composer. */
   readonly autoFocus?: boolean;
+  /** Context and model controls share the T3 composer footer. */
+  readonly controls?: ReactNode;
   readonly onSend: (input: {
     text: string;
     attachments: ReadonlyArray<ChatAttachment>;
@@ -167,7 +170,7 @@ export function Composer({
       <ComposerSurface.Shell>
         <ComposerSurface.Host>
           <ComposerSurface.Main>
-            <div className="p-3">
+            <div className="px-3 pt-3 sm:px-4 sm:pt-4">
               {files.length > 0 && (
                 <div className="mb-2 flex flex-wrap gap-2">
                   {files.map((file, index) => (
@@ -194,68 +197,72 @@ export function Composer({
                   {error}
                 </p>
               )}
-              <div className="flex items-end gap-2">
-                <input
-                  ref={fileInput}
-                  type="file"
-                  multiple
-                  className="sr-only"
-                  tabIndex={-1}
-                  aria-label="Choose attachments"
-                  onChange={(event) => {
-                    addFiles(Array.from(event.target.files ?? []));
-                    event.target.value = "";
-                  }}
-                />
+              <input
+                ref={fileInput}
+                type="file"
+                multiple
+                className="sr-only"
+                tabIndex={-1}
+                aria-label="Choose attachments"
+                onChange={(event) => {
+                  addFiles(Array.from(event.target.files ?? []));
+                  event.target.value = "";
+                }}
+              />
+              <Textarea
+                unstyled
+                rows={2}
+                autoFocus={autoFocus}
+                aria-label={`Message ${channelName}`}
+                placeholder={`Message ${channelName}`}
+                autoComplete="off"
+                enterKeyHint="enter"
+                value={value}
+                disabled={busy}
+                className="block w-full [&_textarea]:max-h-50 [&_textarea]:min-h-17.5 [&_textarea]:resize-none [&_textarea]:rounded-none [&_textarea]:bg-transparent [&_textarea]:p-0 [&_textarea]:text-base [&_textarea]:leading-relaxed sm:[&_textarea]:text-sm"
+                onPaste={(event) => {
+                  if (event.clipboardData.files.length > 0) {
+                    event.preventDefault();
+                    addFiles(Array.from(event.clipboardData.files));
+                  }
+                }}
+                onChange={(event) => setValue(event.target.value)}
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Enter" &&
+                    !event.shiftKey &&
+                    !event.nativeEvent.isComposing &&
+                    !window.matchMedia("(pointer: coarse)").matches
+                  ) {
+                    event.preventDefault();
+                    void submit();
+                  }
+                }}
+              />
+            </div>
+            <div className="flex min-w-0 items-center justify-between gap-2 px-3 pb-3 sm:px-4 sm:pb-4">
+              <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
                 <Button
                   type="button"
-                  size="icon"
+                  size="icon-sm"
                   variant="ghost"
                   aria-label="Attach files"
                   disabled={busy || disabled}
                   onClick={() => fileInput.current?.click()}
                 >
-                  <Paperclip />
+                  <Plus />
                 </Button>
-                <Textarea
-                  rows={1}
-                  autoFocus={autoFocus}
-                  aria-label={`Message ${channelName}`}
-                  placeholder={`Message ${channelName}`}
-                  autoComplete="off"
-                  enterKeyHint="enter"
-                  value={value}
-                  disabled={busy}
-                  className="min-w-0 flex-1 [&_textarea]:max-h-[min(10rem,30dvh)] [&_textarea]:min-h-11 [&_textarea]:resize-none [&_textarea]:text-base sm:[&_textarea]:min-h-9 sm:[&_textarea]:text-sm"
-                  onPaste={(event) => {
-                    if (event.clipboardData.files.length > 0) {
-                      event.preventDefault();
-                      addFiles(Array.from(event.clipboardData.files));
-                    }
-                  }}
-                  onChange={(event) => setValue(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (
-                      event.key === "Enter" &&
-                      !event.shiftKey &&
-                      !event.nativeEvent.isComposing &&
-                      !window.matchMedia("(pointer: coarse)").matches
-                    ) {
-                      event.preventDefault();
-                      void submit();
-                    }
-                  }}
-                />
-                <Button
-                  type="submit"
-                  size="icon"
-                  className="size-11 shrink-0 rounded-xl sm:size-9"
-                  aria-label={busy ? "Sending" : "Send"}
-                  disabled={busy || disabled || (value.trim().length === 0 && files.length === 0)}
-                >
-                  <ArrowUp />
-                </Button>
+                {controls}
               </div>
+              <Button
+                type="submit"
+                size="icon"
+                className="size-8 shrink-0 rounded-full"
+                aria-label={busy ? "Sending" : "Send"}
+                disabled={busy || disabled || (value.trim().length === 0 && files.length === 0)}
+              >
+                <ArrowUp />
+              </Button>
             </div>
           </ComposerSurface.Main>
         </ComposerSurface.Host>
