@@ -74,7 +74,8 @@ const providerInstance = {
   textGeneration: {} as ProviderInstance["textGeneration"],
 } satisfies ProviderInstance;
 
-const serverProvider = {
+/** The one provider these tests offer; exported for suites that need their own registry. */
+export const openbotServerProvider = {
   instanceId: openbotModelSelection.instanceId,
   driver,
   enabled: true,
@@ -127,7 +128,9 @@ export const makeOpenbotTestLayer = (prefix: string) => {
         normalizeWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
       }),
     ),
-    Layer.provide(Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([serverProvider]) })),
+    Layer.provide(
+      Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([openbotServerProvider]) }),
+    ),
     Layer.provide(Layer.mock(VcsProvisioningService)({ initRepository: () => Effect.void })),
     Layer.provide(mcpSessionRegistryTestLayer),
     Layer.provide(SqlitePersistenceMemory),

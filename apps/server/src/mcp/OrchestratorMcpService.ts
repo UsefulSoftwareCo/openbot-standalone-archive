@@ -74,6 +74,7 @@ import {
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
+import { McpThreadCreationRouter } from "./McpThreadCreationRouter.ts";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
 const MAX_WAIT_TIMEOUT_MS = 60 * 60 * 1_000;
@@ -477,6 +478,23 @@ function stableCommandId(input: {
   );
 }
 
+/**
+ * The key a thread-creation router derives its own ids from, so a retried
+ * `create_threads` call resolves to the thread the first call created.
+ */
+function stableRouterRequestKey(input: {
+  readonly scope: McpInvocationScope;
+  readonly requestKey: string;
+  readonly index: number;
+}): string {
+  return [
+    "mcp",
+    stablePart(input.scope.providerSessionId),
+    stablePart(input.requestKey),
+    String(input.index),
+  ].join(":");
+}
+
 function stableThreadId(input: {
   readonly scope: McpInvocationScope;
   readonly requestKey: string;
@@ -721,6 +739,7 @@ const make = Effect.gen(function* () {
   const threadManagement = yield* ThreadManagementService;
   const providerRegistry = yield* ProviderRegistry;
   const scheduledTasks = yield* ScheduledTaskService;
+  const threadCreationRouter = yield* McpThreadCreationRouter;
 
   const requireCapability = (scope: McpInvocationScope) =>
     scope.capabilities.has("orchestration")
@@ -1436,6 +1455,15 @@ const make = Effect.gen(function* () {
                 target: request.target,
                 providers,
               });
+              const title = threadTitle({
+                parentTitle: parent.thread.title,
+                prompt: request.prompt,
+                title: request.title,
+                index,
+              });
+              // Resolved before the router is asked so both paths reject the
+              // same escalations, and a router creates the thread with the
+              // modes the caller asked for.
               const runtimeMode = yield* resolveRuntimeMode(
                 parent.thread.runtimeMode,
                 request.runtimeMode,
@@ -1444,76 +1472,82 @@ const make = Effect.gen(function* () {
                 parent.thread.interactionMode,
                 request.interactionMode,
               );
-              const threadId = stableThreadId({
-                scope,
-                requestKey: key,
-                index,
-              });
-              const title = threadTitle({
-                parentTitle: parent.thread.title,
+              // An app that owns the calling thread's own chat tree (OpenBot
+              // today) creates the thread itself, so it is visible there. The
+              // default router declines and the plain v2 thread below is the
+              // whole behavior.
+              const routed = yield* threadCreationRouter.create({
+                callerThreadId: scope.threadId,
+                title,
                 prompt: request.prompt,
-                title: request.title,
-                index,
+                modelSelection: target.modelSelection,
+                runtimeMode,
+                interactionMode,
+                requestKey: stableRouterRequestKey({ scope, requestKey: key, index }),
               });
-              yield* threadManagement
-                .dispatch({
-                  type: "thread.create",
-                  createdBy: "agent",
-                  creationSource: "mcp",
-                  commandId: stableCommandId({
-                    scope,
-                    requestKey: key,
-                    operation: "create-thread",
-                    index,
-                  }),
-                  threadId,
-                  projectId: parent.thread.projectId,
-                  title,
-                  modelSelection: target.modelSelection,
-                  runtimeMode,
-                  interactionMode,
-                  branch: parent.thread.branch,
-                  worktreePath: parent.thread.worktreePath,
-                })
-                .pipe(
-                  Effect.mapError((error) =>
-                    failure(
-                      "orchestration_error",
-                      `Unable to create thread ${index + 1}: ${errorMessage(error)}`,
-                    ),
-                  ),
-                );
-              if (request.prompt !== undefined) {
+              const threadId =
+                routed?.threadId ?? stableThreadId({ scope, requestKey: key, index });
+              if (routed === undefined) {
                 yield* threadManagement
                   .dispatch({
-                    type: "message.dispatch",
+                    type: "thread.create",
                     createdBy: "agent",
                     creationSource: "mcp",
                     commandId: stableCommandId({
                       scope,
                       requestKey: key,
-                      operation: "dispatch-thread",
+                      operation: "create-thread",
                       index,
                     }),
                     threadId,
-                    messageId: stableMessageId({
-                      scope,
-                      requestKey: key,
-                      index,
-                    }),
-                    text: request.prompt,
-                    attachments: [],
+                    projectId: parent.thread.projectId,
+                    title,
                     modelSelection: target.modelSelection,
-                    dispatchMode: { type: "start_immediately" },
+                    runtimeMode,
+                    interactionMode,
+                    branch: parent.thread.branch,
+                    worktreePath: parent.thread.worktreePath,
                   })
                   .pipe(
                     Effect.mapError((error) =>
                       failure(
                         "orchestration_error",
-                        `Unable to start thread ${index + 1}: ${errorMessage(error)}`,
+                        `Unable to create thread ${index + 1}: ${errorMessage(error)}`,
                       ),
                     ),
                   );
+                if (request.prompt !== undefined) {
+                  yield* threadManagement
+                    .dispatch({
+                      type: "message.dispatch",
+                      createdBy: "agent",
+                      creationSource: "mcp",
+                      commandId: stableCommandId({
+                        scope,
+                        requestKey: key,
+                        operation: "dispatch-thread",
+                        index,
+                      }),
+                      threadId,
+                      messageId: stableMessageId({
+                        scope,
+                        requestKey: key,
+                        index,
+                      }),
+                      text: request.prompt,
+                      attachments: [],
+                      modelSelection: target.modelSelection,
+                      dispatchMode: { type: "start_immediately" },
+                    })
+                    .pipe(
+                      Effect.mapError((error) =>
+                        failure(
+                          "orchestration_error",
+                          `Unable to start thread ${index + 1}: ${errorMessage(error)}`,
+                        ),
+                      ),
+                    );
+                }
               }
               const projection = yield* loadProjection(threadId);
               const run = projection.runs.at(-1);

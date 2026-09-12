@@ -48,6 +48,7 @@ import { layer as turnItemPositionStoreLayer } from "./TurnItemPositionStore.ts"
 import { layer as scheduledTaskServiceLayer } from "../scheduledTasks/ScheduledTaskService.ts";
 import {
   layer as openbotChannelServiceLayer,
+  mcpThreadCreationLayer as openbotMcpThreadCreationLayer,
   turnInstructionsLayer as openbotTurnInstructionsLayer,
 } from "../openbot/OpenbotChannelService.ts";
 import { layer as openbotChannelStoreLayer } from "../openbot/OpenbotChannelStore.ts";
@@ -248,6 +249,11 @@ const openbotChannelProvided = openbotChannelServiceLayer.pipe(
 const openbotQuestionProvided = openbotQuestionServiceLayer.pipe(
   Layer.provide(threadManagementProvided),
 );
+// Merged into the runtime context so the orchestrator MCP service, built on top
+// of it in `server.ts`, resolves this router instead of its declining default.
+const openbotMcpThreadCreationProvided = openbotMcpThreadCreationLayer.pipe(
+  Layer.provide(openbotChannelProvided),
+);
 const providerContinuationWorkerProvided = providerContinuationWorkerLive.pipe(
   Layer.provide(
     Layer.mergeAll(providerContinuationRequestsLayer, threadManagementProvided, idAllocatorLayer),
@@ -316,6 +322,7 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   threadLifecycleProvided,
   scheduledTaskProvided,
   openbotChannelProvided,
+  openbotMcpThreadCreationProvided,
   // The session owns viewers, the lease, and the input queue; the backend
   // underneath it is chosen from the host platform and stays private to it.
   openbotComputerProvided,

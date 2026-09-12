@@ -45,10 +45,13 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
   type ProjectId,
+  type ProviderInteractionMode,
   type RunId,
+  type RuntimeMode,
   type ServerProvider,
   OpenbotKnowledgeId,
   OpenbotProjectId,
+  OrchestratorMcpFailure,
   ThreadId,
   DEFAULT_OPENBOT_PROJECT_ICON,
   DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -90,6 +93,10 @@ import {
   ThreadManagementService,
 } from "../orchestration-v2/ThreadManagementService.ts";
 import { ProviderTurnInstructionsV2 } from "../orchestration-v2/TurnInstructions.ts";
+import {
+  McpThreadCreationRouter,
+  type McpThreadCreationRequest,
+} from "../mcp/McpThreadCreationRouter.ts";
 import { ProjectionStoreV2 } from "../orchestration-v2/ProjectionStore.ts";
 import { OpenbotChannelStore } from "./OpenbotChannelStore.ts";
 import { materializeOpenbotSkills } from "./skills/index.ts";
@@ -170,8 +177,24 @@ export interface OpenbotChannelServiceShape {
     input: OpenbotThreadStartInput & {
       /** Set when an agent starts the thread; the result routes back to this chat's thread. */
       readonly originThreadId?: ThreadId;
+      /** Modes for the child's thread; OpenBot's own surfaces keep the defaults. */
+      readonly runtimeMode?: RuntimeMode;
+      readonly interactionMode?: ProviderInteractionMode;
     },
   ) => Effect.Effect<OpenbotThreadStartResult, OpenbotError>;
+  /**
+   * The empty twin of `startThread`: the same child identity for a
+   * `clientRequestId`, with no work dispatched. A later `startThread` on that
+   * key therefore dispatches into this child rather than making a second one.
+   */
+  readonly createChildChannel: (input: {
+    readonly parentChannelId: OpenbotChannelId;
+    readonly title: string;
+    readonly clientRequestId: string;
+    readonly modelSelection?: ModelSelection;
+    readonly runtimeMode?: RuntimeMode;
+    readonly interactionMode?: ProviderInteractionMode;
+  }) => Effect.Effect<OpenbotChannel, OpenbotError>;
   /** Answer a pending question or approval on the chat's thread via runtime-request.respond. */
   readonly respond: (input: OpenbotRespondInput) => Effect.Effect<void, OpenbotError>;
   readonly snooze: (input: {
@@ -606,6 +629,20 @@ function workspaceDirectoryName(projectId: OpenbotProjectId): string {
   return projectId.replace(/^openbot-project:/, "").replace(/[^A-Za-z0-9._-]/g, "-");
 }
 
+/**
+ * One child chat per parent and request key. Every way of making a child
+ * derives its id here, so a caller that retries a key reaches the child the
+ * first call made whether or not that call carried work for it.
+ */
+function childChannelId(
+  parentChannelId: OpenbotChannelId,
+  clientRequestId: string,
+): OpenbotChannelId {
+  return OpenbotChannelId.make(
+    `openbot-channel:child:${encodeURIComponent(parentChannelId)}:${encodeURIComponent(clientRequestId)}`,
+  );
+}
+
 export const make = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const crypto = yield* Crypto.Crypto;
@@ -796,6 +833,9 @@ export const make = Effect.gen(function* () {
       readonly channelId?: OpenbotChannelId;
       /** The T3 project that owns the working directory; defaults to the parent's or the shared one. */
       readonly t3ProjectId?: ProjectId;
+      /** Modes for the chat's thread; chats made from OpenBot itself take the defaults. */
+      readonly runtimeMode?: RuntimeMode;
+      readonly interactionMode?: ProviderInteractionMode;
     },
   ) {
     const channelId =
@@ -852,8 +892,8 @@ export const make = Effect.gen(function* () {
         projectId,
         title: input.name,
         modelSelection,
-        runtimeMode: DEFAULT_RUNTIME_MODE,
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: input.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+        interactionMode: input.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE,
         branch: null,
         worktreePath: null,
       })
@@ -1682,9 +1722,7 @@ export const make = Effect.gen(function* () {
         channelId: parent.id,
         message: "A child chat cannot start child chats. Start it from the chat that owns it.",
       });
-    const channelId = OpenbotChannelId.make(
-      `openbot-channel:child:${encodeURIComponent(parent.id)}:${encodeURIComponent(input.clientRequestId)}`,
-    );
+    const channelId = childChannelId(parent.id, input.clientRequestId);
     const childThreadId = ThreadId.make(`thread:${channelId}`);
     const requestId = MessageId.make(
       `openbot-peer:${encodeURIComponent(parent.threadId)}:${encodeURIComponent(childThreadId)}:${encodeURIComponent(input.clientRequestId)}`,
@@ -1732,6 +1770,8 @@ export const make = Effect.gen(function* () {
       name: input.title,
       parentChannelId: parent.id,
       ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+      ...(input.runtimeMode === undefined ? {} : { runtimeMode: input.runtimeMode }),
+      ...(input.interactionMode === undefined ? {} : { interactionMode: input.interactionMode }),
     });
     yield* dispatchPeer({
       source: parent,
@@ -1749,6 +1789,27 @@ export const make = Effect.gen(function* () {
           }),
     });
     return { channel: child, requestId, messageId: requestId, created: true };
+  }, createLock.withPermits(1));
+
+  /**
+   * An empty child chat under the same identity `startThread` uses, so the two
+   * are one request in two shapes rather than two children: creating empty and
+   * then retrying the key with work dispatches into this child, and starting
+   * with work and then retrying the key empty returns the child already
+   * started. The first call fixes the child's name, model, and modes; a retry
+   * that asks for different ones is a conflict and changes nothing.
+   */
+  const createChildChannel: OpenbotChannelServiceShape["createChildChannel"] = Effect.fn(
+    "OpenbotChannelService.createChildChannel",
+  )(function* (input) {
+    return yield* createChannel({
+      channelId: childChannelId(input.parentChannelId, input.clientRequestId),
+      name: input.title,
+      parentChannelId: input.parentChannelId,
+      ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+      ...(input.runtimeMode === undefined ? {} : { runtimeMode: input.runtimeMode }),
+      ...(input.interactionMode === undefined ? {} : { interactionMode: input.interactionMode }),
+    });
   }, createLock.withPermits(1));
 
   const sendToThread: OpenbotChannelServiceShape["sendToThread"] = Effect.fn(
@@ -1971,6 +2032,7 @@ export const make = Effect.gen(function* () {
     updateKnowledge,
     deleteKnowledge,
     startThread,
+    createChildChannel,
     respond,
     snooze,
     wake,
@@ -2036,6 +2098,75 @@ export function renderProjectKnowledge(entries: ReadonlyArray<OpenbotKnowledge>)
     .join("\n\n");
   return `\nProject knowledge (excerpts; call openbot_knowledge_read with an entry id for the full text):\n${excerpts}\n`;
 }
+
+/**
+ * `create_threads` from a chat in an OpenBot project makes a child chat of that
+ * chat instead of a bare v2 thread no OpenBot surface can show. A chat outside
+ * a project (standalone) and a plain T3 thread decline, so the generic tool
+ * keeps its generic behavior there.
+ */
+export const mcpThreadCreationLayer = Layer.effect(
+  McpThreadCreationRouter,
+  Effect.gen(function* () {
+    const channels = yield* OpenbotChannelService;
+    /** The orchestrator's MCP vocabulary; a refusal the agent must not retry reads as invalid. */
+    const toMcpFailure = (error: OpenbotError) =>
+      new OrchestratorMcpFailure({
+        code:
+          error.code === "nesting_not_allowed" || error.code === "profile_conflict"
+            ? "invalid_request"
+            : error.code === "no_provider_available"
+              ? "provider_unavailable"
+              : "orchestration_error",
+        message: error.message,
+      });
+    return {
+      create: (request: McpThreadCreationRequest) =>
+        Effect.gen(function* () {
+          const channel = yield* channels
+            .channelForThread(request.callerThreadId)
+            .pipe(Effect.mapError(toMcpFailure));
+          // A plain T3 thread, or a standalone chat that owns no project tree.
+          if (channel === undefined || channel.openbotProjectId === null) return undefined;
+          if (channel.parentChannelId !== null) {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: "A child chat cannot own child chats; ask the project's main chat.",
+            });
+          }
+          // Both shapes of the request share one child identity, keyed on the
+          // parent and the request key, so a retry that gains or loses its
+          // prompt lands on the child the first call made.
+          if (request.prompt === undefined) {
+            const child = yield* channels
+              .createChildChannel({
+                parentChannelId: channel.id,
+                title: request.title,
+                clientRequestId: request.requestKey,
+                modelSelection: request.modelSelection,
+                runtimeMode: request.runtimeMode,
+                interactionMode: request.interactionMode,
+              })
+              .pipe(Effect.mapError(toMcpFailure));
+            return { threadId: child.threadId };
+          }
+          const started = yield* channels
+            .startThread({
+              parentChannelId: channel.id,
+              title: request.title,
+              task: request.prompt,
+              modelSelection: request.modelSelection,
+              runtimeMode: request.runtimeMode,
+              interactionMode: request.interactionMode,
+              clientRequestId: request.requestKey,
+              originThreadId: request.callerThreadId,
+            })
+            .pipe(Effect.mapError(toMcpFailure));
+          return { threadId: started.channel.threadId };
+        }),
+    };
+  }),
+);
 
 /** Child work inherits context, but keeps its ordinary completion contract. */
 export const turnInstructionsLayer = Layer.effect(
