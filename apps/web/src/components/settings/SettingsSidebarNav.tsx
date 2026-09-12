@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { useLocation, useNavigate, useRouterState } from "@tanstack/react-router";
 
+import { isOpenbot } from "../../product";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel } from "../ui/collapsible";
 import { Input } from "../ui/input";
@@ -86,11 +87,13 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   label: string;
   to: SettingsPath;
   icon: ComponentType<{ className?: string }>;
-}> = (Object.keys(SETTINGS_SECTION_LABELS) as SettingsPath[]).map((to) => ({
-  to,
-  label: SETTINGS_SECTION_LABELS[to],
-  icon: SETTINGS_SECTION_ICONS[to],
-}));
+}> = (Object.keys(SETTINGS_SECTION_LABELS) as SettingsPath[])
+  .filter((to) => !isOpenbot || to !== "/settings/scheduled-tasks")
+  .map((to) => ({
+    to,
+    label: SETTINGS_SECTION_LABELS[to],
+    icon: SETTINGS_SECTION_ICONS[to],
+  }));
 
 const SETTINGS_PAGE_SECTIONS: Partial<
   Readonly<Record<SettingsPath, ReadonlyArray<{ label: string; targetId: string }>>>
