@@ -1,3 +1,5 @@
+import { Link } from "@tanstack/react-router";
+import { channelHref } from "../state/route";
 import { UserMessageBubble } from "@t3tools/ui/message-bubble";
 import type {
   OpenbotChannelEvent,
@@ -194,7 +196,6 @@ export function ChannelView({
   environmentId,
   onContinue,
   channelNames,
-  onSelectChannel,
 }: {
   readonly view: ChannelViewData;
   readonly environmentId: EnvironmentId;
@@ -202,7 +203,6 @@ export function ChannelView({
   readonly onContinue: (message: OpenbotIncomingMessage) => void;
   /** Live chat names, so a renamed thread reads correctly instead of its recorded title. */
   readonly channelNames?: ReadonlyMap<OpenbotChannelId, string>;
-  readonly onSelectChannel?: (channelId: OpenbotChannelId) => void;
 }) {
   const hasPendingQuestion = view.pendingRequests.length > 0;
   const timeline = buildTimeline(view);
@@ -360,10 +360,9 @@ export function ChannelView({
                     {body}
                   </div>
                 ) : (
-                  <button
+                  <Link
                     key={`thread:${event.id}`}
-                    type="button"
-                    onClick={() => onSelectChannel?.(target)}
+                    to={channelHref(target)}
                     aria-label={`Open thread ${name}`}
                     className={cn(
                       row,
@@ -371,7 +370,7 @@ export function ChannelView({
                     )}
                   >
                     {body}
-                  </button>
+                  </Link>
                 );
               }
               const id = rowId({ type: "delivery", deliveryId: entry.delivery.id });

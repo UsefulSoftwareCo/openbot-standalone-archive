@@ -3,8 +3,8 @@ import type { OpenbotChannelId, OpenbotKnowledgeId, OpenbotProjectId } from "@t3
 export type ProjectSettingsTab = "knowledge" | "instructions";
 
 /**
- * What the main area is showing. OpenBot has no URL router; the selected chat
- * is the only part worth persisting between sessions.
+ * The addressable pages in the main area. Conversation identity is shared
+ * by standalone chats, project main chats, and child threads.
  */
 export type OpenbotRoute =
   | { readonly type: "chat"; readonly channelId: OpenbotChannelId }
@@ -53,3 +53,32 @@ export function detailsRailApplies(page: OpenbotPage | null): boolean {
 export function knowledgeReturnPage(page: KnowledgePage): OpenbotPage | null {
   return page.projectId === null ? null : projectKnowledgePage(page.projectId);
 }
+
+/** Every conversation has one canonical address, independent of its title. */
+export function channelHref(channelId: OpenbotChannelId): string {
+  return `/chats/${encodeURIComponent(channelId)}`;
+}
+
+/** Full-page navigation is encoded in the pathname, including editor ownership. */
+export function pageHref(page: OpenbotPage | null): string {
+  if (page === null) return "/";
+  switch (page.type) {
+    case "new-chat":
+      return "/chats/new";
+    case "computer":
+      return `${channelHref(page.channelId)}/computer`;
+    case "project-settings":
+      return `/projects/${encodeURIComponent(page.projectId)}/settings/${page.tab}`;
+    case "knowledge": {
+      const owner =
+        page.projectId === null ? "" : `/projects/${encodeURIComponent(page.projectId)}`;
+      return `${owner}/knowledge/${page.knowledgeId === null ? "new" : encodeURIComponent(page.knowledgeId)}`;
+    }
+  }
+}
+
+/** Root and unmatched addresses are explicit states, never a stored selection. */
+export type OpenbotScreen =
+  | OpenbotRoute
+  | { readonly type: "home" }
+  | { readonly type: "not-found" };

@@ -1,8 +1,9 @@
+import { Link, useBlocker, useNavigate, useRouter } from "@tanstack/react-router";
 import type { EnvironmentId, OpenbotChannelId, OpenbotProjectId } from "@t3tools/contracts";
 import { Button } from "@t3tools/ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "@t3tools/ui/dialog";
 import { Spinner } from "@t3tools/ui/spinner";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 
 import { ChannelView } from "./components/ChannelView";
 import { ChatHeader } from "./components/ChatHeader";
@@ -21,54 +22,38 @@ import {
   updateProject,
   useAtomCommand,
   useChannelView,
-  useChannels,
+  useChannelsState,
   useConnectionPhase,
   usePrimaryEnvironmentId,
   useProjectsState,
 } from "./state/channels";
 import { commandErrorText } from "./state/errors";
 import {
+  channelHref,
+  pageHref,
+  type OpenbotScreen,
   detailsRailApplies,
   knowledgeReturnPage,
   type OpenbotPage,
-  projectKnowledgePage,
 } from "./state/route";
 
 const ProjectIconPicker = lazy(() => import("./components/ProjectIconPicker"));
 
-const SELECTED_CHANNEL_KEY = "openbot:selected-channel";
-
-// Storage is unavailable in some embedded and privacy-mode browsers, where
-// reading it throws. Losing the remembered chat is fine; crashing is not.
-function readSelectedChannel(): OpenbotChannelId | null {
-  try {
-    const value = window.localStorage.getItem(SELECTED_CHANNEL_KEY);
-    return value === null || value === "" ? null : (value as OpenbotChannelId);
-  } catch {
-    return null;
-  }
-}
-
-function rememberSelectedChannel(channelId: OpenbotChannelId): void {
-  try {
-    window.localStorage.setItem(SELECTED_CHANNEL_KEY, channelId);
-  } catch {
-    // Nothing to do: the selection simply does not survive a reload.
-  }
-}
-
-export function App() {
+export function App({ route }: { readonly route: OpenbotScreen }) {
+  const navigate = useNavigate();
+  const router = useRouter();
   const environmentId = usePrimaryEnvironmentId();
   const phase = useConnectionPhase(environmentId);
-  const channels = useChannels(environmentId);
+  const channelsState = useChannelsState(environmentId);
+  const channels = channelsState.items;
   const projectsState = useProjectsState(environmentId);
   const projects = projectsState.items;
   const projectsLoading = projectsState.loading;
 
-  const [selectedChannelId, setSelectedChannelId] = useState<OpenbotChannelId | null>(
-    readSelectedChannel,
-  );
-  const [page, setPage] = useState<OpenbotPage | null>(null);
+  const activeChannelId =
+    route.type === "chat" || route.type === "computer" ? route.channelId : null;
+  const page: OpenbotPage | null =
+    route.type === "chat" || route.type === "home" || route.type === "not-found" ? null : route;
   const [unsaved, setUnsaved] = useState(false);
   const [search, setSearch] = useState("");
   const [detailsOpen, setDetailsOpen] = useState(true);
@@ -106,14 +91,17 @@ export function App() {
   const runUpdateProject = useAtomCommand(updateProject, { reportFailure: false });
   const runSend = useAtomCommand(sendChannelMessage, { reportFailure: false });
 
-  // Fall back to the first chat when the stored selection no longer exists.
-  const activeChannelId =
-    selectedChannelId !== null && channels.some((channel) => channel.id === selectedChannelId)
-      ? selectedChannelId
-      : (channels[0]?.id ?? null);
   useEffect(() => {
-    if (activeChannelId !== null) rememberSelectedChannel(activeChannelId);
-  }, [activeChannelId]);
+    if (route.type !== "home" || channelsState.loading || channelsState.error !== null) return;
+    void navigate({
+      to: channels[0] === undefined ? "/chats/new" : channelHref(channels[0].id),
+      replace: true,
+    });
+  }, [route.type, channelsState.loading, channelsState.error, channels, navigate]);
+  useBlocker({
+    shouldBlockFn: () => unsaved && !window.confirm("Discard your unsaved changes?"),
+    enableBeforeUnload: unsaved,
+  });
 
   const view = useChannelView(environmentId, page === null ? activeChannelId : null);
   const activeChannel = channels.find((channel) => channel.id === activeChannelId) ?? null;
@@ -139,28 +127,20 @@ export function App() {
       ? (projects.find((project) => project.id === page.projectId) ?? null)
       : null;
 
-  // A full-page editor owns unsaved text. Every way out of it goes through one
-  // guard, so the sidebar, the tabs and the back button all behave the same.
-  const confirmLeave = useCallback(
-    () => !unsaved || window.confirm("Discard your unsaved changes?"),
-    [unsaved],
-  );
-
   const openChannel = (channelId: OpenbotChannelId) => {
-    if (!confirmLeave()) return;
-    setUnsaved(false);
-    setSelectedChannelId(channelId);
-    setPage(null);
-    setSendError(null);
-    setSidebarOpen(false);
+    void navigate({ to: channelHref(channelId) });
   };
-
   const openPage = (next: OpenbotPage | null) => {
-    if (!confirmLeave()) return;
-    setUnsaved(false);
-    setPage(next);
-    setSidebarOpen(false);
+    void navigate({ to: pageHref(next) });
   };
+  useEffect(
+    () =>
+      router.subscribe("onResolved", () => {
+        setSendError(null);
+        setSidebarOpen(false);
+      }),
+    [router],
+  );
 
   const connectionLabel =
     environmentId === null
@@ -178,18 +158,15 @@ export function App() {
       activeChannelId={page === null ? activeChannelId : null}
       search={search}
       onSearchChange={setSearch}
-      onSelectChannel={openChannel}
       onOpenProjectIcon={(projectId) => {
         setIconError(null);
         setIconProjectId(projectId);
       }}
-      onOpenProjectSettings={(projectId) => openPage(projectKnowledgePage(projectId))}
       onNewProject={() => {
         setCreateProjectError(null);
         setSidebarOpen(false);
         setProjectDialogOpen(true);
       }}
-      onNewChat={() => openPage({ type: "new-chat" })}
       connectionLabel={connectionLabel}
     />
   );
@@ -226,6 +203,21 @@ export function App() {
               printed when it started.
             </p>
           </div>
+        ) : route.type === "not-found" ||
+          (route.type === "chat" &&
+            !channelsState.loading &&
+            channelsState.error === null &&
+            activeChannel === null) ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground text-sm">
+            <p>This page is unavailable. Choose a conversation from the sidebar.</p>
+            <Link to="/chats/new" className="underline">
+              New chat
+            </Link>
+          </div>
+        ) : channelsState.error !== null ? (
+          <p role="alert" className="p-4 text-error-foreground text-sm">
+            {channelsState.error}
+          </p>
         ) : page?.type === "project-settings" ? (
           settingsProject === null ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground text-sm">
@@ -262,7 +254,7 @@ export function App() {
             onCancel={() => openPage(knowledgeReturnPage(page))}
             onSaved={() => {
               setUnsaved(false);
-              setPage(knowledgeReturnPage(page));
+              void navigate({ to: pageHref(knowledgeReturnPage(page)), ignoreBlocker: true });
             }}
             onUnsavedChange={setUnsaved}
           />
@@ -271,10 +263,10 @@ export function App() {
             key={page.channelId}
             environmentId={environmentId}
             channelId={page.channelId}
-            onClose={() => openPage(null)}
+            onClose={() => openChannel(page.channelId)}
             onOpenSidebar={() => setSidebarOpen(true)}
           />
-        ) : page?.type === "new-chat" || channels.length === 0 ? (
+        ) : page?.type === "new-chat" ? (
           // An empty account lands here too: the draft page is also the way to
           // make the first chat, and the sidebar still offers a new project.
           <NewChatPage
@@ -282,7 +274,7 @@ export function App() {
             projects={projects}
             disabled={phase !== "ready"}
             onOpenSidebar={() => setSidebarOpen(true)}
-            onStart={() => setPage({ type: "new-chat" })}
+            onStart={() => openPage({ type: "new-chat" })}
             onCreated={openChannel}
           />
         ) : view === null || activeChannel === null ? (
@@ -313,7 +305,6 @@ export function App() {
               view={view}
               environmentId={environmentId}
               channelNames={channelNames}
-              onSelectChannel={openChannel}
               onContinue={(message) =>
                 void sendMessage(environmentId, {
                   channelId: activeChannel.id,

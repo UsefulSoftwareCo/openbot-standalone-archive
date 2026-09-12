@@ -3,7 +3,8 @@ import ReactDOM from "react-dom/client";
 
 import "./index.css";
 
-import { App } from "./App";
+import { RouterProvider } from "@tanstack/react-router";
+import { createOpenbotRouter } from "./router";
 import { bootstrapAuth } from "./auth";
 import { PairingGate } from "./components/PairingGate";
 import { AppAtomRegistryProvider } from "./connection/atomRuntime";
@@ -17,7 +18,7 @@ void bootstrapAuth().then((gate) => {
     <React.StrictMode>
       {gate.status === "authenticated" ? (
         <AppAtomRegistryProvider>
-          <App />
+          <RouterProvider router={createOpenbotRouter()} />
         </AppAtomRegistryProvider>
       ) : (
         <PairingGate errorMessage={gate.errorMessage} />

@@ -1,3 +1,5 @@
+import { Link } from "@tanstack/react-router";
+import { channelHref } from "../state/route";
 import type {
   EnvironmentId,
   OpenbotChannel,
@@ -239,7 +241,7 @@ export function ChatHeader({
             variant="ghost"
             size="xs"
             className="shrink-0"
-            onClick={() => onSelectChannel(parent.id)}
+            render={<Link to={channelHref(parent.id)} />}
           >
             <ArrowLeft />
             <span className="max-w-40 truncate">Back to {parent.name}</span>

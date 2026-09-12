@@ -1,3 +1,5 @@
+import { Link } from "@tanstack/react-router";
+import { channelHref, pageHref, projectKnowledgePage } from "../state/route";
 import type {
   OpenbotChannel,
   OpenbotChannelId,
@@ -32,11 +34,9 @@ function rowClass(selected: boolean): string {
 function ThreadList({
   threads,
   activeChannelId,
-  onSelect,
 }: {
   readonly threads: ReadonlyArray<OpenbotChannel>;
   readonly activeChannelId: OpenbotChannelId | null;
-  readonly onSelect: (channelId: OpenbotChannelId) => void;
 }) {
   if (threads.length === 0) return null;
   return (
@@ -44,10 +44,9 @@ function ThreadList({
       {threads.map((thread) => {
         const selected = thread.id === activeChannelId;
         return (
-          <button
+          <Link
             key={thread.id}
-            type="button"
-            onClick={() => onSelect(thread.id)}
+            to={channelHref(thread.id)}
             aria-current={selected ? "page" : undefined}
             className={cn(
               "openbot-thread-row",
@@ -57,7 +56,7 @@ function ThreadList({
             )}
           >
             <span className="truncate">{thread.name}</span>
-          </button>
+          </Link>
         );
       })}
     </div>
@@ -75,11 +74,8 @@ export function Sidebar({
   activeChannelId,
   search,
   onSearchChange,
-  onSelectChannel,
   onOpenProjectIcon,
-  onOpenProjectSettings,
   onNewProject,
-  onNewChat,
   connectionLabel,
 }: {
   readonly projects: ReadonlyArray<OpenbotProject>;
@@ -87,11 +83,8 @@ export function Sidebar({
   readonly activeChannelId: OpenbotChannelId | null;
   readonly search: string;
   readonly onSearchChange: (search: string) => void;
-  readonly onSelectChannel: (channelId: OpenbotChannelId) => void;
   readonly onOpenProjectIcon: (projectId: OpenbotProjectId) => void;
-  readonly onOpenProjectSettings: (projectId: OpenbotProjectId) => void;
   readonly onNewProject: () => void;
-  readonly onNewChat: () => void;
   readonly connectionLabel: string;
 }) {
   const groups = useMemo(
@@ -152,32 +145,24 @@ export function Sidebar({
                     >
                       <ProjectIcon icon={group.project.icon} size={17} />
                     </button>
-                    <button
-                      type="button"
-                      disabled={group.mainChannel === null}
-                      onClick={() => {
-                        if (group.mainChannel !== null) onSelectChannel(group.mainChannel.id);
-                      }}
+                    <Link
+                      to={channelHref(group.project.mainChannelId)}
                       aria-current={selected ? "page" : undefined}
                       className={cn(rowClass(selected), "pr-9 pl-10 disabled:opacity-64")}
                     >
                       <span className="truncate">{group.project.name}</span>
-                    </button>
+                    </Link>
                     <Button
                       variant="ghost"
                       size="icon-xs"
                       className="openbot-row-settings text-muted-foreground"
                       aria-label={`${group.project.name} settings`}
-                      onClick={() => onOpenProjectSettings(group.project.id)}
+                      render={<Link to={pageHref(projectKnowledgePage(group.project.id))} />}
                     >
                       <Settings />
                     </Button>
                   </div>
-                  <ThreadList
-                    threads={group.threads}
-                    activeChannelId={activeChannelId}
-                    onSelect={onSelectChannel}
-                  />
+                  <ThreadList threads={group.threads} activeChannelId={activeChannelId} />
                 </div>
               );
             })
@@ -189,7 +174,7 @@ export function Sidebar({
               className="size-11 md:size-7"
               variant="ghost-muted"
               aria-label="New chat"
-              onClick={onNewChat}
+              render={<Link to="/chats/new" />}
             >
               <Plus />
             </Button>
@@ -203,9 +188,8 @@ export function Sidebar({
               const selected = group.channel.id === activeChannelId;
               return (
                 <div key={group.channel.id} className="mb-1">
-                  <button
-                    type="button"
-                    onClick={() => onSelectChannel(group.channel.id)}
+                  <Link
+                    to={channelHref(group.channel.id)}
                     aria-current={selected ? "page" : undefined}
                     className={cn(rowClass(selected), "gap-2 px-2")}
                   >
@@ -215,12 +199,8 @@ export function Sidebar({
                       className="size-5"
                     />
                     <span className="truncate">{group.channel.name}</span>
-                  </button>
-                  <ThreadList
-                    threads={group.threads}
-                    activeChannelId={activeChannelId}
-                    onSelect={onSelectChannel}
-                  />
+                  </Link>
+                  <ThreadList threads={group.threads} activeChannelId={activeChannelId} />
                 </div>
               );
             })

@@ -42,7 +42,6 @@ export async function bootstrapAuth(): Promise<AuthGateState> {
       };
     } finally {
       const stripped = stripPairingTokenFromUrl(url);
-      stripped.pathname = "/";
       window.history.replaceState(null, "", stripped.toString());
     }
   }

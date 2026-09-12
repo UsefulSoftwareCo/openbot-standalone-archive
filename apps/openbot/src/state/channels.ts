@@ -136,6 +136,28 @@ export function usePrimaryEnvironmentId(): EnvironmentId | null {
   return useAtomValue(primaryEnvironmentIdAtom);
 }
 
+/** Distinguish an unresolved deep link from a missing conversation. */
+export function useChannelsState(environmentId: EnvironmentId | null): LiveList<OpenbotChannel> {
+  const result = useAtomValue(
+    environmentId === null ? EMPTY_CHANNELS_STATE_ATOM : channelsStateAtom(environmentId),
+  );
+  return result;
+}
+const EMPTY_CHANNELS_STATE_ATOM = Atom.make<LiveList<OpenbotChannel>>({
+  items: EMPTY_CHANNELS,
+  loading: true,
+  error: null,
+});
+const channelsStateAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get) =>
+    toLiveList(
+      get(channelsSubscription({ environmentId, input: {} })),
+      (value) => value.channels,
+      EMPTY_CHANNELS,
+    ),
+  ),
+);
+
 export function useChannels(environmentId: EnvironmentId | null): ReadonlyArray<OpenbotChannel> {
   return useAtomValue(
     environmentId === null ? EMPTY_CHANNELS_ATOM : channelsValueAtom(environmentId),
