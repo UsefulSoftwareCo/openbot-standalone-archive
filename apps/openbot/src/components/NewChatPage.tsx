@@ -7,22 +7,23 @@ import type {
 } from "@t3tools/contracts";
 import { Button } from "@t3tools/ui/button";
 import { Menu } from "lucide-react";
-import { type ComponentProps, useEffect, useId, useRef, useState } from "react";
+import { type ComponentProps, useEffect, useRef, useState } from "react";
 
 import { createChannel, sendChannelMessage, useAtomCommand } from "../state/channels";
 import { commandErrorText } from "../state/errors";
 import { type CommandAttempt, commandAttempt } from "../state/ids";
-import { providerModelSelection, useServerProviders } from "../state/providers";
+import { useServerProviders } from "../state/providers";
 import { Composer } from "./Composer";
+import { ModelPicker } from "./ModelPicker";
+import { resolveDefaultProviderModelSelection } from "@t3tools/ui/provider-instances";
+import { ComposerSelectControl } from "@t3tools/ui/composer-control";
+import { Select, SelectItem, SelectPopup, SelectValue } from "@t3tools/ui/select";
 import {
   chatTitleFromMessage,
   newChatAttemptPayload,
   newChatCreateInput,
   type NewChatDraft,
 } from "./NewChatPage.logic";
-
-const controlClass =
-  "h-7 max-w-44 cursor-pointer rounded-md border-0 bg-transparent px-1.5 text-muted-foreground text-xs outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-64";
 
 /**
  * The draft page: a composer with no chat behind it yet. The first message
@@ -62,8 +63,9 @@ export function NewChatPage({
       mounted.current = false;
     };
   }, []);
-  const modelListId = useId();
   const { items: providers, failed: providersFailed } = useServerProviders(environmentId);
+  const effectiveModel =
+    resolveDefaultProviderModelSelection(providers, modelSelection) ?? undefined;
   const create = useAtomCommand(createChannel, { reportFailure: false });
   const send = useAtomCommand(sendChannelMessage, { reportFailure: false });
   const project = projects.find((entry) => entry.id === projectId) ?? null;
@@ -86,7 +88,7 @@ export function NewChatPage({
           message.attachments.map((attachment) => attachment.name),
         ),
         parentChannelId: project?.mainChannelId ?? null,
-        modelSelection,
+        modelSelection: effectiveModel,
       };
       const next = commandAttempt(attempt.current, "chat-create", newChatAttemptPayload(draft));
       attempt.current = next;
@@ -139,67 +141,39 @@ export function NewChatPage({
         <Composer
           channelName="OpenBot"
           environmentId={environmentId}
-          disabled={disabled || modelSelection?.model.trim() === ""}
+          disabled={disabled || effectiveModel === undefined}
           autoFocus
           controls={
             <div className="flex min-w-0 items-center gap-1">
-              <select
-                aria-label="Project"
-                className={controlClass}
+              <Select
                 value={projectId ?? ""}
                 disabled={locked}
-                onChange={(event) =>
-                  setProjectId(
-                    projects.find((entry) => entry.id === event.target.value)?.id ?? null,
-                  )
+                items={[
+                  { value: "", label: "No project" },
+                  ...projects.map((entry) => ({ value: entry.id, label: entry.name })),
+                ]}
+                onValueChange={(id) =>
+                  setProjectId(projects.find((entry) => entry.id === id)?.id ?? null)
                 }
               >
-                <option value="">No project</option>
-                {projects.map((entry) => (
-                  <option key={entry.id} value={entry.id}>
-                    {entry.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                aria-label="Provider"
-                className={controlClass}
-                value={modelSelection?.instanceId ?? ""}
+                <ComposerSelectControl aria-label="Project" className="max-w-44">
+                  <SelectValue />
+                </ComposerSelectControl>
+                <SelectPopup alignItemWithTrigger={false}>
+                  <SelectItem value="">No project</SelectItem>
+                  {projects.map((entry) => (
+                    <SelectItem key={entry.id} value={entry.id}>
+                      {entry.name}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+              <ModelPicker
+                providers={providers}
+                selection={effectiveModel}
                 disabled={locked}
-                onChange={(event) =>
-                  setModelSelection(providerModelSelection(providers, event.target.value))
-                }
-              >
-                <option value="">Automatic</option>
-                {providers.map((provider) => (
-                  <option key={provider.instanceId} value={provider.instanceId}>
-                    {provider.displayName ?? provider.instanceId}
-                  </option>
-                ))}
-              </select>
-              {modelSelection !== undefined && (
-                <>
-                  <input
-                    aria-label="Model"
-                    list={modelListId}
-                    className={controlClass}
-                    value={modelSelection.model}
-                    disabled={locked}
-                    onChange={(event) =>
-                      setModelSelection({ ...modelSelection, model: event.target.value })
-                    }
-                  />
-                  <datalist id={modelListId}>
-                    {providers
-                      .find((provider) => provider.instanceId === modelSelection.instanceId)
-                      ?.models.map((model) => (
-                        <option key={model.slug} value={model.slug}>
-                          {model.name}
-                        </option>
-                      ))}
-                  </datalist>
-                </>
-              )}
+                onChange={setModelSelection}
+              />
               {providersFailed && <span role="alert">Could not load provider choices.</span>}
             </div>
           }

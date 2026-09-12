@@ -86,7 +86,6 @@ export function ChatSettingsDialog({
               value={draft}
               onChange={setDraft}
               disabled={busy}
-              allowAutomatic={false}
             />
             <p className="text-muted-foreground text-xs">
               Model changes apply to your next message. Existing routines keep their selected model.

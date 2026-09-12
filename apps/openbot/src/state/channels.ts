@@ -237,12 +237,6 @@ export const createAttachmentUpload = createEnvironmentRpcCommand(connectionAtom
 });
 /** Resolve signed asset URLs for image previews and downloads. */
 export const assetEnvironment = createAssetEnvironmentAtoms(connectionAtomRuntime);
-/** Server config: configured providers, their advertised models, and the environment label. */
-export const getServerConfig = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "openbot:server-config",
-  tag: WS_METHODS.serverGetConfig,
-});
-
 /** Save a chat's profile and model with a revision precondition. */
 export const updateChannel = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "openbot:channel-update",

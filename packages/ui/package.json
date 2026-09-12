@@ -71,6 +71,90 @@
     "./pending-user-input-logic": {
       "types": "./src/pending-user-input-logic.ts",
       "import": "./src/pending-user-input-logic.ts"
+    },
+    "./provider-model-picker": {
+      "types": "./src/model-picker/ProviderModelPicker.tsx",
+      "import": "./src/model-picker/ProviderModelPicker.tsx"
+    },
+    "./model-list-row": {
+      "types": "./src/model-picker/ModelListRow.tsx",
+      "import": "./src/model-picker/ModelListRow.tsx"
+    },
+    "./model-picker-sidebar": {
+      "types": "./src/model-picker/ModelPickerSidebar.tsx",
+      "import": "./src/model-picker/ModelPickerSidebar.tsx"
+    },
+    "./provider-instance-icon": {
+      "types": "./src/model-picker/ProviderInstanceIcon.tsx",
+      "import": "./src/model-picker/ProviderInstanceIcon.tsx"
+    },
+    "./provider-icon-utils": {
+      "types": "./src/model-picker/providerIconUtils.ts",
+      "import": "./src/model-picker/providerIconUtils.ts"
+    },
+    "./model-picker-search": {
+      "types": "./src/model-picker/modelPickerSearch.ts",
+      "import": "./src/model-picker/modelPickerSearch.ts"
+    },
+    "./provider-instances": {
+      "types": "./src/model-picker/providerInstances.ts",
+      "import": "./src/model-picker/providerInstances.ts"
+    },
+    "./provider-models": {
+      "types": "./src/model-picker/providerModels.ts",
+      "import": "./src/model-picker/providerModels.ts"
+    },
+    "./model-ordering": {
+      "types": "./src/model-picker/modelOrdering.ts",
+      "import": "./src/model-picker/modelOrdering.ts"
+    },
+    "./icons": {
+      "types": "./src/model-picker/Icons.tsx",
+      "import": "./src/model-picker/Icons.tsx"
+    },
+    "./combobox": {
+      "types": "./src/combobox.tsx",
+      "import": "./src/combobox.tsx"
+    },
+    "./popover": {
+      "types": "./src/popover.tsx",
+      "import": "./src/popover.tsx"
+    },
+    "./badge": {
+      "types": "./src/badge.tsx",
+      "import": "./src/badge.tsx"
+    },
+    "./kbd": {
+      "types": "./src/kbd.tsx",
+      "import": "./src/kbd.tsx"
+    },
+    "./select": {
+      "types": "./src/select.tsx",
+      "import": "./src/select.tsx"
+    },
+    "./separator": {
+      "types": "./src/separator.tsx",
+      "import": "./src/separator.tsx"
+    },
+    "./composer-control": {
+      "types": "./src/model-picker/ComposerControl.tsx",
+      "import": "./src/model-picker/ComposerControl.tsx"
+    },
+    "./model-picker-content": {
+      "types": "./src/model-picker/ModelPickerContent.tsx",
+      "import": "./src/model-picker/ModelPickerContent.tsx"
+    },
+    "./provider-status-banner": {
+      "types": "./src/model-picker/ProviderStatusBanner.tsx",
+      "import": "./src/model-picker/ProviderStatusBanner.tsx"
+    },
+    "./composer-event-scope": {
+      "types": "./src/model-picker/composerEventScope.ts",
+      "import": "./src/model-picker/composerEventScope.ts"
+    },
+    "./model-picker-keys": {
+      "types": "./src/model-picker/modelPickerKeys.ts",
+      "import": "./src/model-picker/modelPickerKeys.ts"
     }
   },
   "scripts": {
@@ -78,8 +162,11 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
+    "@legendapp/list": "catalog:",
     "@t3tools/contracts": "workspace:*",
+    "@t3tools/shared": "workspace:*",
     "class-variance-authority": "^0.7.1",
+    "effect": "catalog:",
     "lucide-react": "^0.564.0",
     "react": "19.2.6",
     "tailwind-merge": "^3.4.0"

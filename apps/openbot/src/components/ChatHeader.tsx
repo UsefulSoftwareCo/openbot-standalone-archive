@@ -24,6 +24,7 @@ import { useEffect, useState } from "react";
 
 import {
   cancelChannel,
+  updateChannel,
   snoozeChannel,
   startThread,
   useAtomCommand,
@@ -33,6 +34,8 @@ import { commandErrorText } from "../state/errors";
 import { ChatSettingsDialog } from "./ChatSettingsDialog";
 import { NewThreadDialog } from "./NewThreadDialog";
 import { ProjectIcon } from "./ProjectIcon";
+import { ModelPicker } from "./ModelPicker";
+import { useServerProviders } from "../state/providers";
 
 /**
  * A snooze stays on the thread as a raw timestamp; T3 never emits a wake
@@ -208,6 +211,8 @@ export function ChatHeader({
   const wake = useAtomCommand(wakeChannel, { reportFailure: false });
   const cancel = useAtomCommand(cancelChannel, { reportFailure: false });
   const start = useAtomCommand(startThread, { reportFailure: false });
+  const update = useAtomCommand(updateChannel, { reportFailure: false });
+  const { items: providers } = useServerProviders(environmentId);
 
   const isThread = parent !== null;
   const { channel } = view;
@@ -273,13 +278,35 @@ export function ChatHeader({
         </p>
       )}
       <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border/50 px-2 py-1.5 md:px-4">
+        <ModelPicker
+          providers={providers}
+          selection={channel.modelSelection}
+          disabled={busy}
+          onChange={async (modelSelection) => {
+            setBusy(true);
+            setError(null);
+            const result = await update({
+              environmentId,
+              input: {
+                channelId: channel.id,
+                expectedRevision: channel.revision,
+                name: channel.name,
+                avatar: channel.avatar,
+                description: channel.description,
+                modelSelection,
+              },
+            });
+            setBusy(false);
+            if (result._tag === "Failure") setError(commandErrorText(result));
+          }}
+        />
         <Button
           variant="ghost"
           size="xs"
           className="text-muted-foreground"
           onClick={() => setSettingsOpen(true)}
         >
-          {channel.modelSelection.model}
+          Chat settings
         </Button>
         {!isThread && (
           <Button
