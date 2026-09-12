@@ -28,6 +28,7 @@ export function ProjectSettingsPage(props: {
   readonly tab: SettingsTab;
   readonly onTabChange: (tab: SettingsTab) => void;
   readonly onBack: () => void;
+  readonly onDelete: () => void;
   readonly onOpenKnowledge: (knowledgeId: OpenbotKnowledgeId) => void;
   readonly onNewKnowledge: () => void;
   /** Reports whether leaving this page would discard an edit. */
@@ -39,6 +40,7 @@ export function ProjectSettingsPage(props: {
     tab,
     onTabChange,
     onBack,
+    onDelete,
     onOpenKnowledge,
     onNewKnowledge,
     onUnsavedChange,
@@ -88,6 +90,11 @@ export function ProjectSettingsPage(props: {
               onUnsavedChange={onUnsavedChange}
             />
           )}
+        </div>
+        <div className="mt-10 border-t border-border pt-5">
+          <Button variant="destructive-outline" size="sm" onClick={onDelete}>
+            Delete project
+          </Button>
         </div>
       </div>
     </div>

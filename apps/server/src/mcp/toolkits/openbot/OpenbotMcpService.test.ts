@@ -495,3 +495,30 @@ it.effect("maps service error codes onto the agent-facing failure codes", () =>
     }
   }),
 );
+
+it.effect("allows explicitly targeted self deletion and allocates a fresh command on retry", () =>
+  Effect.gen(function* () {
+    const commands: string[] = [];
+    yield* useService(
+      {
+        deleteChannel: (input) =>
+          Effect.sync(() => {
+            assert.equal(input.channelId, callerChannelId);
+            commands.push(input.commandId);
+          }),
+        deleteProject: (input) =>
+          Effect.sync(() => {
+            assert.equal(input.projectId, projectId);
+            commands.push(input.commandId);
+          }),
+      },
+      (service) =>
+        Effect.gen(function* () {
+          yield* service.deleteChat(scope, { channelId: callerChannelId });
+          yield* service.deleteChat(scope, { channelId: callerChannelId });
+          yield* service.deleteProject(scope, { projectId });
+        }),
+    );
+    assert.equal(new Set(commands).size, 3);
+  }),
+);

@@ -8,6 +8,8 @@ import {
   OpenbotKnowledgeListInput,
   OpenbotKnowledgeListResult,
   OpenbotMcpCreateProjectInput,
+  OpenbotMcpDeleteChatInput,
+  OpenbotMcpDeleteProjectInput,
   OpenbotMcpKnowledgeWriteInput,
   OpenbotMcpCreateChatInput,
   OpenbotMcpListThreadsInput,
@@ -408,6 +410,34 @@ export const OpenbotUpdateInstructionsTool = Tool.make("openbot_update_instructi
   .annotate(Tool.Destructive, false)
   .annotate(Tool.OpenWorld, false);
 
+export const OpenbotDeleteChatTool = Tool.make("openbot_delete_chat", {
+  description:
+    "Delete an OpenBot chat and every child chat under it. Only call this when the person has explicitly asked for this chat to be deleted; never on your own initiative, never to tidy up, and never as a follow-up to finishing work. This is destructive and cannot be undone from the app: the chat, its messages, and its children disappear from every surface. Work in flight is cancelled. Deleting an already-deleted chat succeeds and changes nothing. A project's main chat is refused; delete the project with openbot_delete_project instead. Deleting your own chat or its parent cancels this run. To stop work without removing the chat, use openbot_cancel_thread.",
+  parameters: OpenbotMcpDeleteChatInput,
+  failure: OpenbotMcpFailure,
+  failureMode: "return",
+  dependencies,
+})
+  .annotate(Tool.Title, "Delete a chat")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, true)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
+export const OpenbotDeleteProjectTool = Tool.make("openbot_delete_project", {
+  description:
+    "Delete an OpenBot project together with its main chat and all of that chat's child chats, and its unshared owned knowledge entries. Only call this when the person has explicitly asked for this project to be deleted; never on your own initiative. This is destructive and cannot be undone from the app. The working directory on disk is kept and is never touched, and knowledge shared with other projects is kept. Deleting an already-deleted project succeeds and changes nothing. Deleting your own project cancels this run.",
+  parameters: OpenbotMcpDeleteProjectInput,
+  failure: OpenbotMcpFailure,
+  failureMode: "return",
+  dependencies,
+})
+  .annotate(Tool.Title, "Delete a project")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, true)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
 export const OpenbotAskQuestionTool = Tool.make("openbot_ask_question", {
   description:
     "Ask the person one or more multiple-choice questions, then end your turn. This does not block and does not return an answer: it puts the questions in the chat as pickable options with a free-text box, and returns a requestId. Stop working and finish the turn immediately after calling it; the answer comes back as the ordinary next user message and wakes you again, so anything you do after this call happens before the person has decided. Ask everything you need in one call (up to 5 questions, 8 options each) rather than one question per turn. Use this only for a real fork in the work; if you just want to say something, use openbot_send_message. An unanswered question stays in the chat and can still be answered in a later turn. Retrying with the same clientRequestId returns the same requestId instead of asking twice.",
@@ -450,4 +480,6 @@ export const OpenbotToolkit = Toolkit.make(
   OpenbotCreateChatTool,
   OpenbotUpdateChatTool,
   OpenbotUpdateInstructionsTool,
+  OpenbotDeleteChatTool,
+  OpenbotDeleteProjectTool,
 );

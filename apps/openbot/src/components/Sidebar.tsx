@@ -10,11 +10,10 @@ import { Button } from "@t3tools/ui/button";
 import { cn } from "@t3tools/ui/cn";
 import { Input } from "@t3tools/ui/input";
 import { ScrollArea } from "@t3tools/ui/scroll-area";
-import { Bot, Plus, Settings } from "lucide-react";
+import { Bot, Plus, Settings, Trash2 } from "lucide-react";
 import { useMemo } from "react";
 
 import { buildSidebarGroups } from "../state/sidebar";
-import { ChatAvatar } from "./ChatProfileFields";
 import { ProjectIcon } from "./ProjectIcon";
 
 const sectionLabelClass =
@@ -34,7 +33,9 @@ function rowClass(selected: boolean): string {
 function ThreadList({
   threads,
   activeChannelId,
+  onDelete,
 }: {
+  readonly onDelete: (channel: OpenbotChannel) => void;
   readonly threads: ReadonlyArray<OpenbotChannel>;
   readonly activeChannelId: OpenbotChannelId | null;
 }) {
@@ -44,19 +45,21 @@ function ThreadList({
       {threads.map((thread) => {
         const selected = thread.id === activeChannelId;
         return (
-          <Link
-            key={thread.id}
-            to={channelHref(thread.id)}
-            aria-current={selected ? "page" : undefined}
-            className={cn(
-              "openbot-thread-row",
-              selected
-                ? "bg-sidebar-row-selected text-foreground"
-                : "text-sidebar-muted-foreground hover:text-foreground",
-            )}
-          >
-            <span className="truncate">{thread.name}</span>
-          </Link>
+          <div key={thread.id} className="openbot-row">
+            <Link
+              to={channelHref(thread.id)}
+              aria-current={selected ? "page" : undefined}
+              className={cn(
+                "openbot-thread-row",
+                selected
+                  ? "bg-sidebar-row-selected text-foreground"
+                  : "text-sidebar-muted-foreground hover:text-foreground",
+              )}
+            >
+              <span className="truncate">{thread.name}</span>
+            </Link>
+            <DeleteChatButton channel={thread} onDelete={onDelete} />
+          </div>
         );
       })}
     </div>
@@ -77,6 +80,7 @@ export function Sidebar({
   onOpenProjectIcon,
   onNewProject,
   connectionLabel,
+  onDeleteChannel,
 }: {
   readonly projects: ReadonlyArray<OpenbotProject>;
   readonly channels: ReadonlyArray<OpenbotChannel>;
@@ -86,6 +90,7 @@ export function Sidebar({
   readonly onOpenProjectIcon: (projectId: OpenbotProjectId) => void;
   readonly onNewProject: () => void;
   readonly connectionLabel: string;
+  readonly onDeleteChannel: (channel: OpenbotChannel) => void;
 }) {
   const groups = useMemo(
     () => buildSidebarGroups(projects, channels, search),
@@ -162,7 +167,11 @@ export function Sidebar({
                       <Settings />
                     </Button>
                   </div>
-                  <ThreadList threads={group.threads} activeChannelId={activeChannelId} />
+                  <ThreadList
+                    threads={group.threads}
+                    activeChannelId={activeChannelId}
+                    onDelete={onDeleteChannel}
+                  />
                 </div>
               );
             })
@@ -188,19 +197,21 @@ export function Sidebar({
               const selected = group.channel.id === activeChannelId;
               return (
                 <div key={group.channel.id} className="mb-1">
-                  <Link
-                    to={channelHref(group.channel.id)}
-                    aria-current={selected ? "page" : undefined}
-                    className={cn(rowClass(selected), "gap-2 px-2")}
-                  >
-                    <ChatAvatar
-                      avatar={group.channel.avatar}
-                      name={group.channel.name}
-                      className="size-5"
-                    />
-                    <span className="truncate">{group.channel.name}</span>
-                  </Link>
-                  <ThreadList threads={group.threads} activeChannelId={activeChannelId} />
+                  <div className="openbot-row">
+                    <Link
+                      to={channelHref(group.channel.id)}
+                      aria-current={selected ? "page" : undefined}
+                      className={cn(rowClass(selected), "pr-9 pl-2")}
+                    >
+                      <span className="truncate">{group.channel.name}</span>
+                    </Link>
+                    <DeleteChatButton channel={group.channel} onDelete={onDeleteChannel} />
+                  </div>
+                  <ThreadList
+                    threads={group.threads}
+                    activeChannelId={activeChannelId}
+                    onDelete={onDeleteChannel}
+                  />
                 </div>
               );
             })
@@ -213,5 +224,26 @@ export function Sidebar({
         <span className="truncate">{connectionLabel}</span>
       </div>
     </aside>
+  );
+}
+
+/** Deletion is a separate control so the chat remains a normal browser link. */
+function DeleteChatButton({
+  channel,
+  onDelete,
+}: {
+  readonly channel: OpenbotChannel;
+  readonly onDelete: (channel: OpenbotChannel) => void;
+}) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon-xs"
+      className="openbot-row-settings text-muted-foreground hover:text-destructive-foreground"
+      aria-label={`Delete ${channel.name}`}
+      onClick={() => onDelete(channel)}
+    >
+      <Trash2 />
+    </Button>
   );
 }

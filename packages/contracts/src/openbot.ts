@@ -195,6 +195,18 @@ export const OpenbotProjectGetInput = Schema.Struct({ projectId: OpenbotProjectI
 export type OpenbotProjectGetInput = typeof OpenbotProjectGetInput.Type;
 
 /**
+ * Tombstone a project together with its main chat and that chat's children.
+ * Deleting an already-deleted project succeeds and changes nothing, so a retry
+ * after a dropped socket is safe. `commandId` seeds the durable thread-deletion
+ * commands; a replay with the same id replays the same receipts.
+ */
+export const OpenbotProjectDeleteInput = Schema.Struct({
+  projectId: OpenbotProjectId,
+  commandId: CommandId,
+});
+export type OpenbotProjectDeleteInput = typeof OpenbotProjectDeleteInput.Type;
+
+/**
  * Durable knowledge with stable identity. One record can be relevant to several
  * projects; links guide retrieval and never grant access. Useful references and
  * caveats live in the body text.
@@ -463,6 +475,17 @@ export const OpenbotChannelUpdateInput = Schema.Struct({
 });
 export type OpenbotChannelUpdateInput = typeof OpenbotChannelUpdateInput.Type;
 
+/**
+ * Tombstone a chat and every child chat under it. A project's main chat is
+ * refused: deleting it means deleting the project. Deleting a chat that is
+ * already gone succeeds and changes nothing.
+ */
+export const OpenbotChannelDeleteInput = Schema.Struct({
+  channelId: OpenbotChannelId,
+  commandId: CommandId,
+});
+export type OpenbotChannelDeleteInput = typeof OpenbotChannelDeleteInput.Type;
+
 export const OpenbotChannelSubscribeInput = Schema.Struct({
   channelId: OpenbotChannelId,
 });
@@ -498,6 +521,13 @@ export class OpenbotError extends Schema.TaggedErrorClass<OpenbotError>()("Openb
     "project_not_found",
     "knowledge_not_found",
     "knowledge_conflict",
+    // A deterministic id (a create command id, or a parent plus request key)
+    // names something that was deleted. Deletion is final, so the request is
+    // refused instead of quietly rebuilding what the person removed.
+    "channel_deleted",
+    "project_deleted",
+    /** A project's main chat cannot be deleted on its own; delete the project. */
+    "delete_project_instead",
     "nesting_not_allowed",
     "request_not_found",
     "no_provider_available",
@@ -727,6 +757,22 @@ export const OpenbotMcpCreateProjectInput = Schema.Struct({
 export type OpenbotMcpCreateProjectInput = typeof OpenbotMcpCreateProjectInput.Type;
 export const OpenbotMcpUpdateProjectInput = OpenbotProjectUpdateInput;
 export type OpenbotMcpUpdateProjectInput = typeof OpenbotMcpUpdateProjectInput.Type;
+
+// Deletion from an agent always names its target: there is no "this chat"
+// default, so destructive requests always name their intended target.
+// The command id is allocated by the server, never by the model.
+export const OpenbotMcpDeleteChatInput = Schema.Struct({
+  channelId: OpenbotChannelId.annotate({
+    description: "The chat the person explicitly asked to delete.",
+  }),
+});
+export type OpenbotMcpDeleteChatInput = typeof OpenbotMcpDeleteChatInput.Type;
+export const OpenbotMcpDeleteProjectInput = Schema.Struct({
+  projectId: OpenbotProjectId.annotate({
+    description: "The project the person explicitly asked to delete.",
+  }),
+});
+export type OpenbotMcpDeleteProjectInput = typeof OpenbotMcpDeleteProjectInput.Type;
 
 export const OpenbotIconMatch = Schema.Struct({
   name: OpenbotProjectIconName,

@@ -382,3 +382,13 @@ export const cancelChannel = createEnvironmentRpcCommand(connectionAtomRuntime, 
   label: "openbot:channel-cancel",
   tag: WS_METHODS.openbotChannelCancel,
 });
+
+/** Delete through the same server operations exposed to agents. */
+export const deleteChannel = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:channel-delete",
+  tag: WS_METHODS.openbotChannelDelete,
+});
+export const deleteProject = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "openbot:project-delete",
+  tag: WS_METHODS.openbotProjectDelete,
+});

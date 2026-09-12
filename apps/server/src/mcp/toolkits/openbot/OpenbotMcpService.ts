@@ -13,6 +13,8 @@ import {
   type OpenbotKnowledgeListResult,
   type OpenbotMcpCreateChatInput,
   type OpenbotMcpCreateProjectInput,
+  type OpenbotMcpDeleteChatInput,
+  type OpenbotMcpDeleteProjectInput,
   type OpenbotMcpKnowledgeWriteInput,
   type OpenbotMcpListThreadsInput,
   type OpenbotMcpListThreadsResult,
@@ -104,6 +106,14 @@ export class OpenbotMcpService extends Context.Service<
       scope: McpInvocationScope,
       input: OpenbotMcpUpdateProjectInput,
     ) => Effect.Effect<OpenbotProject, OpenbotMcpFailure>;
+    readonly deleteChat: (
+      scope: McpInvocationScope,
+      input: OpenbotMcpDeleteChatInput,
+    ) => Effect.Effect<void, OpenbotMcpFailure>;
+    readonly deleteProject: (
+      scope: McpInvocationScope,
+      input: OpenbotMcpDeleteProjectInput,
+    ) => Effect.Effect<void, OpenbotMcpFailure>;
     readonly searchIcons: (
       scope: McpInvocationScope,
       input: OpenbotMcpSearchIconsInput,
@@ -191,6 +201,9 @@ function toFailure(error: OpenbotError): OpenbotMcpFailure {
     case "profile_conflict":
     case "context_conflict":
     case "peer_request_invalid":
+    case "channel_deleted":
+    case "project_deleted":
+    case "delete_project_instead":
       return failure("request_conflict", error.message);
     default:
       return failure("operation_failed", error.message);
@@ -364,6 +377,37 @@ const make = Effect.gen(function* () {
       .pipe(Effect.mapError(toFailure));
   });
 
+  /**
+   * A deletion command id is allocated fresh per call rather than derived from
+   * the target, the way `wake` and `setModel` allocate theirs: each attempt is
+   * its own logical mutation, so a retry after a partial failure resumes the
+   * cascade instead of replaying a rejected receipt. Idempotence comes from the
+   * tombstone, not from the command id.
+   */
+  const deletionCommandId = (kind: "chat" | "project") =>
+    crypto.randomUUIDv4.pipe(
+      Effect.orDie,
+      Effect.map((id) => CommandId.make(`command:openbot:delete-${kind}:${id}`)),
+    );
+
+  const deleteChat = Effect.fn(function* (
+    _scope: McpInvocationScope,
+    input: OpenbotMcpDeleteChatInput,
+  ) {
+    yield* channels
+      .deleteChannel({ channelId: input.channelId, commandId: yield* deletionCommandId("chat") })
+      .pipe(Effect.mapError(toFailure));
+  });
+
+  const deleteProject = Effect.fn(function* (
+    _scope: McpInvocationScope,
+    input: OpenbotMcpDeleteProjectInput,
+  ) {
+    yield* channels
+      .deleteProject({ projectId: input.projectId, commandId: yield* deletionCommandId("project") })
+      .pipe(Effect.mapError(toFailure));
+  });
+
   const startThread = Effect.fn(function* (
     scope: McpInvocationScope,
     input: OpenbotMcpStartThreadInput,
@@ -444,6 +488,8 @@ const make = Effect.gen(function* () {
         .pipe(Effect.mapError(toFailure)),
     updateProject: (_scope, input) =>
       channels.updateProject(input).pipe(Effect.mapError(toFailure)),
+    deleteChat,
+    deleteProject,
     searchIcons: (_scope, input) => Effect.succeed(searchOpenbotIcons(input.query, input.limit)),
     knowledgeList: (_scope, input) =>
       channels.listKnowledge(input).pipe(Effect.mapError(toFailure)),

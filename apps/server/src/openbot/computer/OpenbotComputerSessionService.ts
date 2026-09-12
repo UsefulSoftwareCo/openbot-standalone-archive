@@ -1076,6 +1076,11 @@ export const make = Effect.gen(function* () {
 
   const destroyDisplay: OpenbotComputerSessionShape["destroyDisplay"] = (displayId) =>
     backend.destroyDisplay(displayId).pipe(
+      // The host may have completed a previous request before its reply was
+      // lost. Local viewers and held input still need to be released on retry.
+      Effect.catch((error) =>
+        error.code === "display_not_found" ? Effect.void : Effect.fail(error),
+      ),
       Effect.andThen(
         Effect.gen(function* () {
           const keys = yield* connectionsOnDisplay(displayId);

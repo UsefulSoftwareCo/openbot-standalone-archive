@@ -33,7 +33,6 @@ export function ChatSettingsDialog({
 }) {
   const [draft, setDraft] = useState<ChatProfileDraft>(channel);
   const [revision, setRevision] = useState(channel.revision);
-  const [avatarBusy, setAvatarBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const save = useAtomCommand(updateChannel, { reportFailure: false });
@@ -50,7 +49,7 @@ export function ChatSettingsDialog({
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (busy || avatarBusy) return;
+        if (busy) return;
         if (next) load();
         onOpenChange(next);
       }}
@@ -59,7 +58,7 @@ export function ChatSettingsDialog({
         <form
           onSubmit={async (event) => {
             event.preventDefault();
-            if (busy || avatarBusy || incomplete || draft.modelSelection === undefined) return;
+            if (busy || incomplete || draft.modelSelection === undefined) return;
             setBusy(true);
             setError(null);
             const result = await save({
@@ -86,9 +85,8 @@ export function ChatSettingsDialog({
               environmentId={environmentId}
               value={draft}
               onChange={setDraft}
-              disabled={busy || avatarBusy}
+              disabled={busy}
               allowAutomatic={false}
-              onBusyChange={setAvatarBusy}
             />
             <p className="text-muted-foreground text-xs">
               Model changes apply to your next message. Existing routines keep their selected model.
@@ -101,10 +99,10 @@ export function ChatSettingsDialog({
             )}
           </DialogPanel>
           <DialogFooter>
-            <Button type="button" variant="ghost" disabled={busy || avatarBusy} onClick={load}>
+            <Button type="button" variant="ghost" disabled={busy} onClick={load}>
               Load latest
             </Button>
-            <Button type="submit" disabled={busy || avatarBusy || incomplete}>
+            <Button type="submit" disabled={busy || incomplete}>
               {busy ? "Saving…" : "Save"}
             </Button>
           </DialogFooter>

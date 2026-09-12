@@ -43,6 +43,9 @@ import {
   layer as openbotChannelServiceLayer,
   turnInstructionsLayer,
 } from "./OpenbotChannelService.ts";
+import { layer as scheduledTaskLayer } from "../scheduledTasks/ScheduledTaskService.ts";
+import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts";
+import { OpenbotChatComputerService } from "./computer/OpenbotChatComputer.ts";
 import { layer as openbotChannelStoreLayer } from "./OpenbotChannelStore.ts";
 
 /**
@@ -105,6 +108,13 @@ export const makeOpenbotTestLayer = (prefix: string) => {
     orchestrationLayer,
     OrchestrationV2EventSinkLayerLive,
   ).pipe(
+    Layer.provideMerge(
+      scheduledTaskLayer.pipe(
+        Layer.provide(orchestrationLayer),
+        Layer.provide(Layer.mock(ThreadLaunchService)({})),
+      ),
+    ),
+    Layer.provide(Layer.mock(OpenbotChatComputerService)({ release: () => Effect.void })),
     Layer.provideMerge(ProjectServiceLayerLive),
     Layer.provide(
       Layer.mock(ProjectEnrichmentService)({
@@ -133,7 +143,7 @@ export const makeOpenbotTestLayer = (prefix: string) => {
     ),
     Layer.provide(Layer.mock(VcsProvisioningService)({ initRepository: () => Effect.void })),
     Layer.provide(mcpSessionRegistryTestLayer),
-    Layer.provide(SqlitePersistenceMemory),
+    Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provide(
       CheckpointStore.layer.pipe(
         Layer.provide(

@@ -1,9 +1,7 @@
 import type { EnvironmentId, ModelSelection } from "@t3tools/contracts";
 import { Input } from "@t3tools/ui/input";
-import { Button } from "@t3tools/ui/button";
-import { useId, useState } from "react";
+import { useId } from "react";
 import { providerModelSelection, useServerProviders } from "../state/providers";
-import { TerminalAvatar } from "./TerminalAvatar";
 
 /** Editable chat identity and next-message model selection. */
 export interface ChatProfileDraft {
@@ -13,29 +11,6 @@ export interface ChatProfileDraft {
   readonly modelSelection: ModelSelection | undefined;
 }
 
-/** A local avatar never fetches an external image URL. */
-export function ChatAvatar({
-  avatar,
-  name,
-  className = "size-7",
-}: {
-  readonly avatar: string;
-  readonly name: string;
-  readonly className?: string;
-}) {
-  if (avatar === "") return <TerminalAvatar name={name} className={className} />;
-  return avatar.startsWith("data:image/") ? (
-    <img src={avatar} alt="" className={`${className} shrink-0 rounded-lg object-cover`} />
-  ) : (
-    <span
-      aria-hidden="true"
-      className={`${className} grid shrink-0 place-items-center rounded-lg bg-muted text-sm`}
-    >
-      {avatar}
-    </span>
-  );
-}
-
 /** Shared creation/settings fields; provider choices come from the connected server. */
 export function ChatProfileFields({
   environmentId,
@@ -43,66 +18,20 @@ export function ChatProfileFields({
   onChange,
   disabled,
   allowAutomatic = true,
-  onBusyChange,
 }: {
   readonly environmentId: EnvironmentId;
   readonly value: ChatProfileDraft;
   readonly onChange: (draft: ChatProfileDraft) => void;
   readonly disabled: boolean;
   readonly allowAutomatic?: boolean;
-  readonly onBusyChange: (busy: boolean) => void;
 }) {
   const { items: providers, failed: providerError } = useServerProviders(environmentId);
-  const [avatarError, setAvatarError] = useState<string | null>(null);
-  const [avatarBusy, setAvatarBusy] = useState(false);
   const modelListId = useId();
   const selected = providers.find(
     (provider) => provider.instanceId === value.modelSelection?.instanceId,
   );
-  const uploadAvatar = async (file: File) => {
-    setAvatarBusy(true);
-    onBusyChange(true);
-    setAvatarError(null);
-    try {
-      if (!file.type.startsWith("image/") || file.size > 10 * 1024 * 1024) {
-        setAvatarError("Choose an image up to 10 MB.");
-        return;
-      }
-      const bitmap = await createImageBitmap(file);
-      try {
-        const canvas = document.createElement("canvas");
-        canvas.width = 96;
-        canvas.height = 96;
-        const context = canvas.getContext("2d");
-        if (context === null) {
-          setAvatarError("This browser cannot prepare the image.");
-          return;
-        }
-        const size = Math.min(bitmap.width, bitmap.height);
-        context.drawImage(
-          bitmap,
-          (bitmap.width - size) / 2,
-          (bitmap.height - size) / 2,
-          size,
-          size,
-          0,
-          0,
-          96,
-          96,
-        );
-        onChange({ ...value, avatar: canvas.toDataURL("image/webp", 0.85) });
-      } finally {
-        bitmap.close();
-      }
-    } catch {
-      setAvatarError("Could not read this image. Try PNG or JPEG.");
-    } finally {
-      setAvatarBusy(false);
-      onBusyChange(false);
-    }
-  };
   return (
-    <fieldset disabled={disabled || avatarBusy} className="flex flex-col gap-4">
+    <fieldset disabled={disabled} className="flex flex-col gap-4">
       <label className="flex flex-col gap-1 text-sm">
         Name
         <Input
@@ -112,39 +41,6 @@ export function ChatProfileFields({
           onChange={(event) => onChange({ ...value, name: event.target.value })}
         />
       </label>
-      <div className="flex items-center gap-3">
-        <ChatAvatar avatar={value.avatar} name={value.name} className="size-12" />
-        <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
-          Avatar emoji
-          <Input
-            value={value.avatar.startsWith("data:image/") ? "" : value.avatar}
-            maxLength={16}
-            placeholder="e.g. 🌱"
-            onChange={(event) => onChange({ ...value, avatar: event.target.value })}
-          />
-        </label>
-        <Button type="button" variant="ghost" onClick={() => onChange({ ...value, avatar: "" })}>
-          Reset
-        </Button>
-      </div>
-      <label className="flex flex-col gap-1 text-sm">
-        Upload avatar
-        <input
-          type="file"
-          accept="image/*"
-          className="text-xs"
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file !== undefined) void uploadAvatar(file);
-            event.target.value = "";
-          }}
-        />
-      </label>
-      {avatarError !== null && (
-        <p role="alert" className="text-xs text-error-foreground">
-          {avatarError}
-        </p>
-      )}
       <label className="flex flex-col gap-1 text-sm">
         Description
         <textarea

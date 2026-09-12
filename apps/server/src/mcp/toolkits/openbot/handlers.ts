@@ -47,6 +47,8 @@ const handlers = {
   openbot_update_chat: (input) => call((service, scope) => service.updateChat(scope, input)),
   openbot_update_instructions: (input) =>
     call((service, scope) => service.updateInstructions(scope, input)),
+  openbot_delete_chat: (input) => call((service, scope) => service.deleteChat(scope, input)),
+  openbot_delete_project: (input) => call((service, scope) => service.deleteProject(scope, input)),
 } satisfies Parameters<typeof OpenbotToolkit.toLayer>[0];
 
 export const OpenbotToolkitHandlersLive = OpenbotToolkit.toLayer(handlers);

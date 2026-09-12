@@ -236,10 +236,22 @@ const threadLifecycleProvided = threadLifecycleServiceLayer.pipe(
 const scheduledTaskProvided = scheduledTaskServiceLayer.pipe(
   Layer.provide(Layer.mergeAll(threadLaunchProvided, threadManagementProvided)),
 );
+const openbotComputerProvided = openbotComputerSessionLayer.pipe(
+  Layer.provide(computerBackendLayer),
+);
+// The chat-scoped owner of those displays. It needs the session for the host
+// itself and the channel store to answer "whose computer is this", and is the
+// only thing above the session that decides which display a chat means.
+const openbotChatComputerProvided = openbotChatComputerLayer.pipe(
+  Layer.provide(Layer.merge(openbotComputerProvided, openbotChannelStoreLayer)),
+);
+
 const openbotChannelProvided = openbotChannelServiceLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
       openbotChannelStoreLayer,
+      scheduledTaskProvided,
+      openbotChatComputerProvided,
       ProjectServiceLayerLive,
       threadManagementProvided,
       idAllocatorLayer,
@@ -302,16 +314,6 @@ export const OrchestrationV2LayerLive = Layer.mergeAll(
   providerRuntimeRecoveryProvided,
   projectionMaintenanceProvided,
   legacyV1ThreadImporterProvided,
-);
-
-const openbotComputerProvided = openbotComputerSessionLayer.pipe(
-  Layer.provide(computerBackendLayer),
-);
-// The chat-scoped owner of those displays. It needs the session for the host
-// itself and the channel store to answer "whose computer is this", and is the
-// only thing above the session that decides which display a chat means.
-const openbotChatComputerProvided = openbotChatComputerLayer.pipe(
-  Layer.provide(Layer.merge(openbotComputerProvided, openbotChannelStoreLayer)),
 );
 
 export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(

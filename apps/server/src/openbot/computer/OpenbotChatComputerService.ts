@@ -16,6 +16,7 @@ import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as Semaphore from "effect/Semaphore";
 
 import { OpenbotChannelStore } from "../OpenbotChannelStore.ts";
 import {
@@ -68,7 +69,8 @@ type ChatDisplayEntry =
       readonly kind: "provisioning";
       readonly pending: Deferred.Deferred<OpenbotComputerDisplay, OpenbotComputerError>;
     }
-  | { readonly kind: "unavailable"; readonly detail: string };
+  | { readonly kind: "unavailable"; readonly detail: string }
+  | { readonly kind: "released"; readonly display: OpenbotComputerDisplay | null };
 
 /** What one pass of `acquire` decided to do, settled inside a single atomic
     read-modify-write so two callers cannot both decide to create. */
@@ -78,7 +80,8 @@ type AcquireDecision =
       readonly kind: "await";
       readonly pending: Deferred.Deferred<OpenbotComputerDisplay, OpenbotComputerError>;
     }
-  | { readonly kind: "create" };
+  | { readonly kind: "create" }
+  | { readonly kind: "released" };
 
 /** What one pass of `acquire` came back with: the chat's display, or a
     remembered display the host has since lost, which sends the caller round
@@ -100,6 +103,16 @@ export const make = Effect.gen(function* () {
   const session = yield* OpenbotComputerSession;
   const store = yield* OpenbotChannelStore;
 
+  const ownerLocks = yield* Ref.make<ReadonlyMap<OpenbotChannelId, Semaphore.Semaphore>>(new Map());
+  const ownerLock = Effect.fn(function* (channelId: OpenbotChannelId) {
+    const candidate = yield* Semaphore.make(1);
+    return yield* Ref.modify(ownerLocks, (locks) => {
+      const existing = locks.get(channelId);
+      return existing === undefined
+        ? ([candidate, new Map(locks).set(channelId, candidate)] as const)
+        : ([existing, locks] as const);
+    });
+  });
   const entries = yield* Ref.make<ReadonlyMap<OpenbotChannelId, ChatDisplayEntry>>(new Map());
   /** Nudged whenever this server's own view of a chat's display moves, which
       the host's status stream cannot know about. */
@@ -192,6 +205,12 @@ export const make = Effect.gen(function* () {
         return view(owner, { state: "ready", display: entry.display, detail: null });
       case "provisioning":
         return view(owner, { state: "provisioning", display: null, detail: null });
+      case "released":
+        return view(owner, {
+          state: "unavailable",
+          display: null,
+          detail: "This chat’s computer was released.",
+        });
       case "unavailable":
         return view(owner, { state: "unavailable", display: null, detail: entry.detail });
     }
@@ -209,7 +228,7 @@ export const make = Effect.gen(function* () {
    * `Deferred` creates, everyone else waits on it, so a UI mount racing an
    * agent's first tool call produces one display.
    */
-  const acquire = Effect.fn("OpenbotChatComputerService.acquire")(function* (
+  const acquireUnlocked = Effect.fn("OpenbotChatComputerService.acquire")(function* (
     owner: OpenbotChannel,
   ): Effect.fn.Return<OpenbotComputerDisplay, OpenbotComputerError> {
     for (;;) {
@@ -246,6 +265,7 @@ export const make = Effect.gen(function* () {
             entries,
             (map): readonly [AcquireDecision, ReadonlyMap<OpenbotChannelId, ChatDisplayEntry>] => {
               const entry = map.get(owner.id);
+              if (entry?.kind === "released") return [{ kind: "released" }, map];
               if (entry?.kind === "ready") return [{ kind: "listed", display: entry.display }, map];
               if (entry?.kind === "provisioning")
                 return [{ kind: "await", pending: entry.pending }, map];
@@ -255,6 +275,9 @@ export const make = Effect.gen(function* () {
               ];
             },
           );
+
+          if (decision.kind === "released")
+            return yield* invalidInput("This chat’s computer was released.");
 
           if (decision.kind === "await") {
             const display = yield* restore(Deferred.await(decision.pending));
@@ -316,6 +339,35 @@ export const make = Effect.gen(function* () {
 
       if (pass.kind === "resolved") return pass.display;
     }
+  });
+
+  const acquire = Effect.fn(function* (owner: OpenbotChannel) {
+    const entry = (yield* Ref.get(entries)).get(owner.id);
+    if (entry?.kind === "provisioning") return yield* Deferred.await(entry.pending);
+    const lock = yield* ownerLock(owner.id);
+    return yield* acquireUnlocked(owner).pipe(lock.withPermits(1));
+  });
+
+  const release: OpenbotChatComputerShape["release"] = Effect.fn(
+    "OpenbotChatComputerService.release",
+  )(function* (channelId) {
+    const lock = yield* ownerLock(channelId);
+    yield* Effect.gen(function* () {
+      const entry = (yield* Ref.get(entries)).get(channelId);
+      const display = entry?.kind === "ready" || entry?.kind === "released" ? entry.display : null;
+      // Keep the display until destruction succeeds, so a failed request can
+      // retry. The released state also blocks callers resolved before deletion.
+      yield* Ref.update(entries, (map) =>
+        new Map(map).set(channelId, { kind: "released", display }),
+      );
+      yield* PubSub.publish(changed, channelId);
+      if (display !== null) {
+        yield* session.destroyDisplay(display.id);
+        yield* Ref.update(entries, (map) =>
+          new Map(map).set(channelId, { kind: "released", display: null }),
+        );
+      }
+    }).pipe(lock.withPermits(1), Effect.uninterruptible);
   });
 
   const get: OpenbotChatComputerShape["get"] = Effect.fn("OpenbotChatComputerService.get")(
@@ -431,6 +483,7 @@ export const make = Effect.gen(function* () {
 
   return OpenbotChatComputerService.of({
     get,
+    release,
     ensure,
     changes,
     channelForThread,

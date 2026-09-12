@@ -94,6 +94,7 @@ interface FakeHostOptions {
   readonly createStarted?: Deferred.Deferred<void>;
   /** How many `createDisplay` calls fail before the host starts succeeding. */
   readonly failCreates?: number;
+  readonly failDestroys?: number;
 }
 
 /** What a host with no virtual display driver says. */
@@ -103,6 +104,7 @@ const makeFakeHost = (options: FakeHostOptions = {}) => {
   const displays: Array<OpenbotComputerDisplay> = [PHYSICAL_MAIN];
   const windows = options.windows ?? [];
   const created: Array<OpenbotComputerDisplayCreateInput> = [];
+  const destroyed: Array<OpenbotComputerDisplay["id"]> = [];
   const snapshotted: Array<OpenbotComputerDisplay["id"] | undefined> = [];
   const focused: Array<OpenbotComputerWindow["id"]> = [];
   const launched: Array<OpenbotComputerLaunchInput> = [];
@@ -173,6 +175,18 @@ const makeFakeHost = (options: FakeHostOptions = {}) => {
       displays.push(display);
       return display;
     }),
+    destroyDisplay: (id) =>
+      Effect.gen(function* () {
+        destroyed.push(id);
+        if (destroyed.length <= (options.failDestroys ?? 0)) {
+          return yield* new OpenbotComputerError({
+            code: "backend_unavailable",
+            message: "Host unavailable",
+          });
+        }
+        const index = displays.findIndex((display) => display.id === id);
+        if (index >= 0) displays.splice(index, 1);
+      }),
     snapshot: (input) =>
       Effect.sync(() => {
         snapshotted.push(input.displayId);
@@ -194,6 +208,7 @@ const makeFakeHost = (options: FakeHostOptions = {}) => {
   return {
     session,
     created,
+    destroyed,
     /** How often a caller checked the remembered display against the host. */
     listedDisplays: () => listedDisplays,
     snapshotted,
@@ -553,5 +568,64 @@ it.effect("get does not provision", () =>
     assert.equal(view.display, null);
     assert.deepEqual(view.windows, []);
     assert.deepEqual(host.created, []);
+  }),
+);
+
+it.effect("releasing a child leaves its parent's managed display alone", () =>
+  Effect.gen(function* () {
+    const child = chat("child", "Child", solo.id);
+    const host = makeFakeHost();
+    yield* withService([solo, child], host.session, (service) =>
+      Effect.gen(function* () {
+        const before = yield* service.ensure(child.id);
+        yield* service.release(child.id);
+        const after = yield* service.ensure(solo.id);
+        assert.equal(after.display?.id, before.display?.id);
+        assert.deepEqual(host.destroyed, []);
+        yield* service.release(solo.id);
+        assert.deepEqual(host.destroyed, [before.display?.id]);
+        assert.equal((yield* service.get(solo.id)).state, "unavailable");
+        assert.equal(Exit.isFailure(yield* Effect.exit(service.ensure(solo.id))), true);
+      }),
+    );
+  }),
+);
+
+it.effect("release waits for in-flight creation and never recreates the display", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const createStarted = yield* Deferred.make<void>();
+    const host = makeFakeHost({ gate, createStarted });
+    yield* withService([solo], host.session, (service) =>
+      Effect.gen(function* () {
+        const creating = yield* service.ensure(solo.id).pipe(Effect.forkChild);
+        yield* Deferred.await(createStarted);
+        const releasing = yield* service.release(solo.id).pipe(Effect.forkChild);
+        yield* Deferred.succeed(gate, undefined);
+        const before = yield* Fiber.join(creating);
+        yield* Fiber.join(releasing);
+        assert.deepEqual(host.destroyed, [before.display?.id]);
+        yield* service.release(solo.id);
+        assert.equal(host.destroyed.length, 1);
+        assert.equal(Exit.isFailure(yield* Effect.exit(service.ensure(solo.id))), true);
+        assert.equal(host.created.length, 1);
+      }),
+    );
+  }),
+);
+
+it.effect("release retries failed host cleanup without losing display ownership", () =>
+  Effect.gen(function* () {
+    const host = makeFakeHost({ failDestroys: 1 });
+    yield* withService([solo], host.session, (service) =>
+      Effect.gen(function* () {
+        const before = yield* service.ensure(solo.id);
+        assert.equal(Exit.isFailure(yield* Effect.exit(service.release(solo.id))), true);
+        assert.equal(Exit.isFailure(yield* Effect.exit(service.ensure(solo.id))), true);
+        yield* service.release(solo.id);
+        assert.deepEqual(host.destroyed, [before.display?.id, before.display?.id]);
+        assert.equal(host.created.length, 1);
+      }),
+    );
   }),
 );

@@ -134,6 +134,14 @@ export interface OpenbotChannelStoreShape {
   readonly getByThreadId: (
     threadId: ThreadId,
   ) => Effect.Effect<OpenbotChannel | undefined, OpenbotChannelStoreError>;
+  /**
+   * True when the row exists but every read hides it. The reads above cannot
+   * tell "never created" from "deleted", and a deterministic create id needs
+   * that distinction so a replay refuses instead of rebuilding a deleted chat.
+   */
+  readonly isChannelDeleted: (
+    channelId: OpenbotChannelId,
+  ) => Effect.Effect<boolean, OpenbotChannelStoreError>;
   readonly insert: (channel: OpenbotChannel) => Effect.Effect<void, OpenbotChannelStoreError>;
   readonly listDeliveries: (
     channelId: OpenbotChannelId,
@@ -153,6 +161,19 @@ export interface OpenbotChannelStoreShape {
   readonly updateProject: (
     patch: OpenbotProjectPatch,
   ) => Effect.Effect<OpenbotProject | undefined, OpenbotChannelStoreError>;
+  /** Includes deleted projects because the stored T3 workspace identity is unique. */
+  readonly projectWorkspaceInUse: (
+    workspacePath: string,
+  ) => Effect.Effect<boolean, OpenbotChannelStoreError>;
+  /** True when the project row exists and carries a tombstone. */
+  readonly isProjectDeleted: (
+    projectId: OpenbotProjectId,
+  ) => Effect.Effect<boolean, OpenbotChannelStoreError>;
+  /** Tombstones a live project. False when it was already deleted or missing. */
+  readonly deleteProject: (input: {
+    readonly projectId: OpenbotProjectId;
+    readonly deletedAt: string;
+  }) => Effect.Effect<boolean, OpenbotChannelStoreError>;
   // --- Knowledge ------------------------------------------------------------
   readonly listKnowledge: (input: {
     readonly projectId?: OpenbotProjectId | undefined;
@@ -260,6 +281,14 @@ const rowToKnowledge = (
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
+  // Project deletion removes its threads before tombstoning the project.
+  // Only the thread decides channel liveness: a later OpenBot project may
+  // reuse the same T3 workspace, and must not inherit an old deletion.
+  const notDeleted = sql`NOT EXISTS (
+      SELECT 1 FROM orchestration_v2_projection_threads t
+      WHERE t.thread_id = c.thread_id AND t.deleted_at IS NOT NULL
+    )`;
+
   // A chat's OpenBot project is derived from its T3 project rather than stored
   // on the chat, so a project's main chat and its children always agree.
   const selectChannels = (where: ReturnType<typeof sql.and> | undefined) => sql<ChannelRow>`
@@ -271,7 +300,7 @@ export const make = Effect.gen(function* () {
         LIMIT 1
       ) AS openbot_project_id
     FROM openbot_channels c
-    ${where === undefined ? sql`` : sql`WHERE ${where}`}
+    WHERE ${notDeleted}${where === undefined ? sql`` : sql` AND ${where}`}
     ORDER BY c.created_at ASC, c.rowid ASC
   `;
 
@@ -290,6 +319,12 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((rows) => Effect.forEach(rows, rowToChannel)),
       Effect.map((channels) => channels[0]),
     );
+
+  const isChannelDeleted: OpenbotChannelStoreShape["isChannelDeleted"] = (channelId) =>
+    sql<{ readonly channel_id: string }>`
+      SELECT c.channel_id FROM openbot_channels c
+      WHERE c.channel_id = ${channelId} AND NOT (${notDeleted})
+    `.pipe(Effect.map((rows) => rows[0] !== undefined));
 
   const insert: OpenbotChannelStoreShape["insert"] = (channel) =>
     encodeModelSelection(channel.modelSelection).pipe(
@@ -456,6 +491,26 @@ export const make = Effect.gen(function* () {
     return rows[0] === undefined ? undefined : yield* getProject(patch.projectId);
   });
 
+  const projectWorkspaceInUse: OpenbotChannelStoreShape["projectWorkspaceInUse"] = (
+    workspacePath,
+  ) =>
+    sql<{ readonly project_id: string }>`
+      SELECT project_id FROM openbot_projects WHERE workspace_path = ${workspacePath}
+    `.pipe(Effect.map((rows) => rows.length > 0));
+
+  const isProjectDeleted: OpenbotChannelStoreShape["isProjectDeleted"] = (projectId) =>
+    sql<{ readonly project_id: string }>`
+      SELECT project_id FROM openbot_projects
+      WHERE project_id = ${projectId} AND deleted_at IS NOT NULL
+    `.pipe(Effect.map((rows) => rows[0] !== undefined));
+
+  const deleteProject: OpenbotChannelStoreShape["deleteProject"] = (input) =>
+    sql<{ readonly project_id: string }>`
+      UPDATE openbot_projects SET deleted_at = ${input.deletedAt}, revision = revision + 1
+      WHERE project_id = ${input.projectId} AND deleted_at IS NULL
+      RETURNING project_id
+    `.pipe(Effect.map((rows) => rows[0] !== undefined));
+
   const knowledgeProjectIds = (knowledgeId: OpenbotKnowledgeId) =>
     sql<{ readonly project_id: string }>`
       SELECT project_id FROM openbot_knowledge_projects
@@ -566,6 +621,7 @@ export const make = Effect.gen(function* () {
     list,
     getById,
     getByThreadId,
+    isChannelDeleted,
     insert,
     listDeliveries,
     countDeliveriesForRun,
@@ -574,6 +630,9 @@ export const make = Effect.gen(function* () {
     getProject,
     insertProject,
     updateProject,
+    isProjectDeleted,
+    projectWorkspaceInUse,
+    deleteProject,
     listKnowledge,
     getKnowledge,
     insertKnowledge,

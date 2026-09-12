@@ -137,6 +137,7 @@ import {
   OpenbotChannelCreateInput,
   OpenbotChannelUpdateInput,
   OpenbotChannel,
+  OpenbotChannelDeleteInput,
   OpenbotChannelListResult,
   OpenbotThreadContext,
   OpenbotContextUpdateInput,
@@ -154,6 +155,7 @@ import {
   OpenbotKnowledgeUpdateInput,
   OpenbotProject,
   OpenbotProjectCreateInput,
+  OpenbotProjectDeleteInput,
   OpenbotProjectGetInput,
   OpenbotProjectListResult,
   OpenbotProjectUpdateInput,
@@ -413,6 +415,7 @@ export const WS_METHODS = {
   openbotChannelsSubscribe: "openbot.channels.subscribe",
   openbotChannelsCreate: "openbot.channels.create",
   openbotChannelUpdate: "openbot.channel.update",
+  openbotChannelDelete: "openbot.channel.delete",
   openbotChannelSubscribe: "openbot.channel.subscribe",
   openbotContextGet: "openbot.context.get",
   openbotContextUpdate: "openbot.context.update",
@@ -428,6 +431,7 @@ export const WS_METHODS = {
   openbotProjectsCreate: "openbot.projects.create",
   openbotProjectGet: "openbot.project.get",
   openbotProjectUpdate: "openbot.project.update",
+  openbotProjectDelete: "openbot.project.delete",
   openbotKnowledgeList: "openbot.knowledge.list",
   openbotKnowledgeSubscribe: "openbot.knowledge.subscribe",
   openbotKnowledgeGet: "openbot.knowledge.get",
@@ -1384,6 +1388,13 @@ export const WsOpenbotChannelUpdateRpc = Rpc.make(WS_METHODS.openbotChannelUpdat
   error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
 });
 
+/** Tombstone a chat and its children. Already deleted or unknown succeeds. */
+export const WsOpenbotChannelDeleteRpc = Rpc.make(WS_METHODS.openbotChannelDelete, {
+  payload: OpenbotChannelDeleteInput,
+  success: Schema.Struct({}),
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+
 export const WsOpenbotChannelsCreateRpc = Rpc.make(WS_METHODS.openbotChannelsCreate, {
   payload: OpenbotChannelCreateInput,
   success: OpenbotChannel,
@@ -1476,6 +1487,13 @@ export const WsOpenbotProjectGetRpc = Rpc.make(WS_METHODS.openbotProjectGet, {
 export const WsOpenbotProjectUpdateRpc = Rpc.make(WS_METHODS.openbotProjectUpdate, {
   payload: OpenbotProjectUpdateInput,
   success: OpenbotProject,
+  error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
+});
+
+/** Tombstone a project, its main chat, and that chat's children. */
+export const WsOpenbotProjectDeleteRpc = Rpc.make(WS_METHODS.openbotProjectDelete, {
+  payload: OpenbotProjectDeleteInput,
+  success: Schema.Struct({}),
   error: Schema.Union([OpenbotError, EnvironmentAuthorizationError]),
 });
 
@@ -1676,6 +1694,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOpenbotChannelsSubscribeRpc,
   WsOpenbotChannelsCreateRpc,
   WsOpenbotChannelUpdateRpc,
+  WsOpenbotChannelDeleteRpc,
   WsOpenbotChannelSubscribeRpc,
   WsOpenbotContextGetRpc,
   WsOpenbotContextUpdateRpc,
@@ -1691,6 +1710,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOpenbotProjectsCreateRpc,
   WsOpenbotProjectGetRpc,
   WsOpenbotProjectUpdateRpc,
+  WsOpenbotProjectDeleteRpc,
   WsOpenbotKnowledgeListRpc,
   WsOpenbotKnowledgeSubscribeRpc,
   WsOpenbotKnowledgeGetRpc,

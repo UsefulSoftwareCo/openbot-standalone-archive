@@ -30,7 +30,6 @@ import {
   wakeChannel,
 } from "../state/channels";
 import { commandErrorText } from "../state/errors";
-import { ChatAvatar } from "./ChatProfileFields";
 import { ChatSettingsDialog } from "./ChatSettingsDialog";
 import { NewThreadDialog } from "./NewThreadDialog";
 import { ProjectIcon } from "./ProjectIcon";
@@ -255,9 +254,7 @@ export function ChatHeader({
           >
             <ProjectIcon icon={project.icon} size={18} />
           </button>
-        ) : (
-          <ChatAvatar avatar={channel.avatar} name={channel.name} className="size-6" />
-        )}
+        ) : null}
         <h1 className="min-w-0 flex-1 truncate font-medium text-sm">{channel.name}</h1>
         <Button
           variant="ghost"

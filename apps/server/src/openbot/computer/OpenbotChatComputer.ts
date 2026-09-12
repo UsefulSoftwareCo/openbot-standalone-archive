@@ -29,6 +29,9 @@ import type { ComputerInputSource } from "./OpenbotComputerSession.ts";
  * reported, not followed.
  */
 export interface OpenbotChatComputerShape {
+  /** Permanently release only this owner's managed display. Child IDs never resolve
+   * to their parent's display here. Waits for provisioning and retries failed cleanup. */
+  readonly release: (channelId: OpenbotChannelId) => Effect.Effect<void, OpenbotComputerError>;
   /** Describe without provisioning. `idle` when nothing has asked yet. */
   readonly get: (
     channelId: OpenbotChannelId,

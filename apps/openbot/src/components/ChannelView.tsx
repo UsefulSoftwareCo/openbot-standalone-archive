@@ -25,7 +25,6 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useSnoozeActive } from "./ChatHeader";
-import { ChatAvatar } from "./ChatProfileFields";
 import { channelActivity, incomingPresentation, resolveReplyPreview } from "./ChannelView.logic";
 import { Attachment } from "./Attachment";
 import { Markdown } from "./Markdown";
@@ -384,11 +383,6 @@ export function ChannelView({
                   )}
                 >
                   <div className="flex items-center gap-2 pl-1 text-[11px] text-muted-foreground">
-                    <ChatAvatar
-                      avatar={view.channel.avatar}
-                      name={view.channel.name}
-                      className="size-5"
-                    />
                     <span className="font-medium text-foreground">Assistant</span>
                     <time dateTime={entry.delivery.createdAt}>
                       {formatTime(entry.delivery.createdAt)}

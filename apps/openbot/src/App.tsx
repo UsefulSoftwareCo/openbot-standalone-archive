@@ -1,10 +1,16 @@
 import { Link, useBlocker, useNavigate, useRouter } from "@tanstack/react-router";
-import type { EnvironmentId, OpenbotChannelId, OpenbotProjectId } from "@t3tools/contracts";
+import {
+  type CommandId,
+  type EnvironmentId,
+  type OpenbotChannelId,
+  type OpenbotProjectId,
+} from "@t3tools/contracts";
 import { Button } from "@t3tools/ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "@t3tools/ui/dialog";
 import { Spinner } from "@t3tools/ui/spinner";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 
+import { DeleteDialog, type DeleteTarget } from "./components/DeleteDialog";
 import { ChannelView } from "./components/ChannelView";
 import { ChatHeader } from "./components/ChatHeader";
 import { Composer } from "./components/Composer";
@@ -18,6 +24,8 @@ import { ProjectSettingsPage } from "./components/ProjectSettingsPage";
 import { Sidebar } from "./components/Sidebar";
 import {
   createProject,
+  deleteChannel,
+  deleteProject,
   sendChannelMessage,
   updateProject,
   useAtomCommand,
@@ -27,6 +35,7 @@ import {
   usePrimaryEnvironmentId,
   useProjectsState,
 } from "./state/channels";
+import { newCommandId } from "./state/ids";
 import { commandErrorText } from "./state/errors";
 import {
   channelHref,
@@ -54,6 +63,15 @@ export function App({ route }: { readonly route: OpenbotScreen }) {
     route.type === "chat" || route.type === "computer" ? route.channelId : null;
   const page: OpenbotPage | null =
     route.type === "chat" || route.type === "home" || route.type === "not-found" ? null : route;
+  const [deleteRequest, setDeleteRequest] = useState<{
+    readonly target: DeleteTarget;
+    readonly commandId: CommandId;
+    readonly affectedChannelIds: ReadonlyArray<OpenbotChannelId>;
+    readonly childCount: number;
+  } | null>(null);
+  const deleteTarget = deleteRequest?.target ?? null;
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [unsaved, setUnsaved] = useState(false);
   const [search, setSearch] = useState("");
   const [detailsOpen, setDetailsOpen] = useState(true);
@@ -87,6 +105,8 @@ export function App({ route }: { readonly route: OpenbotScreen }) {
     };
   }, []);
 
+  const runDeleteChannel = useAtomCommand(deleteChannel, { reportFailure: false });
+  const runDeleteProject = useAtomCommand(deleteProject, { reportFailure: false });
   const runCreateProject = useAtomCommand(createProject, { reportFailure: false });
   const runUpdateProject = useAtomCommand(updateProject, { reportFailure: false });
   const runSend = useAtomCommand(sendChannelMessage, { reportFailure: false });
@@ -142,6 +162,64 @@ export function App({ route }: { readonly route: OpenbotScreen }) {
     [router],
   );
 
+  const requestDelete = (target: DeleteTarget) => {
+    const children = channels.filter((channel) =>
+      target.type === "project"
+        ? channel.openbotProjectId === target.project.id
+        : channel.parentChannelId === target.channel.id,
+    );
+    setDeleteError(null);
+    setDeleteRequest({
+      target,
+      commandId: newCommandId("delete"),
+      affectedChannelIds: [
+        ...children.map((channel) => channel.id),
+        ...(target.type === "channel" ? [target.channel.id] : []),
+      ],
+      childCount: children.length,
+    });
+  };
+  const confirmDelete = async () => {
+    if (environmentId === null || deleteTarget === null || deleteRequest === null || deleting)
+      return;
+    const affected = new Set(deleteRequest.affectedChannelIds);
+    const leave =
+      (activeChannelId !== null && affected.has(activeChannelId)) ||
+      (deleteTarget.type === "project" &&
+        (page?.type === "project-settings" || page?.type === "knowledge") &&
+        page.projectId === deleteTarget.project.id);
+    const parentId = deleteTarget.type === "channel" ? deleteTarget.channel.parentChannelId : null;
+    setDeleting(true);
+    setDeleteError(null);
+    const result =
+      deleteTarget.type === "project"
+        ? await runDeleteProject({
+            environmentId,
+            input: { projectId: deleteTarget.project.id, commandId: deleteRequest.commandId },
+          })
+        : await runDeleteChannel({
+            environmentId,
+            input: { channelId: deleteTarget.channel.id, commandId: deleteRequest.commandId },
+          });
+    setDeleting(false);
+    if (result._tag === "Failure") {
+      // Removed targets stay removed; a new attempt must not replay a rejected
+      // command receipt for a target whose deletion failed partway through.
+      setDeleteRequest({ ...deleteRequest, commandId: newCommandId("delete") });
+      setDeleteError(commandErrorText(result));
+      return;
+    }
+    setDeleteRequest(null);
+    if (leave) {
+      setUnsaved(false);
+      void navigate({
+        to: parentId === null ? "/chats/new" : channelHref(parentId),
+        replace: true,
+        ignoreBlocker: true,
+      });
+    }
+  };
+
   const connectionLabel =
     environmentId === null
       ? "Looking for the T3 server…"
@@ -158,6 +236,7 @@ export function App({ route }: { readonly route: OpenbotScreen }) {
       activeChannelId={page === null ? activeChannelId : null}
       search={search}
       onSearchChange={setSearch}
+      onDeleteChannel={(channel) => requestDelete({ type: "channel", channel })}
       onOpenProjectIcon={(projectId) => {
         setIconError(null);
         setIconProjectId(projectId);
@@ -204,7 +283,7 @@ export function App({ route }: { readonly route: OpenbotScreen }) {
             </p>
           </div>
         ) : route.type === "not-found" ||
-          (route.type === "chat" &&
+          ((route.type === "chat" || route.type === "computer") &&
             !channelsState.loading &&
             channelsState.error === null &&
             activeChannel === null) ? (
@@ -233,6 +312,7 @@ export function App({ route }: { readonly route: OpenbotScreen }) {
               key={settingsProject.id}
               environmentId={environmentId}
               project={settingsProject}
+              onDelete={() => requestDelete({ type: "project", project: settingsProject })}
               tab={page.tab}
               onTabChange={(tab) => openPage({ ...page, tab })}
               onBack={() => openChannel(settingsProject.mainChannelId)}
@@ -335,36 +415,39 @@ export function App({ route }: { readonly route: OpenbotScreen }) {
           </>
         )}
       </main>
-      {environmentId !== null && view !== null && detailsRailApplies(page) && (
-        <>
-          {detailsOpen && (
-            <div className="hidden h-full w-80 shrink-0 border-l border-border lg:block">
-              <ConversationDetails
-                key={view.channel.id}
-                environmentId={environmentId}
-                view={view}
-                onClose={() => setDetailsOpen(false)}
-                onOpenComputer={() => openPage({ type: "computer", channelId: view.channel.id })}
-              />
-            </div>
-          )}
-          <Dialog open={mobileDetailsOpen} onOpenChange={setMobileDetailsOpen}>
-            <DialogPopup className="h-[85dvh] overflow-hidden p-0" bottomStickOnMobile>
-              <DialogTitle className="sr-only">Computer and routines</DialogTitle>
-              <ConversationDetails
-                key={view.channel.id}
-                environmentId={environmentId}
-                view={view}
-                onClose={() => setMobileDetailsOpen(false)}
-                onOpenComputer={() => {
-                  setMobileDetailsOpen(false);
-                  openPage({ type: "computer", channelId: view.channel.id });
-                }}
-              />
-            </DialogPopup>
-          </Dialog>
-        </>
-      )}
+      {environmentId !== null &&
+        activeChannel !== null &&
+        view !== null &&
+        detailsRailApplies(page) && (
+          <>
+            {detailsOpen && (
+              <div className="hidden h-full w-80 shrink-0 border-l border-border lg:block">
+                <ConversationDetails
+                  key={view.channel.id}
+                  environmentId={environmentId}
+                  view={view}
+                  onClose={() => setDetailsOpen(false)}
+                  onOpenComputer={() => openPage({ type: "computer", channelId: view.channel.id })}
+                />
+              </div>
+            )}
+            <Dialog open={mobileDetailsOpen} onOpenChange={setMobileDetailsOpen}>
+              <DialogPopup className="h-[85dvh] overflow-hidden p-0" bottomStickOnMobile>
+                <DialogTitle className="sr-only">Computer and routines</DialogTitle>
+                <ConversationDetails
+                  key={view.channel.id}
+                  environmentId={environmentId}
+                  view={view}
+                  onClose={() => setMobileDetailsOpen(false)}
+                  onOpenComputer={() => {
+                    setMobileDetailsOpen(false);
+                    openPage({ type: "computer", channelId: view.channel.id });
+                  }}
+                />
+              </DialogPopup>
+            </Dialog>
+          </>
+        )}
       {environmentId !== null && projectDialogOpen && (
         <NewProjectDialog
           open={projectDialogOpen}
@@ -383,6 +466,16 @@ export function App({ route }: { readonly route: OpenbotScreen }) {
             setProjectDialogOpen(false);
             openChannel(result.value.mainChannelId);
           }}
+        />
+      )}
+      {deleteRequest !== null && (
+        <DeleteDialog
+          target={deleteRequest.target}
+          childCount={deleteRequest.childCount}
+          busy={deleting}
+          error={deleteError}
+          onCancel={() => setDeleteRequest(null)}
+          onConfirm={() => void confirmDelete()}
         />
       )}
       {environmentId !== null && iconProject !== null && (

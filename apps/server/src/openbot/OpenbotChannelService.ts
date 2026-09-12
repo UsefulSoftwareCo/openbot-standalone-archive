@@ -1,3 +1,6 @@
+import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
+import { OpenbotChatComputerService } from "./computer/OpenbotChatComputer.ts";
+
 import {
   type OpenbotKnowledge,
   type OpenbotKnowledgeCreateInput,
@@ -9,7 +12,9 @@ import {
   type OpenbotMcpListThreadsResult,
   type OpenbotMcpSendToThreadInput,
   type OpenbotProject,
+  type OpenbotChannelDeleteInput,
   type OpenbotProjectCreateInput,
+  type OpenbotProjectDeleteInput,
   type OpenbotProjectListResult,
   type OpenbotProjectUpdateInput,
   type OpenbotRespondInput,
@@ -154,6 +159,13 @@ export interface OpenbotChannelServiceShape {
   readonly updateProject: (
     input: OpenbotProjectUpdateInput,
   ) => Effect.Effect<OpenbotProject, OpenbotError>;
+  /**
+   * Tombstone a project with its main chat and that chat's children. The
+   * workspace directory, the T3 project, and the event history are all kept;
+   * only the OpenBot records become invisible. Idempotent: a project that is
+   * already gone succeeds and changes nothing.
+   */
+  readonly deleteProject: (input: OpenbotProjectDeleteInput) => Effect.Effect<void, OpenbotError>;
   // --- Knowledge ------------------------------------------------------------
   readonly listKnowledge: (
     input: OpenbotKnowledgeListInput,
@@ -245,6 +257,12 @@ export interface OpenbotChannelServiceShape {
   readonly create: (
     input: OpenbotChannelCreateInput,
   ) => Effect.Effect<OpenbotChannel, OpenbotError>;
+  /**
+   * Tombstone a chat and every child chat under it, by deleting their T3
+   * threads. Fails with `delete_project_instead` for a project's main chat.
+   * Idempotent: a chat that is already gone succeeds and changes nothing.
+   */
+  readonly deleteChannel: (input: OpenbotChannelDeleteInput) => Effect.Effect<void, OpenbotError>;
   readonly getView: (
     channelId: OpenbotChannelId,
   ) => Effect.Effect<OpenbotChannelView, OpenbotError>;
@@ -682,6 +700,8 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const store = yield* OpenbotChannelStore;
+  const scheduledTasks = yield* ScheduledTaskService;
+  const chatComputer = yield* OpenbotChatComputerService;
   const projects = yield* ProjectService.ProjectService;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const vcs = yield* VcsProvisioningService.VcsProvisioningService;
@@ -928,6 +948,20 @@ export const make = Effect.gen(function* () {
         });
       return existing;
     }
+    // Every create path here is idempotent on a deterministic id, so "no live
+    // chat" is ambiguous: it means never created, or created and then deleted.
+    // Replaying the original request must not rebuild what the person removed,
+    // and the row is still there, so an insert would collide anyway.
+    if (
+      yield* store
+        .isChannelDeleted(channelId)
+        .pipe(Effect.mapError(orchestrationError("Unable to check bot creation")))
+    )
+      return yield* new OpenbotError({
+        code: "channel_deleted",
+        channelId,
+        message: "That chat was deleted. Use a new request id to start a new one.",
+      });
     // One level of nesting only: a child chat can never own children of its own.
     const parent =
       input.parentChannelId === undefined
@@ -999,6 +1033,126 @@ export const make = Effect.gen(function* () {
     },
     createLock.withPermits(1),
   );
+
+  /**
+   * A chat's tombstone is its thread's tombstone, so deletion is one
+   * `thread.delete` per chat. The orchestrator's own deletion plan cancels the
+   * active run, the queued runs behind it, and the pending runtime requests, so
+   * nothing here has to stop work first. Already-deleted threads are skipped
+   * rather than re-dispatched, which is what makes a retry after a partial
+   * failure safe. Never take `createLock` in here: callers already hold it.
+   *
+   * A top-level chat also owns a managed display, so its entry is released
+   * before its tombstone, so cleanup failures leave the chat available for retry. Child chats share their parent's display and
+   * release nothing: `chatComputer` keys its displays by owner, so the parent
+   * keeps working while one of its children is deleted.
+   */
+  const deleteChannelThread = Effect.fn(function* (input: {
+    readonly channel: OpenbotChannel;
+    readonly commandId: CommandId;
+  }) {
+    const projection = yield* threads
+      .getThreadProjection(input.channel.threadId)
+      .pipe(
+        Effect.mapError(orchestrationError("Unable to load the chat thread", input.channel.id)),
+      );
+    if (projection.thread.deletedAt !== null) return;
+    const { tasks } = yield* scheduledTasks
+      .list()
+      .pipe(Effect.mapError(orchestrationError("Unable to list chat routines", input.channel.id)));
+    for (const task of tasks) {
+      if (task.threadId === input.channel.threadId) {
+        yield* scheduledTasks
+          .delete({ id: task.id })
+          .pipe(
+            Effect.mapError(orchestrationError("Unable to delete chat routines", input.channel.id)),
+          );
+      }
+    }
+    if (input.channel.parentChannelId === null) {
+      yield* chatComputer
+        .release(input.channel.id)
+        .pipe(
+          Effect.mapError(
+            orchestrationError("Unable to release the chat computer", input.channel.id),
+          ),
+        );
+    }
+    yield* threads
+      .dispatch({
+        type: "thread.delete",
+        // One command per thread: a receipt only replays for the thread it was
+        // recorded against, so a shared id would be rejected as a conflict.
+        commandId: CommandId.make(
+          `${input.commandId}:openbot-delete-thread:${input.channel.threadId}`,
+        ),
+        threadId: input.channel.threadId,
+      })
+      .pipe(Effect.mapError(orchestrationError("Unable to delete the chat", input.channel.id)));
+  });
+
+  /**
+   * Children first, then the parent, stopping at the first failure.
+   *
+   * The parent is the only handle the person and a retry still have on the
+   * tree: deleting it while a child deletion failed would hide the parent, and
+   * the next attempt would find nothing to do and call itself done while the
+   * failed child stayed alive and unreachable. Leaving the parent visible makes
+   * the retry resume the same cascade.
+   */
+  const deleteChannelTree = Effect.fn(function* (input: {
+    readonly children: ReadonlyArray<OpenbotChannel>;
+    readonly parent: OpenbotChannel | undefined;
+    readonly commandId: CommandId;
+  }) {
+    yield* Effect.forEach(
+      input.children,
+      (channel) => deleteChannelThread({ channel, commandId: input.commandId }),
+      { discard: true },
+    );
+    if (input.parent !== undefined)
+      yield* deleteChannelThread({ channel: input.parent, commandId: input.commandId });
+  });
+
+  /**
+   * What every client has to be told after a chat deletion attempt, whether it
+   * finished, failed part-way, or was interrupted: the chats that did go have
+   * to leave the lists, and the parent's timeline has to stop linking to them.
+   */
+  const notifyChannelDeleted = (channel: OpenbotChannel) =>
+    Effect.gen(function* () {
+      yield* notifyChannelsChanged;
+      yield* PubSub.publish(deliveriesChanged, channel.id);
+      if (channel.parentChannelId !== null)
+        yield* PubSub.publish(deliveriesChanged, channel.parentChannelId);
+    });
+
+  const deleteChannel: OpenbotChannelServiceShape["deleteChannel"] = Effect.fn(
+    "OpenbotChannelService.deleteChannel",
+  )(function* (input) {
+    // Hidden or never created: both mean the caller's goal already holds.
+    const channel = yield* store
+      .getById(input.channelId)
+      .pipe(Effect.mapError(orchestrationError("Unable to load the chat", input.channelId)));
+    if (channel === undefined) return;
+    const openbotProjects = yield* store.listProjects.pipe(
+      Effect.mapError(orchestrationError("Unable to list OpenBot projects", channel.id)),
+    );
+    if (openbotProjects.some((project) => project.mainChannelId === channel.id))
+      return yield* new OpenbotError({
+        code: "delete_project_instead",
+        channelId: channel.id,
+        message:
+          "This is a project's main chat. Delete the project to remove it and everything under it.",
+      });
+    const all = yield* store.list.pipe(
+      Effect.mapError(orchestrationError("Unable to list chats", channel.id)),
+    );
+    const children = all.filter((candidate) => candidate.parentChannelId === channel.id);
+    yield* deleteChannelTree({ children, parent: channel, commandId: input.commandId }).pipe(
+      Effect.ensuring(notifyChannelDeleted(channel)),
+    );
+  }, createLock.withPermits(1));
 
   /**
    * Names peer sources for one reader. A chat in another OpenBot project is
@@ -1503,6 +1657,17 @@ export const make = Effect.gen(function* () {
         });
       return existing;
     }
+    // A replayed create for a deleted project must not rebuild it; the row is
+    // still there under its tombstone, so the insert would collide anyway.
+    if (
+      yield* store
+        .isProjectDeleted(projectId)
+        .pipe(Effect.mapError(orchestrationError("Unable to check project creation")))
+    )
+      return yield* new OpenbotError({
+        code: "project_deleted",
+        message: "That project was deleted. Use a new request id to start a new one.",
+      });
     // The managed directory lives inside the OpenBot workspace repository, so
     // its checkpoints work; an attached folder is used exactly as it is and
     // is never moved or initialized.
@@ -1545,13 +1710,15 @@ export const make = Effect.gen(function* () {
         });
       return { kind: "attached", path: resolved } as const;
     });
-    const saved = yield* store.listProjects.pipe(
-      Effect.mapError(orchestrationError("Unable to list OpenBot projects")),
-    );
-    if (saved.some((project) => project.workspace.path === workspace.path))
+    if (
+      yield* store
+        .projectWorkspaceInUse(workspace.path)
+        .pipe(Effect.mapError(orchestrationError("Unable to check the project folder")))
+    )
       return yield* new OpenbotError({
         code: "project_unavailable",
-        message: "Another OpenBot project already uses this folder.",
+        message:
+          "This folder is reserved by an existing or deleted OpenBot project. Choose another folder or use an app-managed folder.",
       });
     const t3ProjectId = yield* ids.allocate
       .project({ fixtureName: "openbot-project" })
@@ -1649,6 +1816,77 @@ export const make = Effect.gen(function* () {
     yield* notifyProjectsChanged;
     return updated;
   });
+
+  /**
+   * The project tombstone is written last. Until it lands the project is still
+   * live, so a retry after a failed chat deletion resumes the same cascade
+   * instead of leaving a project whose chats are gone.
+   *
+   * The T3 project and its workspace directory are deliberately kept: the
+   * folder may be a repository the person attached, and the T3 project can hold
+   * threads that OpenBot never made.
+   */
+  const deleteProject: OpenbotChannelServiceShape["deleteProject"] = Effect.fn(
+    "OpenbotChannelService.deleteProject",
+  )(function* (input) {
+    const project = yield* store
+      .getProject(input.projectId)
+      .pipe(Effect.mapError(orchestrationError("Unable to load the OpenBot project")));
+    if (project === undefined) return;
+    const all = yield* store.list.pipe(Effect.mapError(orchestrationError("Unable to list chats")));
+    const main = all.find((candidate) => candidate.id === project.mainChannelId);
+    const children = all.filter((candidate) => candidate.parentChannelId === project.mainChannelId);
+    yield* Effect.gen(function* () {
+      yield* deleteChannelTree({ children, parent: main, commandId: input.commandId });
+      const now = yield* nowIso;
+      const entries = yield* store
+        .listKnowledge({})
+        .pipe(Effect.mapError(orchestrationError("Unable to list knowledge")));
+      for (const entry of entries) {
+        const projectIds = entry.projectIds.filter((id) => id !== project.id);
+        const owned = entry.ownerProjectId === project.id;
+        if (!owned && projectIds.length === entry.projectIds.length) continue;
+        const saved =
+          owned && projectIds.length === 0
+            ? yield* store
+                .deleteKnowledge({
+                  knowledgeId: entry.id,
+                  expectedRevision: entry.revision,
+                  deletedAt: now,
+                })
+                .pipe(Effect.mapError(orchestrationError("Unable to delete the knowledge entry")))
+            : (yield* store
+                .updateKnowledge({
+                  knowledgeId: entry.id,
+                  expectedRevision: entry.revision,
+                  ...(owned ? { ownerProjectId: null } : {}),
+                  projectIds,
+                  updatedAt: now,
+                })
+                .pipe(
+                  Effect.mapError(orchestrationError("Unable to update the knowledge entry")),
+                )) !== undefined;
+        if (!saved)
+          return yield* new OpenbotError({
+            code: "knowledge_conflict",
+            message:
+              "Knowledge changed while deleting this project. Try deleting the project again.",
+          });
+      }
+      yield* store
+        .deleteProject({ projectId: project.id, deletedAt: now })
+        .pipe(Effect.mapError(orchestrationError("Unable to delete the OpenBot project")));
+    }).pipe(
+      Effect.ensuring(
+        Effect.gen(function* () {
+          yield* notifyKnowledgeChanged;
+          yield* notifyChannelsChanged;
+          yield* notifyProjectsChanged;
+          if (main !== undefined) yield* PubSub.publish(deliveriesChanged, main.id);
+        }),
+      ),
+    );
+  }, createLock.withPermits(1));
 
   // --- Knowledge ------------------------------------------------------------
 
@@ -2111,6 +2349,7 @@ export const make = Effect.gen(function* () {
     getProject: requireProject,
     createProject,
     updateProject,
+    deleteProject,
     listKnowledge,
     subscribeKnowledge,
     getKnowledge,
@@ -2154,6 +2393,7 @@ export const make = Effect.gen(function* () {
     list,
     subscribeList,
     create,
+    deleteChannel,
     getView,
     subscribeView,
     send,
