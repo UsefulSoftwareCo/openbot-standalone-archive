@@ -218,9 +218,16 @@ export function Sidebar({
           )}
         </nav>
       </ScrollArea>
-      {/* Every screen belongs to a chat now, so there is nothing to open from
-          here; the chat's details rail is the way in. */}
       <div className="flex items-center justify-end gap-2 border-t border-sidebar-border px-3 py-2 text-[11px] text-sidebar-muted-foreground">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="mr-auto"
+          render={<Link to="/settings/general" />}
+        >
+          <Settings />
+          Settings
+        </Button>
         <span className="truncate">{connectionLabel}</span>
       </div>
     </aside>

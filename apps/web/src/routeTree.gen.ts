@@ -13,6 +13,7 @@ import { Route as UsageRouteImport } from './routes/usage'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as PairRouteImport } from './routes/pair'
 import { Route as ConnectRouteImport } from './routes/connect'
+import { Route as OpenbotRouteImport } from './routes/_openbot'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
@@ -28,8 +29,14 @@ import { Route as SettingsAppearanceRouteImport } from './routes/settings.appear
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
 import { Route as ConnectCallbackRouteImport } from './routes/connect_.callback'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
+import { Route as OpenbotKnowledgeKnowledgeIdRouteImport } from './routes/_openbot.knowledge.$knowledgeId'
+import { Route as OpenbotChatsNewRouteImport } from './routes/_openbot.chats.new'
+import { Route as OpenbotChatsChannelIdRouteImport } from './routes/_openbot.chats.$channelId'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
+import { Route as OpenbotChatsChannelIdComputerRouteImport } from './routes/_openbot.chats.$channelId_.computer'
+import { Route as OpenbotProjectsProjectIdSettingsTabRouteImport } from './routes/_openbot.projects.$projectId.settings.$tab'
+import { Route as OpenbotProjectsProjectIdKnowledgeKnowledgeIdRouteImport } from './routes/_openbot.projects.$projectId.knowledge.$knowledgeId'
 
 const UsageRoute = UsageRouteImport.update({
   id: '/usage',
@@ -49,6 +56,10 @@ const PairRoute = PairRouteImport.update({
 const ConnectRoute = ConnectRouteImport.update({
   id: '/connect',
   path: '/connect',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OpenbotRoute = OpenbotRouteImport.update({
+  id: '/_openbot',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ChatRoute = ChatRouteImport.update({
@@ -125,6 +136,22 @@ const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
   path: '/pull-requests',
   getParentRoute: () => ChatRoute,
 } as any)
+const OpenbotKnowledgeKnowledgeIdRoute =
+  OpenbotKnowledgeKnowledgeIdRouteImport.update({
+    id: '/knowledge/$knowledgeId',
+    path: '/knowledge/$knowledgeId',
+    getParentRoute: () => OpenbotRoute,
+  } as any)
+const OpenbotChatsNewRoute = OpenbotChatsNewRouteImport.update({
+  id: '/chats/new',
+  path: '/chats/new',
+  getParentRoute: () => OpenbotRoute,
+} as any)
+const OpenbotChatsChannelIdRoute = OpenbotChatsChannelIdRouteImport.update({
+  id: '/chats/$channelId',
+  path: '/chats/$channelId',
+  getParentRoute: () => OpenbotRoute,
+} as any)
 const ChatDraftDraftIdRoute = ChatDraftDraftIdRouteImport.update({
   id: '/draft/$draftId',
   path: '/draft/$draftId',
@@ -135,6 +162,24 @@ const ChatEnvironmentIdThreadIdRoute =
     id: '/$environmentId/$threadId',
     path: '/$environmentId/$threadId',
     getParentRoute: () => ChatRoute,
+  } as any)
+const OpenbotChatsChannelIdComputerRoute =
+  OpenbotChatsChannelIdComputerRouteImport.update({
+    id: '/chats/$channelId_/computer',
+    path: '/chats/$channelId/computer',
+    getParentRoute: () => OpenbotRoute,
+  } as any)
+const OpenbotProjectsProjectIdSettingsTabRoute =
+  OpenbotProjectsProjectIdSettingsTabRouteImport.update({
+    id: '/projects/$projectId/settings/$tab',
+    path: '/projects/$projectId/settings/$tab',
+    getParentRoute: () => OpenbotRoute,
+  } as any)
+const OpenbotProjectsProjectIdKnowledgeKnowledgeIdRoute =
+  OpenbotProjectsProjectIdKnowledgeKnowledgeIdRouteImport.update({
+    id: '/projects/$projectId/knowledge/$knowledgeId',
+    path: '/projects/$projectId/knowledge/$knowledgeId',
+    getParentRoute: () => OpenbotRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
@@ -158,8 +203,15 @@ export interface FileRoutesByFullPath {
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/chats/$channelId': typeof OpenbotChatsChannelIdRoute
+  '/chats/new': typeof OpenbotChatsNewRoute
+  '/knowledge/$knowledgeId': typeof OpenbotKnowledgeKnowledgeIdRoute
+  '/chats/$channelId/computer': typeof OpenbotChatsChannelIdComputerRoute
+  '/projects/$projectId/knowledge/$knowledgeId': typeof OpenbotProjectsProjectIdKnowledgeKnowledgeIdRoute
+  '/projects/$projectId/settings/$tab': typeof OpenbotProjectsProjectIdSettingsTabRoute
 }
 export interface FileRoutesByTo {
+  '/': typeof ChatIndexRoute
   '/connect': typeof ConnectRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
@@ -177,13 +229,19 @@ export interface FileRoutesByTo {
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
-  '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/chats/$channelId': typeof OpenbotChatsChannelIdRoute
+  '/chats/new': typeof OpenbotChatsNewRoute
+  '/knowledge/$knowledgeId': typeof OpenbotKnowledgeKnowledgeIdRoute
+  '/chats/$channelId/computer': typeof OpenbotChatsChannelIdComputerRoute
+  '/projects/$projectId/knowledge/$knowledgeId': typeof OpenbotProjectsProjectIdKnowledgeKnowledgeIdRoute
+  '/projects/$projectId/settings/$tab': typeof OpenbotProjectsProjectIdSettingsTabRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_chat': typeof ChatRouteWithChildren
+  '/_openbot': typeof OpenbotRouteWithChildren
   '/connect': typeof ConnectRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
@@ -204,6 +262,12 @@ export interface FileRoutesById {
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/_openbot/chats/$channelId': typeof OpenbotChatsChannelIdRoute
+  '/_openbot/chats/new': typeof OpenbotChatsNewRoute
+  '/_openbot/knowledge/$knowledgeId': typeof OpenbotKnowledgeKnowledgeIdRoute
+  '/_openbot/chats/$channelId_/computer': typeof OpenbotChatsChannelIdComputerRoute
+  '/_openbot/projects/$projectId/knowledge/$knowledgeId': typeof OpenbotProjectsProjectIdKnowledgeKnowledgeIdRoute
+  '/_openbot/projects/$projectId/settings/$tab': typeof OpenbotProjectsProjectIdSettingsTabRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -228,8 +292,15 @@ export interface FileRouteTypes {
     | '/settings/source-control'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/chats/$channelId'
+    | '/chats/new'
+    | '/knowledge/$knowledgeId'
+    | '/chats/$channelId/computer'
+    | '/projects/$projectId/knowledge/$knowledgeId'
+    | '/projects/$projectId/settings/$tab'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/'
     | '/connect'
     | '/pair'
     | '/settings'
@@ -247,12 +318,18 @@ export interface FileRouteTypes {
     | '/settings/providers'
     | '/settings/scheduled-tasks'
     | '/settings/source-control'
-    | '/'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/chats/$channelId'
+    | '/chats/new'
+    | '/knowledge/$knowledgeId'
+    | '/chats/$channelId/computer'
+    | '/projects/$projectId/knowledge/$knowledgeId'
+    | '/projects/$projectId/settings/$tab'
   id:
     | '__root__'
     | '/_chat'
+    | '/_openbot'
     | '/connect'
     | '/pair'
     | '/settings'
@@ -273,10 +350,17 @@ export interface FileRouteTypes {
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
+    | '/_openbot/chats/$channelId'
+    | '/_openbot/chats/new'
+    | '/_openbot/knowledge/$knowledgeId'
+    | '/_openbot/chats/$channelId_/computer'
+    | '/_openbot/projects/$projectId/knowledge/$knowledgeId'
+    | '/_openbot/projects/$projectId/settings/$tab'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   ChatRoute: typeof ChatRouteWithChildren
+  OpenbotRoute: typeof OpenbotRouteWithChildren
   ConnectRoute: typeof ConnectRoute
   PairRoute: typeof PairRoute
   SettingsRoute: typeof SettingsRouteWithChildren
@@ -313,6 +397,13 @@ declare module '@tanstack/react-router' {
       path: '/connect'
       fullPath: '/connect'
       preLoaderRoute: typeof ConnectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_openbot': {
+      id: '/_openbot'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof OpenbotRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_chat': {
@@ -420,6 +511,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatPullRequestsRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_openbot/knowledge/$knowledgeId': {
+      id: '/_openbot/knowledge/$knowledgeId'
+      path: '/knowledge/$knowledgeId'
+      fullPath: '/knowledge/$knowledgeId'
+      preLoaderRoute: typeof OpenbotKnowledgeKnowledgeIdRouteImport
+      parentRoute: typeof OpenbotRoute
+    }
+    '/_openbot/chats/new': {
+      id: '/_openbot/chats/new'
+      path: '/chats/new'
+      fullPath: '/chats/new'
+      preLoaderRoute: typeof OpenbotChatsNewRouteImport
+      parentRoute: typeof OpenbotRoute
+    }
+    '/_openbot/chats/$channelId': {
+      id: '/_openbot/chats/$channelId'
+      path: '/chats/$channelId'
+      fullPath: '/chats/$channelId'
+      preLoaderRoute: typeof OpenbotChatsChannelIdRouteImport
+      parentRoute: typeof OpenbotRoute
+    }
     '/_chat/draft/$draftId': {
       id: '/_chat/draft/$draftId'
       path: '/draft/$draftId'
@@ -433,6 +545,27 @@ declare module '@tanstack/react-router' {
       fullPath: '/$environmentId/$threadId'
       preLoaderRoute: typeof ChatEnvironmentIdThreadIdRouteImport
       parentRoute: typeof ChatRoute
+    }
+    '/_openbot/chats/$channelId_/computer': {
+      id: '/_openbot/chats/$channelId_/computer'
+      path: '/chats/$channelId/computer'
+      fullPath: '/chats/$channelId/computer'
+      preLoaderRoute: typeof OpenbotChatsChannelIdComputerRouteImport
+      parentRoute: typeof OpenbotRoute
+    }
+    '/_openbot/projects/$projectId/settings/$tab': {
+      id: '/_openbot/projects/$projectId/settings/$tab'
+      path: '/projects/$projectId/settings/$tab'
+      fullPath: '/projects/$projectId/settings/$tab'
+      preLoaderRoute: typeof OpenbotProjectsProjectIdSettingsTabRouteImport
+      parentRoute: typeof OpenbotRoute
+    }
+    '/_openbot/projects/$projectId/knowledge/$knowledgeId': {
+      id: '/_openbot/projects/$projectId/knowledge/$knowledgeId'
+      path: '/projects/$projectId/knowledge/$knowledgeId'
+      fullPath: '/projects/$projectId/knowledge/$knowledgeId'
+      preLoaderRoute: typeof OpenbotProjectsProjectIdKnowledgeKnowledgeIdRouteImport
+      parentRoute: typeof OpenbotRoute
     }
   }
 }
@@ -452,6 +585,29 @@ const ChatRouteChildren: ChatRouteChildren = {
 }
 
 const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)
+
+interface OpenbotRouteChildren {
+  OpenbotChatsChannelIdRoute: typeof OpenbotChatsChannelIdRoute
+  OpenbotChatsNewRoute: typeof OpenbotChatsNewRoute
+  OpenbotKnowledgeKnowledgeIdRoute: typeof OpenbotKnowledgeKnowledgeIdRoute
+  OpenbotChatsChannelIdComputerRoute: typeof OpenbotChatsChannelIdComputerRoute
+  OpenbotProjectsProjectIdKnowledgeKnowledgeIdRoute: typeof OpenbotProjectsProjectIdKnowledgeKnowledgeIdRoute
+  OpenbotProjectsProjectIdSettingsTabRoute: typeof OpenbotProjectsProjectIdSettingsTabRoute
+}
+
+const OpenbotRouteChildren: OpenbotRouteChildren = {
+  OpenbotChatsChannelIdRoute: OpenbotChatsChannelIdRoute,
+  OpenbotChatsNewRoute: OpenbotChatsNewRoute,
+  OpenbotKnowledgeKnowledgeIdRoute: OpenbotKnowledgeKnowledgeIdRoute,
+  OpenbotChatsChannelIdComputerRoute: OpenbotChatsChannelIdComputerRoute,
+  OpenbotProjectsProjectIdKnowledgeKnowledgeIdRoute:
+    OpenbotProjectsProjectIdKnowledgeKnowledgeIdRoute,
+  OpenbotProjectsProjectIdSettingsTabRoute:
+    OpenbotProjectsProjectIdSettingsTabRoute,
+}
+
+const OpenbotRouteWithChildren =
+  OpenbotRoute._addFileChildren(OpenbotRouteChildren)
 
 interface SettingsRouteChildren {
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute
@@ -485,6 +641,7 @@ const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   ChatRoute: ChatRouteWithChildren,
+  OpenbotRoute: OpenbotRouteWithChildren,
   ConnectRoute: ConnectRoute,
   PairRoute: PairRoute,
   SettingsRoute: SettingsRouteWithChildren,

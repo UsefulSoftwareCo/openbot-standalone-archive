@@ -9,7 +9,7 @@
     "jsx": "react-jsx",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "paths": {
-      "~/*": ["./src/*"]
+      "~/*": ["../web/src/*"]
     },
     "plugins": [
       {
@@ -24,5 +24,13 @@
       }
     ]
   },
-  "include": ["src", "vite.config.ts", "../../scripts/lib/public-config.ts"]
+  "include": [
+    "src",
+    "../web/src",
+    "../web/test",
+    "../web/vite",
+    "../web/vite.config.ts",
+    "vite.config.ts",
+    "../../scripts/lib/public-config.ts"
+  ]
 }

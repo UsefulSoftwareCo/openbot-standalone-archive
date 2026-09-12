@@ -1,12 +1,5 @@
-import {
-  ClientSettingsSchema,
-  DEFAULT_CLIENT_SETTINGS,
-  type ModelSelection,
-  type ServerProvider,
-} from "@t3tools/contracts";
-import { CLIENT_SETTINGS_STORAGE_KEY } from "@t3tools/client-runtime/browser-client-settings";
-import { useLocalStorage } from "@t3tools/client-runtime/local-storage";
-import { ProviderModelPicker } from "@t3tools/ui/provider-model-picker";
+import { type ModelSelection, type ServerProvider } from "@t3tools/contracts";
+import { ProviderModelPicker } from "../../../web/src/components/chat/ProviderModelPicker";
 import {
   deriveProviderInstanceEntries,
   NO_PROVIDER_MODEL_SELECTION,
@@ -30,11 +23,6 @@ export function ModelPicker({
     () => new Map(entries.map((entry) => [entry.instanceId, entry.models])),
     [entries],
   );
-  const [settings, setSettings] = useLocalStorage(
-    CLIENT_SETTINGS_STORAGE_KEY,
-    DEFAULT_CLIENT_SETTINGS,
-    ClientSettingsSchema,
-  );
   const active = selection ?? NO_PROVIDER_MODEL_SELECTION;
   return (
     <ProviderModelPicker
@@ -45,10 +33,6 @@ export function ModelPicker({
       modelOptionsByInstance={options}
       disabled={disabled || entries.length === 0}
       triggerAriaLabel="Choose model"
-      preferences={{
-        favorites: settings.favorites,
-        onFavoritesChange: (favorites) => setSettings((current) => ({ ...current, favorites })),
-      }}
       onInstanceModelChange={(instanceId, model) => onChange({ instanceId, model })}
     />
   );

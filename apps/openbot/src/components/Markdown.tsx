@@ -2,6 +2,7 @@ import { parseOpenbotAttachmentHref, type EnvironmentId } from "@t3tools/contrac
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import { useClientSettings } from "../../../web/src/hooks/useSettings";
 import { Attachment } from "./Attachment";
 
 const REMARK_PLUGINS = [remarkGfm, remarkBreaks];
@@ -14,8 +15,9 @@ export function Markdown({
   readonly text: string;
   readonly environmentId: EnvironmentId;
 }) {
+  const wordWrap = useClientSettings((settings) => settings.wordWrap);
   return (
-    <div className="openbot-markdown text-[15px] leading-relaxed sm:text-sm">
+    <div className="openbot-markdown font-sans text-sm leading-relaxed" data-word-wrap={wordWrap}>
       <ReactMarkdown
         remarkPlugins={REMARK_PLUGINS}
         components={{

@@ -11,7 +11,12 @@ import {
 } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { Button } from "@t3tools/ui/button";
-import { Textarea } from "@t3tools/ui/textarea";
+import {
+  ComposerPromptEditor,
+  type ComposerPromptEditorHandle,
+} from "../../../web/src/components/ComposerPromptEditor";
+import { composerSubmissionIntentForEnter } from "../../../web/src/composer-logic";
+import { useMediaQuery } from "../../../web/src/hooks/useMediaQuery";
 import { ArrowUp, Plus } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import * as Effect from "effect/Effect";
@@ -43,6 +48,12 @@ export function Composer({
   }) => Promise<boolean>;
 }) {
   const [value, setValue] = useState("");
+  const [cursor, setCursor] = useState(0);
+  const editorRef = useRef<ComposerPromptEditorHandle>(null);
+  const isMobileViewport = useMediaQuery("max-sm");
+  useEffect(() => {
+    if (autoFocus) editorRef.current?.focus();
+  }, [autoFocus]);
   const [files, setFiles] = useState<ReadonlyArray<File>>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -137,6 +148,7 @@ export function Composer({
         })
       ) {
         setValue("");
+        setCursor(0);
         setFiles([]);
         uploaded.current.clear();
         attempt.current = null;
@@ -209,34 +221,38 @@ export function Composer({
                   event.target.value = "";
                 }}
               />
-              <Textarea
-                unstyled
-                rows={2}
-                autoFocus={autoFocus}
-                aria-label={`Message ${channelName}`}
-                placeholder={`Message ${channelName}`}
-                autoComplete="off"
-                enterKeyHint="enter"
+              <ComposerPromptEditor
+                editorRef={editorRef}
                 value={value}
+                cursor={cursor}
+                terminalContexts={[]}
+                skills={[]}
                 disabled={busy}
-                className="block w-full [&_textarea]:max-h-50 [&_textarea]:min-h-17.5 [&_textarea]:resize-none [&_textarea]:rounded-none [&_textarea]:bg-transparent [&_textarea]:p-0 [&_textarea]:text-base [&_textarea]:leading-relaxed sm:[&_textarea]:text-sm"
+                placeholder={`Message ${channelName}`}
+                onRemoveTerminalContext={() => {}}
+                onChange={(nextValue, nextCursor) => {
+                  setValue(nextValue);
+                  setCursor(nextCursor);
+                }}
                 onPaste={(event) => {
                   if (event.clipboardData.files.length > 0) {
                     event.preventDefault();
                     addFiles(Array.from(event.clipboardData.files));
                   }
                 }}
-                onChange={(event) => setValue(event.target.value)}
-                onKeyDown={(event) => {
+                onCommandKeyDown={(key, event) => {
                   if (
-                    event.key === "Enter" &&
-                    !event.shiftKey &&
-                    !event.nativeEvent.isComposing &&
-                    !window.matchMedia("(pointer: coarse)").matches
-                  ) {
-                    event.preventDefault();
-                    void submit();
-                  }
+                    key !== "Enter" ||
+                    composerSubmissionIntentForEnter({
+                      isMobileViewport,
+                      shiftKey: event.shiftKey,
+                      modifierKey: false,
+                      isDraftThread: false,
+                    }) === null
+                  )
+                    return false;
+                  void submit();
+                  return true;
                 }}
               />
             </div>

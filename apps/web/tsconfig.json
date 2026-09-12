@@ -27,6 +27,7 @@
   },
   "include": [
     "src",
+    "../openbot/src",
     "vite",
     "vite.config.ts",
     "vercel.ts",

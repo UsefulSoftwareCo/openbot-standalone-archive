@@ -1,3 +1,7 @@
+import { useAtomValue } from "@effect/atom-react";
+import { primaryServerKeybindingsAtom } from "../../web/src/state/server";
+import { resolveShortcutCommand } from "../../web/src/keybindings";
+import { useClientSettings } from "../../web/src/hooks/useSettings";
 import { Link, useBlocker, useNavigate, useRouter } from "@tanstack/react-router";
 import {
   type CommandId,
@@ -77,6 +81,9 @@ export function App({ route }: { readonly route: OpenbotScreen }) {
   const [detailsOpen, setDetailsOpen] = useState(true);
   const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true);
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const confirmThreadDelete = useClientSettings((settings) => settings.confirmThreadDelete);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createProjectError, setCreateProjectError] = useState<string | null>(null);
@@ -84,6 +91,45 @@ export function App({ route }: { readonly route: OpenbotScreen }) {
   const [iconProjectId, setIconProjectId] = useState<OpenbotProjectId | null>(null);
   const [iconBusy, setIconBusy] = useState(false);
   const [iconError, setIconError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && target.closest("[data-keybinding-capture]")) return;
+      const command = resolveShortcutCommand(event, keybindings);
+      if (command === "sidebar.toggle") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (window.matchMedia("(min-width: 768px)").matches) {
+          setDesktopSidebarOpen((open) => !open);
+        } else {
+          setSidebarOpen((open) => !open);
+        }
+      } else if (command === "chat.new" || command === "chat.newLocal") {
+        event.preventDefault();
+        event.stopPropagation();
+        void navigate({ to: "/chats/new" });
+      } else if (command === "rightPanel.toggle") {
+        event.preventDefault();
+        setDetailsOpen((open) => !open);
+      } else if (command === "rightPanel.close") {
+        event.preventDefault();
+        setDetailsOpen(false);
+        setMobileDetailsOpen(false);
+      } else if (command === "thread.previous" || command === "thread.next") {
+        const current = channels.findIndex((channel) => channel.id === activeChannelId);
+        const next = channels[current + (command === "thread.next" ? 1 : -1)];
+        if (next !== undefined) {
+          event.preventDefault();
+          void navigate({ to: channelHref(next.id) });
+        }
+      }
+    };
+    // Match T3's capture phase so editor formatting does not consume sidebar shortcuts.
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [keybindings, navigate, channels, activeChannelId]);
 
   // iOS resizes the visual viewport when the keyboard opens, not the layout viewport.
   useEffect(() => {
@@ -169,7 +215,7 @@ export function App({ route }: { readonly route: OpenbotScreen }) {
         : channel.parentChannelId === target.channel.id,
     );
     setDeleteError(null);
-    setDeleteRequest({
+    const request = {
       target,
       commandId: newCommandId("delete"),
       affectedChannelIds: [
@@ -177,12 +223,14 @@ export function App({ route }: { readonly route: OpenbotScreen }) {
         ...(target.type === "channel" ? [target.channel.id] : []),
       ],
       childCount: children.length,
-    });
+    };
+    setDeleteRequest(request);
+    if (target.type === "channel" && !confirmThreadDelete) void executeDelete(request);
   };
-  const confirmDelete = async () => {
-    if (environmentId === null || deleteTarget === null || deleteRequest === null || deleting)
-      return;
-    const affected = new Set(deleteRequest.affectedChannelIds);
+  const executeDelete = async (request: NonNullable<typeof deleteRequest>) => {
+    if (environmentId === null || deleting) return;
+    const deleteTarget = request.target;
+    const affected = new Set(request.affectedChannelIds);
     const leave =
       (activeChannelId !== null && affected.has(activeChannelId)) ||
       (deleteTarget.type === "project" &&
@@ -195,17 +243,17 @@ export function App({ route }: { readonly route: OpenbotScreen }) {
       deleteTarget.type === "project"
         ? await runDeleteProject({
             environmentId,
-            input: { projectId: deleteTarget.project.id, commandId: deleteRequest.commandId },
+            input: { projectId: deleteTarget.project.id, commandId: request.commandId },
           })
         : await runDeleteChannel({
             environmentId,
-            input: { channelId: deleteTarget.channel.id, commandId: deleteRequest.commandId },
+            input: { channelId: deleteTarget.channel.id, commandId: request.commandId },
           });
     setDeleting(false);
     if (result._tag === "Failure") {
       // Removed targets stay removed; a new attempt must not replay a rejected
       // command receipt for a target whose deletion failed partway through.
-      setDeleteRequest({ ...deleteRequest, commandId: newCommandId("delete") });
+      setDeleteRequest({ ...request, commandId: newCommandId("delete") });
       setDeleteError(commandErrorText(result));
       return;
     }
@@ -265,7 +313,7 @@ export function App({ route }: { readonly route: OpenbotScreen }) {
 
   return (
     <div className="openbot-shell flex w-full bg-background text-foreground">
-      <div className="hidden h-full shrink-0 md:block">{sidebar}</div>
+      {desktopSidebarOpen && <div className="hidden h-full shrink-0 md:block">{sidebar}</div>}
       <Dialog open={sidebarOpen} onOpenChange={setSidebarOpen}>
         <DialogPopup className="h-[70dvh] max-h-[85dvh] overflow-hidden p-0 [&_aside]:w-full [&_aside]:border-0 [&_aside]:pb-[env(safe-area-inset-bottom)]">
           <DialogTitle className="sr-only">Projects and chats</DialogTitle>
@@ -475,7 +523,9 @@ export function App({ route }: { readonly route: OpenbotScreen }) {
           busy={deleting}
           error={deleteError}
           onCancel={() => setDeleteRequest(null)}
-          onConfirm={() => void confirmDelete()}
+          onConfirm={() => {
+            if (deleteRequest !== null) void executeDelete(deleteRequest);
+          }}
         />
       )}
       {environmentId !== null && iconProject !== null && (

@@ -160,7 +160,11 @@ export default defineConfig(() => {
       // Route components load as split chunks so settings, pull-request, and
       // usage code stay out of the cold-start payload; the router prefetches
       // them on navigation intent (see getRouter's defaultPreload).
-      tanstackRouter({ autoCodeSplitting: true }),
+      tanstackRouter({
+        autoCodeSplitting: true,
+        routesDirectory: `${import.meta.dirname}/src/routes`,
+        generatedRouteTree: `${import.meta.dirname}/src/routeTree.gen.ts`,
+      }),
       react(),
       babel({
         // We need to be explicit about the parser options after moving to @vitejs/plugin-react v6.0.0
@@ -186,6 +190,9 @@ export default defineConfig(() => {
       ],
     },
     define: {
+      "import.meta.env.VITE_APP_PRODUCT": JSON.stringify(
+        process.env.T3CODE_PRODUCT === "openbot" ? "openbot" : "t3code",
+      ),
       // In dev mode, tell the web app where the WebSocket server lives
       "import.meta.env.VITE_WS_URL": JSON.stringify(configuredWsUrl ?? ""),
       // Pinned explicitly rather than left to Vite's automatic VITE_ exposure:

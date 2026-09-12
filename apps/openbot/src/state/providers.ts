@@ -1,14 +1,8 @@
 import { type EnvironmentId, type ServerProvider } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { createServerEnvironmentAtoms } from "@t3tools/client-runtime/state/server";
-import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import type { ServerConfig } from "@t3tools/contracts";
-import { connectionAtomRuntime } from "../connection/atomRuntime";
+import { AsyncResult } from "effect/unstable/reactivity";
+import { serverEnvironment } from "../../../web/src/state/server";
 
-const initialConfig = Atom.make<ServerConfig | null>(null);
-const serverEnvironment = createServerEnvironmentAtoms(connectionAtomRuntime, {
-  initialConfigValueAtom: () => initialConfig,
-});
 const EMPTY_PROVIDERS: ReadonlyArray<ServerProvider> = [];
 
 /** The same live provider catalog and reconnect lifecycle used by T3 Code. */

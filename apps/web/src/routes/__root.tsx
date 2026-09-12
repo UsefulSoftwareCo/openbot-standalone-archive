@@ -13,6 +13,7 @@ import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
 import { APP_BASE_NAME, APP_DISPLAY_NAME, APP_STAGE_LABEL, APP_VERSION } from "../branding";
 import { resolveServerBackedAppDisplayName } from "../branding.logic";
+import { isOpenbot } from "../product";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
@@ -126,7 +127,15 @@ function RootRouteView() {
     );
   }
 
-  const appShell = (
+  const openbotPage =
+    isOpenbot &&
+    (pathname === "/" ||
+      pathname.startsWith("/chats/") ||
+      pathname.startsWith("/knowledge/") ||
+      /^\/projects\/[^/]+\/(settings|knowledge)\//.test(pathname));
+  const appShell = openbotPage ? (
+    <Outlet />
+  ) : (
     <CommandPalette>
       <AppSidebarLayout>
         <Outlet />
@@ -227,12 +236,14 @@ function FontAppearanceSync() {
 function DocumentTitleSync() {
   const primaryServerVersion =
     useAtomValue(primaryServerConfigAtom)?.environment.serverVersion ?? null;
-  const title = resolveServerBackedAppDisplayName({
-    baseName: APP_BASE_NAME,
-    fallbackDisplayName: APP_DISPLAY_NAME,
-    fallbackStageLabel: APP_STAGE_LABEL,
-    primaryServerVersion,
-  });
+  const title = isOpenbot
+    ? APP_DISPLAY_NAME
+    : resolveServerBackedAppDisplayName({
+        baseName: APP_BASE_NAME,
+        fallbackDisplayName: APP_DISPLAY_NAME,
+        fallbackStageLabel: APP_STAGE_LABEL,
+        primaryServerVersion,
+      });
 
   useEffect(() => {
     document.title = title;

@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
 @import "@t3tools/ui/tokens.css";
+@import "../../openbot/src/openbot.css";
+@source "../../openbot/src";
 @source "../../../packages/ui/src";
 @custom-variant light (&:not(.dark, .dark *));
 /* Window Controls Overlay: active when Electron exposes native titlebar control geometry. */

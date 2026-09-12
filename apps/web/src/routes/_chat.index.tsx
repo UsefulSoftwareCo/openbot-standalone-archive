@@ -1,8 +1,9 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { LinkIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { isOpenbot } from "../product";
 import { openCommandPalette } from "../commandPaletteBus";
 import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
@@ -133,6 +134,9 @@ function NoProjectsHero() {
 }
 
 export const Route = createFileRoute("/_chat/")({
+  beforeLoad: () => {
+    if (isOpenbot) throw redirect({ to: "/chats/new", replace: true });
+  },
   component: ChatIndexRouteView,
 });
 

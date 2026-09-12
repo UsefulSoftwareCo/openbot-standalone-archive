@@ -1,3 +1,8 @@
+import { useEnvironmentSettings } from "../../../web/src/hooks/useSettings";
+import {
+  formatDayAwareTimestamp,
+  formatChatTimestampTooltip,
+} from "../../../web/src/timestampFormat";
 import { Link } from "@tanstack/react-router";
 import { channelHref } from "../state/route";
 import { UserMessageBubble } from "@t3tools/ui/message-bubble";
@@ -57,13 +62,6 @@ function buildTimeline(view: ChannelViewData): ReadonlyArray<TimelineEntry> {
     })),
   ];
   return entries.toSorted((left, right) => left.at - right.at);
-}
-
-function formatTime(iso: string): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime())
-    ? ""
-    : date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
 /** DOM id of a timeline row so reply references can jump to it. */
@@ -203,6 +201,11 @@ export function ChannelView({
   /** Live chat names, so a renamed thread reads correctly instead of its recorded title. */
   readonly channelNames?: ReadonlyMap<OpenbotChannelId, string>;
 }) {
+  const timestampFormat = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.timestampFormat,
+  );
+  const formatTime = (iso: string) => formatDayAwareTimestamp(iso, timestampFormat);
   const hasPendingQuestion = view.pendingRequests.length > 0;
   const timeline = buildTimeline(view);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -274,7 +277,13 @@ export function ChannelView({
                           message={entry.message}
                           hasPendingQuestion={hasPendingQuestion}
                         />
-                        <time dateTime={entry.message.createdAt}>
+                        <time
+                          dateTime={entry.message.createdAt}
+                          title={formatChatTimestampTooltip(
+                            entry.message.createdAt,
+                            timestampFormat,
+                          )}
+                        >
                           {formatTime(entry.message.createdAt)}
                         </time>
                       </div>
@@ -316,7 +325,10 @@ export function ChannelView({
                         hasPendingQuestion={hasPendingQuestion}
                         onContinue={onContinue}
                       />
-                      <time dateTime={entry.message.createdAt}>
+                      <time
+                        dateTime={entry.message.createdAt}
+                        title={formatChatTimestampTooltip(entry.message.createdAt, timestampFormat)}
+                      >
                         {formatTime(entry.message.createdAt)}
                       </time>
                     </div>
@@ -338,7 +350,12 @@ export function ChannelView({
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                         Thread created
-                        <time dateTime={event.createdAt}>{formatTime(event.createdAt)}</time>
+                        <time
+                          dateTime={event.createdAt}
+                          title={formatChatTimestampTooltip(event.createdAt, timestampFormat)}
+                        >
+                          {formatTime(event.createdAt)}
+                        </time>
                       </span>
                       <span className="truncate font-medium text-foreground text-sm">{name}</span>
                     </span>
@@ -384,7 +401,10 @@ export function ChannelView({
                 >
                   <div className="flex items-center gap-2 pl-1 text-[11px] text-muted-foreground">
                     <span className="font-medium text-foreground">Assistant</span>
-                    <time dateTime={entry.delivery.createdAt}>
+                    <time
+                      dateTime={entry.delivery.createdAt}
+                      title={formatChatTimestampTooltip(entry.delivery.createdAt, timestampFormat)}
+                    >
                       {formatTime(entry.delivery.createdAt)}
                     </time>
                   </div>
