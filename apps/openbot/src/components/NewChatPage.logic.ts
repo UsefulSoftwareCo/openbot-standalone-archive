@@ -64,6 +64,7 @@ export function newChatAttemptPayload(draft: NewChatDraft): Record<string, strin
     parentChannelId: draft.parentChannelId ?? "",
     instanceId: draft.modelSelection?.instanceId ?? "",
     model: draft.modelSelection?.model ?? "",
+    options: JSON.stringify(draft.modelSelection?.options ?? []),
   };
 }
 

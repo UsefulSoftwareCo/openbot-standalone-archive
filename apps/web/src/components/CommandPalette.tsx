@@ -571,12 +571,48 @@ function CommandPaletteDialog(props: {
   );
 }
 
+/** Reuses the host folder browser without creating a T3 project or thread. */
+export function ProjectFolderPicker({
+  environmentId,
+  open,
+  onOpenChange,
+  onSelect,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly onSelect: (path: string) => void;
+}) {
+  return (
+    <CommandDialog open={open} onOpenChange={onOpenChange}>
+      <CommandDialogPopup
+        aria-label="Choose a folder"
+        className="overflow-hidden p-0"
+        data-command-palette="true"
+      >
+        <OpenCommandPaletteDialog
+          openIntent={null}
+          setOpen={onOpenChange}
+          openOverlayMode={() => {}}
+          clearOpenIntent={() => {}}
+          folderPicker={{ environmentId, onSelect }}
+        />
+      </CommandDialogPopup>
+    </CommandDialog>
+  );
+}
+
 function OpenCommandPaletteDialog(props: {
+  readonly folderPicker?: {
+    readonly environmentId: EnvironmentId;
+    readonly onSelect: (path: string) => void;
+  };
   readonly openIntent: CommandPaletteOpenIntent | null;
   readonly setOpen: (open: boolean) => void;
   readonly openOverlayMode: (mode: SearchOverlayMode) => void;
   readonly clearOpenIntent: () => void;
 }) {
+  const folderPickerStarted = useRef(false);
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
   const { clearOpenIntent, openIntent, openOverlayMode, setOpen } = props;
@@ -1286,6 +1322,10 @@ function OpenCommandPaletteDialog(props: {
   }
 
   function popView(): void {
+    if (props.folderPicker && viewStack.length <= 1) {
+      setOpen(false);
+      return;
+    }
     browseNavigation.invalidate();
     setAddProjectCloneFlow(null);
     if (viewStack.length <= 1) {
@@ -1545,6 +1585,13 @@ function OpenCommandPaletteDialog(props: {
     pushPaletteView,
     startAddProjectSourceSelection,
   ]);
+
+  useLayoutEffect(() => {
+    if (!props.folderPicker || folderPickerStarted.current) return;
+    folderPickerStarted.current = true;
+    setAddProjectEnvironmentId(props.folderPicker.environmentId);
+    void startAddProjectBrowse(props.folderPicker.environmentId);
+  }, [props.folderPicker, startAddProjectBrowse]);
 
   useLayoutEffect(() => {
     if (openIntent?.kind !== "add-project") {
@@ -1873,6 +1920,13 @@ function OpenCommandPaletteDialog(props: {
       const cwd = resolveProjectPathForDispatch(rawCwd, input.currentProjectCwd);
       if (cwd.length === 0) return;
 
+      if (props.folderPicker) {
+        if (input.environmentId !== props.folderPicker.environmentId) return;
+        props.folderPicker.onSelect(cwd);
+        setOpen(false);
+        return;
+      }
+
       const existing = findProjectByPath(
         projects.filter((project) => project.environmentId === input.environmentId),
         cwd,
@@ -1952,6 +2006,7 @@ function OpenCommandPaletteDialog(props: {
       setOpen(false);
     },
     [
+      props.folderPicker,
       handleNewThread,
       createProject,
       environments,
@@ -2225,6 +2280,9 @@ function OpenCommandPaletteDialog(props: {
     remoteProjectInputPlaceholder(addProjectCloneFlow) ??
     getCommandPaletteInputPlaceholder(paletteMode);
   const isSubmenu = paletteMode === "submenu" || paletteMode === "submenu-browse";
+  // A folder-only picker must not expose unrelated commands while its initial browse loads.
+  if (props.folderPicker && !isBrowsing) displayedGroups = [];
+
   const hasHighlightedBrowseItem = highlightedItemValue?.startsWith("browse:") ?? false;
   const canSubmitBrowsePath =
     isBrowsing &&
@@ -2550,7 +2608,11 @@ function OpenCommandPaletteDialog(props: {
           }
         >
           <span>
-            {isCloneDestinationStep && isRemoteProjectPending ? "Cloning" : submitActionLabel}
+            {props.folderPicker
+              ? "Select folder"
+              : isCloneDestinationStep && isRemoteProjectPending
+                ? "Cloning"
+                : submitActionLabel}
           </span>
           <KbdGroup className="pointer-events-none -me-0.5 items-center gap-1">
             <Kbd>{hasHighlightedBrowseItem ? `${submitModifierLabel} Enter` : "Enter"}</Kbd>

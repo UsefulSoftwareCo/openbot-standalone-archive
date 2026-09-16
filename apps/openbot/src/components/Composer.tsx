@@ -1,3 +1,8 @@
+import { flushSync } from "react-dom";
+import {
+  shouldTypeToFocusComposer,
+  pasteTextToFocusComposer,
+} from "../../../web/src/components/composerInputFocus";
 import { ComposerSurface } from "@t3tools/ui/composer-surface";
 import { DraftAttachment } from "./DraftAttachment";
 import {
@@ -66,6 +71,35 @@ export function Composer({
   );
   const mint = useAtomCommand(createAttachmentUpload, { reportFailure: false });
   useEffect(() => () => transfer.current?.abort(), []);
+  useEffect(() => {
+    if (disabled || busy) return;
+    const insert = (text: string) => {
+      const current = editorRef.current?.readSnapshot().value ?? value;
+      const next = current + text;
+      flushSync(() => {
+        setValue(next);
+        setCursor(next.length);
+      });
+      editorRef.current?.focusAtEnd();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!shouldTypeToFocusComposer(event)) return;
+      event.preventDefault();
+      insert(event.key);
+    };
+    const onPaste = (event: ClipboardEvent) => {
+      const text = pasteTextToFocusComposer(event);
+      if (text === null) return;
+      event.preventDefault();
+      insert(text);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("paste", onPaste);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("paste", onPaste);
+    };
+  }, [disabled, busy, value]);
   const addFiles = (incoming: ReadonlyArray<File>) => {
     if (disabled || inFlight.current) return;
     if (files.length + incoming.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
@@ -268,7 +302,9 @@ export function Composer({
                 >
                   <Plus />
                 </Button>
-                {controls}
+                <fieldset disabled={busy || disabled} className="contents">
+                  {controls}
+                </fieldset>
               </div>
               <Button
                 type="submit"

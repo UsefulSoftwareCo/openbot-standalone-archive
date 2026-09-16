@@ -1,3 +1,5 @@
+import { ProjectFolderPicker } from "../../../web/src/components/CommandPalette";
+import { usePrimaryEnvironmentId } from "../state/channels";
 import {
   DEFAULT_OPENBOT_PROJECT_ICON,
   type OpenbotProjectCreateInput,
@@ -39,6 +41,8 @@ export function NewProjectDialog({
   readonly busy: boolean;
   readonly error: string | null;
 }) {
+  const environmentId = usePrimaryEnvironmentId();
+  const [folderPickerOpen, setFolderPickerOpen] = useState(false);
   const [name, setName] = useState("");
   const [attachedPath, setAttachedPath] = useState("");
   const [icon, setIcon] = useState<OpenbotProjectIcon>(DEFAULT_OPENBOT_PROJECT_ICON);
@@ -59,6 +63,7 @@ export function NewProjectDialog({
       >
         <DialogPopup className="max-w-md" bottomStickOnMobile={false}>
           <form
+            className="flex min-h-0 flex-col overflow-hidden"
             onSubmit={(event) => {
               event.preventDefault();
               if (trimmedName === "" || busy) return;
@@ -83,7 +88,7 @@ export function NewProjectDialog({
                 A project has its own main chat, instructions and knowledge.
               </DialogDescription>
             </DialogHeader>
-            <DialogPanel className="max-h-[65dvh] space-y-4 overflow-y-auto">
+            <DialogPanel className="space-y-4">
               <div className="flex items-end gap-3">
                 <Button
                   type="button"
@@ -107,20 +112,33 @@ export function NewProjectDialog({
                   />
                 </label>
               </div>
-              <label className="flex flex-col gap-1 text-sm">
-                Attach a folder
-                <Input
-                  autoComplete="off"
-                  placeholder="/path/to/a/repository"
-                  value={attachedPath}
-                  disabled={busy}
-                  onChange={(event) => setAttachedPath(event.target.value)}
-                />
+              <div className="flex flex-col gap-2 text-sm">
+                <span>Attach a folder</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="justify-start truncate"
+                  disabled={busy || environmentId === null}
+                  onClick={() => setFolderPickerOpen(true)}
+                >
+                  {attachedPath || "Choose a folder…"}
+                </Button>
+                {attachedPath && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="self-start"
+                    disabled={busy}
+                    onClick={() => setAttachedPath("")}
+                  >
+                    Remove folder
+                  </Button>
+                )}
                 <span className="text-muted-foreground text-xs">
-                  Leave empty for an app-managed working directory. An attached folder is used as-is
-                  and never moved.
+                  Optional. Without a folder, OpenBot creates a working directory for this project.
                 </span>
-              </label>
+              </div>
               {error !== null && (
                 <p role="alert" className="text-error-foreground text-sm">
                   {error}
@@ -143,6 +161,14 @@ export function NewProjectDialog({
           </form>
         </DialogPopup>
       </Dialog>
+      {folderPickerOpen && environmentId !== null && (
+        <ProjectFolderPicker
+          environmentId={environmentId}
+          open
+          onOpenChange={setFolderPickerOpen}
+          onSelect={setAttachedPath}
+        />
+      )}
       {pickerOpen && (
         <Suspense fallback={null}>
           <ProjectIconPicker

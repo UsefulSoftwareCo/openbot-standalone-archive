@@ -1,3 +1,10 @@
+import { DEFAULT_RUNTIME_MODE, type RuntimeMode, type ThreadId } from "@t3tools/contracts";
+import { TraitsPicker } from "../../../web/src/components/chat/TraitsPicker";
+import { ComposerFooterModeControls } from "../../../web/src/components/chat/ChatComposer";
+import { threadEnvironment } from "../../../web/src/state/threads";
+import { useThreadShell } from "../../../web/src/state/entities";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { useChannelsState } from "../state/channels";
 import type {
   EnvironmentId,
   ModelSelection,
@@ -49,6 +56,12 @@ export function NewChatPage({
   /** Called once the first message has landed, with the chat that now owns it. */
   readonly onCreated: (channelId: OpenbotChannelId) => void;
 }) {
+  const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(DEFAULT_RUNTIME_MODE);
+  const createdThreadId = useRef<ThreadId | null>(null);
+  const setThreadRuntimeMode = useAtomCommand(threadEnvironment.setRuntimeMode, {
+    reportFailure: false,
+  });
+  const channels = useChannelsState(environmentId).items;
   const [projectId, setProjectId] = useState<OpenbotProjectId | null>(null);
   const [modelSelection, setModelSelection] = useState<ModelSelection | undefined>(undefined);
   const [channelId, setChannelId] = useState<OpenbotChannelId | null>(null);
@@ -69,6 +82,13 @@ export function NewChatPage({
   const create = useAtomCommand(createChannel, { reportFailure: false });
   const send = useAtomCommand(sendChannelMessage, { reportFailure: false });
   const project = projects.find((entry) => entry.id === projectId) ?? null;
+  const parent = channels.find((channel) => channel.id === project?.mainChannelId);
+  const parentThread = useThreadShell(
+    parent ? scopeThreadRef(environmentId, parent.threadId) : null,
+  );
+  const selectedProvider = providers.find(
+    (provider) => provider.instanceId === effectiveModel?.instanceId,
+  );
   // Everything here describes the chat that does not exist yet.
   const locked = channelId !== null;
 
@@ -78,6 +98,8 @@ export function NewChatPage({
    * second one; returning false leaves the draft and its files in the composer.
    */
   const sendFirstMessage: ComponentProps<typeof Composer>["onSend"] = async (message) => {
+    const selectedRuntimeMode = project === null ? runtimeMode : parentThread?.runtimeMode;
+    if (selectedRuntimeMode === undefined) return false;
     onStart();
     setError(null);
     let target = channelId;
@@ -88,7 +110,7 @@ export function NewChatPage({
           message.attachments.map((attachment) => attachment.name),
         ),
         parentChannelId: project?.mainChannelId ?? null,
-        modelSelection: effectiveModel,
+        modelSelection: project === null ? effectiveModel : undefined,
       };
       const next = commandAttempt(attempt.current, "chat-create", newChatAttemptPayload(draft));
       attempt.current = next;
@@ -102,6 +124,19 @@ export function NewChatPage({
       }
       target = created.value.id;
       setChannelId(target);
+      createdThreadId.current = created.value.threadId;
+    }
+    if (createdThreadId.current === null) return false;
+    const modeResult = await setThreadRuntimeMode({
+      environmentId,
+      input: {
+        threadId: createdThreadId.current,
+        runtimeMode: selectedRuntimeMode,
+      },
+    });
+    if (modeResult._tag === "Failure") {
+      setError(commandErrorText(modeResult));
+      return false;
     }
     const sent = await send({
       environmentId,
@@ -141,7 +176,9 @@ export function NewChatPage({
         <Composer
           channelName="OpenBot"
           environmentId={environmentId}
-          disabled={disabled || effectiveModel === undefined}
+          disabled={
+            disabled || (project === null ? effectiveModel === undefined : parentThread === null)
+          }
           autoFocus
           controls={
             <div className="flex min-w-0 items-center gap-1">
@@ -168,12 +205,46 @@ export function NewChatPage({
                   ))}
                 </SelectPopup>
               </Select>
-              <ModelPicker
-                providers={providers}
-                selection={effectiveModel}
-                disabled={locked}
-                onChange={setModelSelection}
-              />
+              {project === null && (
+                <ModelPicker
+                  providers={providers}
+                  selection={effectiveModel}
+                  disabled={locked}
+                  onChange={setModelSelection}
+                />
+              )}
+              {project === null && !locked && selectedProvider && effectiveModel && (
+                <TraitsPicker
+                  provider={selectedProvider.driver}
+                  instanceId={selectedProvider.instanceId}
+                  models={selectedProvider.models}
+                  model={effectiveModel.model}
+                  modelOptions={effectiveModel.options}
+                  prompt=""
+                  onPromptChange={() => {}}
+                  allowPromptInjectedEffort={false}
+                  planModeEnabled={false}
+                  onModelOptionsChange={(options) =>
+                    setModelSelection({
+                      instanceId: effectiveModel.instanceId,
+                      model: effectiveModel.model,
+                      ...(options ? { options } : {}),
+                    })
+                  }
+                />
+              )}
+              {project === null && !locked && (
+                <ComposerFooterModeControls
+                  showInteractionModeToggle={false}
+                  interactionMode="default"
+                  runtimeMode={runtimeMode}
+                  onToggleInteractionMode={() => {}}
+                  onRuntimeModeChange={setRuntimeMode}
+                />
+              )}
+              {project !== null && (
+                <span className="text-xs text-muted-foreground">Uses project agent</span>
+              )}
               {providersFailed && <span role="alert">Could not load provider choices.</span>}
             </div>
           }
