@@ -15,6 +15,7 @@ import { useMemo } from "react";
 
 import { buildSidebarGroups } from "../state/sidebar";
 import { ProjectIcon } from "./ProjectIcon";
+import { SidebarMenuSkeleton } from "../../../web/src/components/ui/sidebar";
 
 const sectionLabelClass =
   "px-2 font-medium text-[11px] text-sidebar-muted-foreground uppercase tracking-wide";
@@ -74,6 +75,10 @@ function ThreadList({
 export function Sidebar({
   projects,
   channels,
+  projectsLoading,
+  channelsLoading,
+  projectsError,
+  channelsError,
   activeChannelId,
   search,
   onSearchChange,
@@ -84,6 +89,10 @@ export function Sidebar({
 }: {
   readonly projects: ReadonlyArray<OpenbotProject>;
   readonly channels: ReadonlyArray<OpenbotChannel>;
+  readonly projectsLoading: boolean;
+  readonly channelsLoading: boolean;
+  readonly projectsError: string | null;
+  readonly channelsError: string | null;
   readonly activeChannelId: OpenbotChannelId | null;
   readonly search: string;
   readonly onSearchChange: (search: string) => void;
@@ -130,7 +139,19 @@ export function Sidebar({
               <Plus />
             </Button>
           </div>
-          {groups.projects.length === 0 ? (
+          {projectsLoading && projects.length === 0 ? (
+            <div role="status" aria-label="Loading projects" className="py-1">
+              <div aria-hidden="true">
+                <SidebarMenuSkeleton showIcon />
+                <SidebarMenuSkeleton showIcon />
+                <SidebarMenuSkeleton showIcon />
+              </div>
+            </div>
+          ) : projectsError !== null ? (
+            <p role="alert" className={hintClass}>
+              Could not load projects.
+            </p>
+          ) : groups.projects.length === 0 ? (
             <p className={hintClass}>
               {searching
                 ? "No projects match."
@@ -188,7 +209,20 @@ export function Sidebar({
               <Plus />
             </Button>
           </div>
-          {groups.chats.length === 0 ? (
+          {channelsLoading && channels.length === 0 ? (
+            <div role="status" aria-label="Loading chats" className="py-1">
+              <div aria-hidden="true">
+                <SidebarMenuSkeleton />
+                <SidebarMenuSkeleton />
+                <SidebarMenuSkeleton />
+                <SidebarMenuSkeleton />
+              </div>
+            </div>
+          ) : channelsError !== null ? (
+            <p role="alert" className={hintClass}>
+              Could not load chats.
+            </p>
+          ) : groups.chats.length === 0 ? (
             <p className={hintClass}>
               {searching ? "No chats match." : "No chats yet. Create one to start talking."}
             </p>

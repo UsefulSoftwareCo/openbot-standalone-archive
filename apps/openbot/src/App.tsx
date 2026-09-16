@@ -281,6 +281,10 @@ export function App({ route }: { readonly route: OpenbotScreen }) {
     <Sidebar
       projects={projects}
       channels={channels}
+      projectsLoading={projectsState.loading}
+      channelsLoading={channelsState.loading}
+      projectsError={projectsState.error}
+      channelsError={channelsState.error}
       activeChannelId={page === null ? activeChannelId : null}
       search={search}
       onSearchChange={setSearch}
