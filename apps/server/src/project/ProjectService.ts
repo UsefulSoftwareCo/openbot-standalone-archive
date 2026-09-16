@@ -35,6 +35,8 @@ export interface ProjectCreateInput {
   readonly title: string;
   readonly workspaceRoot: string;
   readonly createWorkspaceRootIfMissing?: boolean;
+  /** Create a distinct identity in a folder already used by another project. */
+  readonly allowSharedWorkspace?: boolean;
   readonly defaultModelSelection?: ModelSelection | null;
   readonly scripts?: ReadonlyArray<ProjectScript>;
 }
@@ -303,12 +305,17 @@ export const make = Effect.gen(function* () {
               }),
           ),
         );
-      yield* assertWorkspaceAvailable(input.projectId, workspaceRoot);
+      if (!input.allowSharedWorkspace) {
+        yield* assertWorkspaceAvailable(input.projectId, workspaceRoot);
+      }
       const now = DateTime.formatIso(yield* DateTime.now);
       return yield* dispatch(
         input.projectId,
         {
           type: "project.create",
+          ...(input.allowSharedWorkspace === undefined
+            ? {}
+            : { allowSharedWorkspace: input.allowSharedWorkspace }),
           commandId: input.commandId,
           projectId: input.projectId,
           title: input.title,
@@ -351,7 +358,9 @@ export const make = Effect.gen(function* () {
                   }),
               ),
             );
-      yield* assertWorkspaceAvailable(input.projectId, workspaceRoot);
+      if (workspaceRoot !== existing.value.workspaceRoot) {
+        yield* assertWorkspaceAvailable(input.projectId, workspaceRoot);
+      }
       return yield* dispatch(
         input.projectId,
         {

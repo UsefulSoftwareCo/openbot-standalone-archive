@@ -18,7 +18,8 @@ the delivery contract; it does not own an agent loop or a scheduler.
   `<state dir>/openbot/projects/`, which sits inside the OpenBot workspace git
   repository, so a project needs no user folder and still checkpoints normally.
   An `attached` workspace is a user folder used exactly as it is: never moved,
-  never `git init`ed, and never shared with a second OpenBot project. A chat's
+  never `git init`ed. Multiple OpenBot projects can share a folder while keeping
+  distinct T3 project identities. A chat's
   project is derived by joining `openbot_projects.t3_project_id`, so a main
   chat and its children can never disagree about which project they are in.
 - The shared `<state dir>/openbot` project remains the workspace for standalone

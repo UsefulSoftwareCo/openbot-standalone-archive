@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 
 import {
   channelActivity,
+  visibleChannelMessage,
   clipPreview,
   incomingPresentation,
   resolveReplyPreview,
@@ -127,5 +128,27 @@ describe("channelActivity", () => {
       { kind: "working" },
     );
     assert.deepEqual(channelActivity({ status: "idle", messages: [] }, false), { kind: "none" });
+  });
+});
+
+describe("visibleChannelMessage", () => {
+  it("keeps human messages and child task briefs but hides internal returns and progress", () => {
+    const parent = message("p", "brief", request as OpenbotIncomingMessage["origin"]).origin;
+    assert.isDefined(parent);
+    if (parent === undefined) return;
+    assert.isTrue(visibleChannelMessage(message("m", "hello"), null));
+    assert.isFalse(
+      visibleChannelMessage(
+        message("m", "report", reply as OpenbotIncomingMessage["origin"]),
+        null,
+      ),
+    );
+    assert.isFalse(
+      visibleChannelMessage(
+        message("m", "progress", request as OpenbotIncomingMessage["origin"]),
+        null,
+      ),
+    );
+    assert.isTrue(visibleChannelMessage(message("m", "brief", parent), parent.sourceChannelId));
   });
 });

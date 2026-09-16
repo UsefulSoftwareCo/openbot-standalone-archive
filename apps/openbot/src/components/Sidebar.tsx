@@ -11,7 +11,15 @@ import { cn } from "@t3tools/ui/cn";
 import { Input } from "@t3tools/ui/input";
 import { ScrollArea } from "@t3tools/ui/scroll-area";
 import { Bot, Plus, Settings } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
+import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  useThreadShells,
+  readEnvironmentSupportsSettlement,
+  readEnvironmentSupportsSnooze,
+} from "../../../web/src/state/entities";
+import { usePrimaryEnvironmentId } from "../state/channels";
+import { useSnoozeActive } from "./ChatHeader";
 
 import { buildSidebarGroups } from "../state/sidebar";
 import { ChatSidebarRow } from "./ChatSidebarRow";
@@ -31,12 +39,47 @@ function rowClass(selected: boolean): string {
   );
 }
 
+type ChatSection = "active" | "snoozed" | "settled";
+
+/** Keep parked conversations reachable without leaving them in the active list. */
+function ChatSections({
+  channels,
+  sections,
+  activeChannelId,
+  renderRow,
+}: {
+  readonly channels: ReadonlyArray<OpenbotChannel>;
+  readonly sections: ReadonlyMap<OpenbotChannelId, ChatSection>;
+  readonly activeChannelId: OpenbotChannelId | null;
+  readonly renderRow: (channel: OpenbotChannel) => ReactNode;
+}) {
+  return (["active", "snoozed", "settled"] as const).map((section) => {
+    const rows = channels.filter((channel) => (sections.get(channel.id) ?? "active") === section);
+    if (rows.length === 0) return null;
+    if (section === "active") return <div key={section}>{rows.map(renderRow)}</div>;
+    return (
+      <details
+        key={section}
+        className="mt-2"
+        open={rows.some((row) => row.id === activeChannelId) || undefined}
+      >
+        <summary className="cursor-pointer px-2 py-1 text-[11px] text-sidebar-muted-foreground hover:text-foreground">
+          {section === "snoozed" ? "Snoozed" : "Settled"} ({rows.length})
+        </summary>
+        {rows.map(renderRow)}
+      </details>
+    );
+  });
+}
+
 /** The threads nested under one parent chat, drawn on a connector line. */
 function ThreadList({
   threads,
+  sections,
   activeChannelId,
   onDelete,
 }: {
+  readonly sections: ReadonlyMap<OpenbotChannelId, ChatSection>;
   readonly onDelete: (channel: OpenbotChannel) => void;
   readonly threads: ReadonlyArray<OpenbotChannel>;
   readonly activeChannelId: OpenbotChannelId | null;
@@ -44,25 +87,35 @@ function ThreadList({
   if (threads.length === 0) return null;
   return (
     <div className="openbot-thread-list">
-      {threads.map((thread) => {
-        const selected = thread.id === activeChannelId;
-        return (
-          <ChatSidebarRow key={thread.id} channel={thread} onDelete={onDelete}>
-            <Link
-              to={channelHref(thread.id)}
-              aria-current={selected ? "page" : undefined}
-              className={cn(
-                "openbot-thread-row",
-                selected
-                  ? "bg-sidebar-row-selected text-foreground"
-                  : "text-sidebar-muted-foreground hover:text-foreground",
-              )}
+      <ChatSections
+        channels={threads}
+        sections={sections}
+        activeChannelId={activeChannelId}
+        renderRow={(thread) => {
+          const selected = thread.id === activeChannelId;
+          return (
+            <ChatSidebarRow
+              key={thread.id}
+              isActive={selected}
+              channel={thread}
+              onDelete={onDelete}
             >
-              <span className="truncate">{thread.name}</span>
-            </Link>
-          </ChatSidebarRow>
-        );
-      })}
+              <Link
+                to={channelHref(thread.id)}
+                aria-current={selected ? "page" : undefined}
+                className={cn(
+                  "openbot-thread-row",
+                  selected
+                    ? "bg-sidebar-row-selected text-foreground"
+                    : "text-sidebar-muted-foreground hover:text-foreground",
+                )}
+              >
+                <span className="truncate">{thread.name}</span>
+              </Link>
+            </ChatSidebarRow>
+          );
+        }}
+      />
     </div>
   );
 }
@@ -101,6 +154,33 @@ export function Sidebar({
   readonly connectionLabel: string;
   readonly onDeleteChannel: (channel: OpenbotChannel) => void;
 }) {
+  const environmentId = usePrimaryEnvironmentId();
+  const shells = useThreadShells();
+  const now = new Date().toISOString();
+  const localShells = shells.filter((thread) => thread.environmentId === environmentId);
+  const nextWake =
+    localShells
+      .flatMap((thread) =>
+        thread.snoozedUntil !== null && thread.snoozedUntil > now ? [thread.snoozedUntil] : [],
+      )
+      .toSorted()[0] ?? null;
+  useSnoozeActive(nextWake);
+  const shellsById = new Map(localShells.map((thread) => [thread.id, thread]));
+  const sections = new Map<OpenbotChannelId, ChatSection>(
+    channels.map((channel) => {
+      const thread = shellsById.get(channel.threadId);
+      const section =
+        thread === undefined || environmentId === null
+          ? "active"
+          : readEnvironmentSupportsSnooze(environmentId) && effectiveSnoozed(thread, { now })
+            ? "snoozed"
+            : readEnvironmentSupportsSettlement(environmentId) &&
+                thread.settledOverride === "settled"
+              ? "settled"
+              : "active";
+      return [channel.id, section];
+    }),
+  );
   const groups = useMemo(
     () => buildSidebarGroups(projects, channels, search),
     [projects, channels, search],
@@ -190,6 +270,7 @@ export function Sidebar({
                   </div>
                   <ThreadList
                     threads={group.threads}
+                    sections={sections}
                     activeChannelId={activeChannelId}
                     onDelete={onDeleteChannel}
                   />
@@ -227,27 +308,42 @@ export function Sidebar({
               {searching ? "No chats match." : "No chats yet. Create one to start talking."}
             </p>
           ) : (
-            groups.chats.map((group) => {
-              const selected = group.channel.id === activeChannelId;
-              return (
-                <div key={group.channel.id} className="mb-1">
-                  <ChatSidebarRow channel={group.channel} onDelete={onDeleteChannel}>
-                    <Link
-                      to={channelHref(group.channel.id)}
-                      aria-current={selected ? "page" : undefined}
-                      className={cn(rowClass(selected), "pr-14 pl-2")}
+            <ChatSections
+              channels={groups.chats.map((group) => group.channel)}
+              sections={sections}
+              activeChannelId={
+                channels.find((channel) => channel.id === activeChannelId)?.parentChannelId ??
+                activeChannelId
+              }
+              renderRow={(channel) => {
+                const group = groups.chats.find((candidate) => candidate.channel.id === channel.id);
+                if (group === undefined) return null;
+                const selected = group.channel.id === activeChannelId;
+                return (
+                  <div key={group.channel.id} className="mb-1">
+                    <ChatSidebarRow
+                      isActive={selected}
+                      channel={group.channel}
+                      onDelete={onDeleteChannel}
                     >
-                      <span className="truncate">{group.channel.name}</span>
-                    </Link>
-                  </ChatSidebarRow>
-                  <ThreadList
-                    threads={group.threads}
-                    activeChannelId={activeChannelId}
-                    onDelete={onDeleteChannel}
-                  />
-                </div>
-              );
-            })
+                      <Link
+                        to={channelHref(group.channel.id)}
+                        aria-current={selected ? "page" : undefined}
+                        className={cn(rowClass(selected), "pr-14 pl-2")}
+                      >
+                        <span className="truncate">{group.channel.name}</span>
+                      </Link>
+                    </ChatSidebarRow>
+                    <ThreadList
+                      threads={group.threads}
+                      sections={sections}
+                      activeChannelId={activeChannelId}
+                      onDelete={onDeleteChannel}
+                    />
+                  </div>
+                );
+              }}
+            />
           )}
         </nav>
       </ScrollArea>

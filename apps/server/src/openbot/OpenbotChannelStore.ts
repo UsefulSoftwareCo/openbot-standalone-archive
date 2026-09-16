@@ -161,10 +161,6 @@ export interface OpenbotChannelStoreShape {
   readonly updateProject: (
     patch: OpenbotProjectPatch,
   ) => Effect.Effect<OpenbotProject | undefined, OpenbotChannelStoreError>;
-  /** Includes deleted projects because the stored T3 workspace identity is unique. */
-  readonly projectWorkspaceInUse: (
-    workspacePath: string,
-  ) => Effect.Effect<boolean, OpenbotChannelStoreError>;
   /** True when the project row exists and carries a tombstone. */
   readonly isProjectDeleted: (
     projectId: OpenbotProjectId,
@@ -491,13 +487,6 @@ export const make = Effect.gen(function* () {
     return rows[0] === undefined ? undefined : yield* getProject(patch.projectId);
   });
 
-  const projectWorkspaceInUse: OpenbotChannelStoreShape["projectWorkspaceInUse"] = (
-    workspacePath,
-  ) =>
-    sql<{ readonly project_id: string }>`
-      SELECT project_id FROM openbot_projects WHERE workspace_path = ${workspacePath}
-    `.pipe(Effect.map((rows) => rows.length > 0));
-
   const isProjectDeleted: OpenbotChannelStoreShape["isProjectDeleted"] = (projectId) =>
     sql<{ readonly project_id: string }>`
       SELECT project_id FROM openbot_projects
@@ -631,7 +620,6 @@ export const make = Effect.gen(function* () {
     insertProject,
     updateProject,
     isProjectDeleted,
-    projectWorkspaceInUse,
     deleteProject,
     listKnowledge,
     getKnowledge,

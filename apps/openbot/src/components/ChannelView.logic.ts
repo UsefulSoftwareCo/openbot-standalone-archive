@@ -27,6 +27,19 @@ export function incomingPresentation(
   };
 }
 
+/** Internal handoffs remain model context; only the parent's task belongs in a child timeline. */
+export function visibleChannelMessage(
+  message: Pick<OpenbotIncomingMessage, "origin">,
+  parentChannelId: OpenbotChannelView["channel"]["parentChannelId"],
+): boolean {
+  if (message.origin === undefined) return true;
+  return (
+    parentChannelId !== null &&
+    message.origin.kind === "peer_request" &&
+    message.origin.sourceChannelId === parentChannelId
+  );
+}
+
 const REPLY_PREVIEW_LENGTH = 90;
 
 export function clipPreview(text: string): string {

@@ -139,7 +139,7 @@
 }
 .openbot-row[data-menu-open] .openbot-row-settings,
 .openbot-row:hover .openbot-row-settings,
-.openbot-row:focus-within .openbot-row-settings {
+.openbot-row:has(:focus-visible) .openbot-row-settings {
   opacity: 1;
   pointer-events: auto;
 }
@@ -176,7 +176,7 @@
   border-bottom-left-radius: 8px;
   pointer-events: none;
 }
-.openbot-thread-list > .openbot-row:not(:last-child) > .openbot-thread-row::after {
+.openbot-thread-list .openbot-row:not(:last-child) > .openbot-thread-row::after {
   content: "";
   position: absolute;
   left: -12px;
@@ -193,4 +193,35 @@
 
 .openbot-thread-row {
   padding-right: 3.5rem;
+}
+
+/* Message times are available on hover or focus without adding a row to every bubble. */
+.openbot-message-time {
+  position: absolute;
+  top: -1rem;
+  z-index: 1;
+  padding: 0 0.25rem;
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--muted-foreground);
+  font-size: 10px;
+  line-height: 1rem;
+  opacity: 0;
+}
+.openbot-message:hover .openbot-message-time,
+.openbot-message:focus-within .openbot-message-time {
+  opacity: 1;
+}
+@media (hover: none) {
+  .openbot-message-time {
+    position: static;
+    opacity: 1;
+    margin-top: 2px;
+  }
+}
+
+.openbot-row:hover > .openbot-row-activity,
+.openbot-row:has(:focus-visible) > .openbot-row-activity,
+.openbot-row[data-menu-open] > .openbot-row-activity {
+  opacity: 0;
 }

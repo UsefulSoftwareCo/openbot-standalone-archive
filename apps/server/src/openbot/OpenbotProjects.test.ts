@@ -131,14 +131,46 @@ it.layer(TestLayer)("OpenBot projects, child chats, and knowledge", (it) => {
         })
         .pipe(Effect.flip);
       assert.equal(notADirectory.code, "project_unavailable");
-      const taken = yield* service
-        .createProject({
-          name: "Again",
-          attachedPath: attached,
-          commandId: CommandId.make("create-again"),
-        })
-        .pipe(Effect.flip);
-      assert.equal(taken.code, "project_unavailable");
+      const second = yield* service.createProject({
+        name: "Again",
+        attachedPath: attached,
+        instructions: "Only the second bot knows this instruction.",
+        commandId: CommandId.make("create-again"),
+      });
+      assert.notEqual(second.t3ProjectId, project.t3ProjectId);
+      const secondMain = (yield* service.getView(second.mainChannelId)).channel;
+      assert.equal(secondMain.openbotProjectId, second.id);
+      const child = yield* service.create({ name: "Second child", parentChannelId: secondMain.id });
+      assert.equal(child.openbotProjectId, second.id);
+      const instructions = yield* ProviderTurnInstructionsV2;
+      const firstMain = (yield* service.getView(project.mainChannelId)).channel;
+      const firstPrompt = yield* instructions.resolve({
+        threadId: firstMain.threadId,
+        runOrdinal: 1,
+        messageCount: 0,
+      });
+      const childPrompt = yield* instructions.resolve({
+        threadId: child.threadId,
+        runOrdinal: 1,
+        messageCount: 0,
+      });
+      assert.notInclude(firstPrompt ?? "", second.instructions);
+      assert.include(childPrompt ?? "", second.instructions);
+      yield* service.deleteProject({
+        projectId: project.id,
+        commandId: CommandId.make("delete-attached"),
+      });
+      assert.equal(
+        (yield* service.getView(second.mainChannelId)).channel.openbotProjectId,
+        second.id,
+      );
+      assert.equal((yield* service.getView(child.id)).channel.openbotProjectId, second.id);
+      assert.equal(yield* fs.readFileString(path.join(attached, "README.md")), "hello");
+      const projects = yield* ProjectService;
+      const deleted = yield* projects.getById(project.t3ProjectId);
+      assert.isTrue(Option.isNone(deleted));
+      const retained = yield* projects.getById(second.t3ProjectId);
+      assert.isTrue(Option.isSome(retained));
     }),
   );
 

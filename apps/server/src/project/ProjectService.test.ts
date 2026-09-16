@@ -199,6 +199,34 @@ it.layer(TestLayer)("ProjectService", (it) => {
     }),
   );
 
+  it.effect("allows explicitly shared folders with independent metadata", () =>
+    Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      const first = yield* service.create({
+        commandId: CommandId.make("shared-first"),
+        projectId: ProjectId.make("project:shared-first"),
+        title: "First",
+        workspaceRoot: "/work/shared-explicit",
+      });
+      const second = yield* service.create({
+        commandId: CommandId.make("shared-second"),
+        projectId: ProjectId.make("project:shared-second"),
+        title: "Second",
+        workspaceRoot: first.workspaceRoot,
+        allowSharedWorkspace: true,
+      });
+      assert.notEqual(first.id, second.id);
+      const renamed = yield* service.update({
+        commandId: CommandId.make("shared-rename"),
+        projectId: second.id,
+        title: "Renamed",
+      });
+      assert.equal(renamed.title, "Renamed");
+      const original = yield* service.getById(first.id);
+      assert.equal(Option.isSome(original) ? original.value.title : null, "First");
+    }),
+  );
+
   it.effect("auto-bootstraps a workspace exactly once", () =>
     Effect.gen(function* () {
       const service = yield* ProjectService.ProjectService;

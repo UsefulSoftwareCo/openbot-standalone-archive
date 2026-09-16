@@ -1,6 +1,6 @@
-import { useState, type ReactNode } from "react";
-import { CircleCheck, Clock, Trash2 } from "lucide-react";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { useState, useEffect, type ReactNode } from "react";
+import { Check, Clock, MoreHorizontal } from "lucide-react";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentId, OpenbotChannel } from "@t3tools/contracts";
 import { Button } from "@t3tools/ui/button";
@@ -20,7 +20,14 @@ import { usePrimaryEnvironmentId } from "../state/channels";
 import { commandErrorText } from "../state/errors";
 import { useSnoozeActive } from "./ChatHeader";
 
+import {
+  hasUnseenCompletion,
+  resolveSidebarThreadStatus,
+} from "../../../web/src/components/Sidebar.logic";
+import { useUiStateStore } from "../../../web/src/uiStateStore";
+
 type Props = {
+  readonly isActive: boolean;
   readonly channel: OpenbotChannel;
   readonly onDelete: (channel: OpenbotChannel) => void;
   readonly children: ReactNode;
@@ -37,12 +44,32 @@ export function ChatSidebarRow(props: Props) {
 
 function ConnectedChatSidebarRow({
   channel,
+  isActive,
   onDelete,
   children,
   environmentId,
 }: Props & { readonly environmentId: EnvironmentId }) {
   const ref = scopeThreadRef(environmentId, channel.threadId);
   const thread = useThreadShell(ref);
+  const threadKey = scopedThreadKey(ref);
+  const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
+  const markVisited = useUiStateStore((state) => state.markThreadVisited);
+  const completedAt = thread?.latestRun?.completedAt;
+  useEffect(() => {
+    if (isActive) markVisited(threadKey, new Date().toISOString());
+  }, [isActive, threadKey, completedAt, markVisited]);
+  const status = thread === null ? "ready" : resolveSidebarThreadStatus(thread);
+  const unread = !isActive && thread !== null && hasUnseenCompletion({ ...thread, lastVisitedAt });
+  const activityLabel =
+    status === "approval" || status === "input"
+      ? "Needs your attention"
+      : status === "working"
+        ? "Working"
+        : status === "failed"
+          ? "Run failed"
+          : unread
+            ? "Unread result"
+            : null;
   const actions = useThreadActions();
   const timestampFormat = useEnvironmentSettings(
     environmentId,
@@ -145,16 +172,16 @@ function ConnectedChatSidebarRow({
       }}
     >
       {children}
-      {(settled || snoozed) && (
+      {activityLabel !== null && (
         <span
-          className="openbot-row-status pointer-events-none absolute right-9 top-1/2 -translate-y-1/2 text-muted-foreground"
-          title={snoozed ? "Snoozed" : "Settled"}
+          role="status"
+          aria-label={activityLabel}
+          title={activityLabel}
+          className="openbot-row-activity pointer-events-none absolute right-3 top-1/2 -translate-y-1/2"
         >
-          {snoozed ? (
-            <Clock className="size-3" aria-label="Snoozed" />
-          ) : (
-            <CircleCheck className="size-3" aria-label="Settled" />
-          )}
+          <span
+            className={`block size-1.5 rounded-full ${status === "failed" ? "bg-error-foreground" : status === "approval" || status === "input" ? "bg-amber-500" : "bg-primary"}`}
+          />
         </span>
       )}
       <div className="openbot-row-settings flex h-6 items-center rounded-md bg-sidebar">
@@ -182,24 +209,29 @@ function ConnectedChatSidebarRow({
         {thread !== null && readEnvironmentSupportsSettlement(environmentId) && (
           <Button
             variant="ghost"
-            size="icon-xs"
+            size="xs"
+            className="gap-1 px-1.5 text-muted-foreground"
             aria-label={`${settled ? "Un-settle" : "Settle"} ${channel.name}`}
             title={settled ? "Un-settle thread" : "Settle thread"}
             disabled={busy}
             onClick={() => void runAction(settled ? "unsettle" : "settle")}
           >
-            <CircleCheck />
+            <Check className="size-3.5" />
+            {settled ? "Un-settle" : "Settle"}
           </Button>
         )}
         <Button
           variant="ghost"
           size="icon-xs"
-          aria-label={`Delete ${channel.name}`}
-          title="Delete"
+          aria-label={`Options for ${channel.name}`}
+          title="Thread options"
           disabled={busy}
-          onClick={() => onDelete(channel)}
+          onClick={(event) => {
+            const box = event.currentTarget.getBoundingClientRect();
+            void openMenu({ x: box.right, y: box.bottom });
+          }}
         >
-          <Trash2 />
+          <MoreHorizontal />
         </Button>
       </div>
     </div>

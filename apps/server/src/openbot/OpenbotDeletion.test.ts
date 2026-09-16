@@ -206,7 +206,7 @@ it.layer(TestLayer)("OpenBot deletion", (it) => {
     }),
   );
 
-  it.effect("rejects a reserved workspace before creating an orphan chat", () =>
+  it.effect("reuses a deleted bot folder with a fresh identity", () =>
     Effect.gen(function* () {
       const service = yield* OpenbotChannelService;
       const original = yield* service.createProject({
@@ -217,16 +217,16 @@ it.layer(TestLayer)("OpenBot deletion", (it) => {
         projectId: original.id,
         commandId: commandId("reuse-delete"),
       });
-      const before = (yield* service.list).channels;
-      const error = yield* service
-        .createProject({
-          name: "Replacement",
-          attachedPath: original.workspace.path,
-          commandId: commandId("reuse-replacement"),
-        })
-        .pipe(Effect.flip);
-      assert.equal(error.code, "project_unavailable");
-      assert.deepEqual((yield* service.list).channels, before);
+      const replacement = yield* service.createProject({
+        name: "Replacement",
+        attachedPath: original.workspace.path,
+        commandId: commandId("reuse-replacement"),
+      });
+      assert.notEqual(replacement.t3ProjectId, original.t3ProjectId);
+      assert.equal(
+        (yield* service.getView(replacement.mainChannelId)).channel.openbotProjectId,
+        replacement.id,
+      );
     }),
   );
 

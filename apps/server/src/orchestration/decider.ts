@@ -203,12 +203,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         projectId: command.projectId,
       });
-      yield* requireActiveProjectWorkspaceRootAbsent({
-        readModel,
-        command,
-        workspaceRoot: command.workspaceRoot,
-        exceptProjectId: command.projectId,
-      });
+      if (!command.allowSharedWorkspace) {
+        yield* requireActiveProjectWorkspaceRootAbsent({
+          readModel,
+          command,
+          workspaceRoot: command.workspaceRoot,
+          exceptProjectId: command.projectId,
+        });
+      }
 
       return {
         ...(yield* withEventBase({

@@ -441,6 +441,8 @@ export const ProjectCreateCommand = Schema.Struct({
   commandId: CommandId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
+  /** Permit a distinct project identity to share an existing working folder. */
+  allowSharedWorkspace: Schema.optional(Schema.Boolean),
   workspaceRoot: TrimmedNonEmptyString,
   createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
   // Retained for older clients that sent an automatic create-time seed. The

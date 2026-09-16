@@ -17,10 +17,9 @@ import type {
 } from "@t3tools/contracts";
 import { cn } from "@t3tools/ui/cn";
 import { ScrollArea } from "@t3tools/ui/scroll-area";
-import { Spinner } from "@t3tools/ui/spinner";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "@t3tools/ui/collapsible";
 import {
   AlertCircle,
-  ArrowRightLeft,
   ChevronRight,
   Clock3,
   CornerUpLeft,
@@ -30,7 +29,12 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useSnoozeActive } from "./ChatHeader";
-import { channelActivity, incomingPresentation, resolveReplyPreview } from "./ChannelView.logic";
+import {
+  channelActivity,
+  incomingPresentation,
+  visibleChannelMessage,
+  resolveReplyPreview,
+} from "./ChannelView.logic";
 import { Attachment } from "./Attachment";
 import { Markdown } from "./Markdown";
 
@@ -42,11 +46,13 @@ type TimelineEntry =
 
 function buildTimeline(view: ChannelViewData): ReadonlyArray<TimelineEntry> {
   const entries: Array<TimelineEntry> = [
-    ...view.messages.map((message): TimelineEntry => ({
-      kind: "incoming",
-      at: Date.parse(message.createdAt),
-      message,
-    })),
+    ...view.messages
+      .filter((message) => visibleChannelMessage(message, view.channel.parentChannelId))
+      .map((message): TimelineEntry => ({
+        kind: "incoming",
+        at: Date.parse(message.createdAt),
+        message,
+      })),
     // Silence records are internal bookkeeping; the channel shows nothing.
     ...view.deliveries
       .filter((delivery) => delivery.kind === "message")
@@ -163,6 +169,15 @@ function ChannelActivity({ view }: { readonly view: ChannelViewData }) {
   // re-renders at the deadline, so read the same derived value here.
   const snoozed = useSnoozeActive(view.snoozedUntil);
   const activity = channelActivity(view, snoozed);
+  const activeMessages = view.messages.filter(
+    (message) => message.state === "pending" || message.state === "working",
+  );
+  if (
+    view.status === "working" &&
+    activeMessages.length > 0 &&
+    activeMessages.every((message) => !visibleChannelMessage(message, view.channel.parentChannelId))
+  )
+    return null;
   if (activity.kind === "none") return null;
   const label =
     activity.kind === "failed"
@@ -173,15 +188,22 @@ function ChannelActivity({ view }: { readonly view: ChannelViewData }) {
           ? activity.snoozed
             ? "Queued until this chat wakes"
             : "Queued"
-          : "Assistant is typing…";
+          : "Working…";
   return (
-    <div className="flex h-7 items-center gap-2 px-4 text-muted-foreground text-xs">
+    <div
+      role="status"
+      className="flex min-h-8 w-fit items-center gap-2 self-start rounded-2xl bg-muted/60 px-3 py-2 text-muted-foreground text-xs"
+    >
       {activity.kind === "failed" ? (
         <AlertCircle className="size-3 text-error-foreground" />
       ) : activity.kind === "queued" ? (
         <Clock3 className="size-3" />
       ) : (
-        <Spinner className="size-3" />
+        <span aria-hidden="true" className="flex items-center gap-1">
+          <span className="size-1 rounded-full bg-current" />
+          <span className="size-1 rounded-full bg-current opacity-65" />
+          <span className="size-1 rounded-full bg-current opacity-35" />
+        </span>
       )}
       <span>{label}</span>
     </div>
@@ -243,7 +265,7 @@ export function ChannelView({
       <ScrollArea className="min-h-0 flex-1">
         <div
           ref={viewportRef}
-          className="mx-auto flex w-full max-w-3xl min-w-0 flex-col gap-5 px-3 py-4 sm:gap-4 sm:px-4 sm:py-6"
+          className="mx-auto flex w-full max-w-3xl min-w-0 flex-col gap-1 px-3 py-4 sm:px-4 sm:py-6"
         >
           {timeline.length === 0 ? (
             <div className="flex flex-col items-center gap-2 py-16 text-center text-muted-foreground">
@@ -252,50 +274,109 @@ export function ChannelView({
               <p className="text-xs">Send a message to start the conversation.</p>
             </div>
           ) : (
-            timeline.map((entry) => {
+            timeline.map((entry, index) => {
+              const previous = timeline[index - 1];
+              const grouped =
+                previous !== undefined &&
+                entry.at - previous.at < 5 * 60_000 &&
+                ((entry.kind === "delivery" &&
+                  previous.kind === "delivery" &&
+                  entry.delivery.replyTo === null) ||
+                  (entry.kind === "incoming" &&
+                    previous.kind === "incoming" &&
+                    incomingPresentation(entry.message).kind === "person" &&
+                    incomingPresentation(previous.message).kind === "person"));
+              const spacing = index === 0 || grouped ? "mt-0" : "mt-4";
               if (entry.kind === "incoming") {
                 const id = rowId({ type: "message", messageId: entry.message.id });
                 const presentation = incomingPresentation(entry.message);
                 if (presentation.kind === "peer") {
-                  // Another chat talking, not the person: incoming side, named
-                  // source, and only the task or result it actually carries.
+                  const origin = entry.message.origin;
+                  const sourceId = origin?.sourceChannelId;
+                  const sourceExists = sourceId != null && channelNames?.has(sourceId) === true;
+                  const sourceName =
+                    (sourceId == null ? undefined : channelNames?.get(sourceId)) ??
+                    origin?.sourceName;
+                  const isResult = origin?.kind === "peer_reply";
                   return (
                     <article
                       key={`in:${entry.message.id}`}
                       id={id}
                       className={cn(
-                        "flex flex-col items-start gap-1 rounded-lg transition-colors",
+                        "min-w-0 rounded-lg",
+                        spacing,
                         highlighted === id && "bg-accent/60",
                       )}
                     >
-                      <div className="flex flex-wrap items-center gap-2 pl-1 text-[11px] text-muted-foreground">
-                        <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 font-medium text-foreground">
-                          <ArrowRightLeft className="size-3" />
-                          {presentation.label}
-                        </span>
+                      <Collapsible
+                        defaultOpen={!isResult}
+                        className="min-w-0 rounded-lg border border-border/60 bg-muted/20"
+                      >
+                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 text-xs text-muted-foreground">
+                          <MessagesSquare aria-hidden="true" className="size-3.5 shrink-0" />
+                          <span className="shrink-0">
+                            {isResult ? "Result from" : "Request from"}
+                          </span>
+                          {sourceExists ? (
+                            <Link
+                              to={channelHref(sourceId)}
+                              className="min-w-0 flex-1 truncate font-medium text-foreground hover:underline"
+                              title={sourceName}
+                            >
+                              {sourceName}
+                            </Link>
+                          ) : (
+                            <span
+                              className="min-w-0 flex-1 truncate font-medium"
+                              title={sourceName}
+                            >
+                              {sourceName}
+                            </span>
+                          )}
+                          <CollapsibleTrigger className="group inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 text-muted-foreground hover:bg-accent hover:text-foreground">
+                            <span className="group-data-[panel-open]:hidden">
+                              {isResult ? "View report" : "View request"}
+                            </span>
+                            <span className="hidden group-data-[panel-open]:inline">
+                              Hide details
+                            </span>
+                            <ChevronRight
+                              aria-hidden="true"
+                              className="size-3 transition-transform group-data-[panel-open]:rotate-90"
+                            />
+                          </CollapsibleTrigger>
+                        </div>
+                        <CollapsiblePanel>
+                          <div className="min-w-0 border-t border-border/60 px-3 py-3">
+                            <Markdown
+                              text={entry.message.displayText}
+                              environmentId={environmentId}
+                            />
+                            {entry.message.attachments.map((attachment) => (
+                              <Attachment
+                                key={attachment.id}
+                                attachment={attachment}
+                                environmentId={environmentId}
+                              />
+                            ))}
+                            <time
+                              className="mt-2 block text-[11px] text-muted-foreground"
+                              dateTime={entry.message.createdAt}
+                              title={formatChatTimestampTooltip(
+                                entry.message.createdAt,
+                                timestampFormat,
+                              )}
+                            >
+                              {formatTime(entry.message.createdAt)}
+                            </time>
+                          </div>
+                        </CollapsiblePanel>
+                      </Collapsible>
+                      <div className="px-1 text-[11px]">
                         <MessageFailure
                           message={entry.message}
                           hasPendingQuestion={hasPendingQuestion}
                         />
-                        <time
-                          dateTime={entry.message.createdAt}
-                          title={formatChatTimestampTooltip(
-                            entry.message.createdAt,
-                            timestampFormat,
-                          )}
-                        >
-                          {formatTime(entry.message.createdAt)}
-                        </time>
-                      </div>
-                      <div className="min-w-0 max-w-full px-1 sm:max-w-[85%]">
-                        <Markdown text={entry.message.displayText} environmentId={environmentId} />
-                        {entry.message.attachments.map((attachment) => (
-                          <Attachment
-                            key={attachment.id}
-                            attachment={attachment}
-                            environmentId={environmentId}
-                          />
-                        ))}
                       </div>
                     </article>
                   );
@@ -305,11 +386,17 @@ export function ChannelView({
                     key={`in:${entry.message.id}`}
                     id={id}
                     className={cn(
-                      "flex flex-col items-end gap-1 rounded-lg transition-colors",
+                      "openbot-message relative flex flex-col items-end gap-1 rounded-lg transition-colors",
+                      spacing,
                       highlighted === id && "bg-accent/60",
                     )}
                   >
-                    <UserMessageBubble className="min-w-0 max-w-[90%] sm:max-w-[80%]">
+                    <UserMessageBubble
+                      className={cn(
+                        "min-w-0 max-w-[90%] px-3 py-2 sm:max-w-[85%]",
+                        grouped && "rounded-tr-md",
+                      )}
+                    >
                       <Markdown text={entry.message.displayText} environmentId={environmentId} />
                       {entry.message.attachments.map((attachment) => (
                         <Attachment
@@ -319,13 +406,15 @@ export function ChannelView({
                         />
                       ))}
                     </UserMessageBubble>
-                    <div className="flex items-center gap-2 pr-1 text-[11px] text-muted-foreground">
+                    <div className="flex items-center gap-2 pr-1 text-[11px] text-muted-foreground empty:hidden">
                       <MessageFailure
                         message={entry.message}
                         hasPendingQuestion={hasPendingQuestion}
                         onContinue={onContinue}
                       />
                       <time
+                        className="openbot-message-time right-1"
+                        tabIndex={0}
                         dateTime={entry.message.createdAt}
                         title={formatChatTimestampTooltip(entry.message.createdAt, timestampFormat)}
                       >
@@ -368,7 +457,7 @@ export function ChannelView({
                   </>
                 );
                 const row =
-                  "flex min-h-9 w-full max-w-full min-w-0 items-start gap-2 rounded-md px-1 py-1 text-left";
+                  "mt-3 mb-2 flex min-h-9 w-full max-w-full min-w-0 items-start gap-2 rounded-md px-1 py-1 text-left";
                 // A thread outside this OpenBot install has nowhere to go, so the
                 // record reads as plain history rather than a dead control.
                 return target === null ? (
@@ -395,20 +484,25 @@ export function ChannelView({
                   key={`out:${entry.delivery.id}`}
                   id={id}
                   className={cn(
-                    "flex flex-col items-start gap-1 rounded-lg transition-colors",
+                    "openbot-message relative flex flex-col items-start gap-1 rounded-lg transition-colors",
+                    spacing,
                     highlighted === id && "bg-accent/60",
                   )}
                 >
-                  <div className="flex items-center gap-2 pl-1 text-[11px] text-muted-foreground">
-                    <span className="font-medium text-foreground">Assistant</span>
-                    <time
-                      dateTime={entry.delivery.createdAt}
-                      title={formatChatTimestampTooltip(entry.delivery.createdAt, timestampFormat)}
-                    >
-                      {formatTime(entry.delivery.createdAt)}
-                    </time>
-                  </div>
-                  <div className="min-w-0 max-w-full px-1 sm:max-w-[85%]">
+                  <time
+                    className="openbot-message-time left-1"
+                    tabIndex={0}
+                    dateTime={entry.delivery.createdAt}
+                    title={formatChatTimestampTooltip(entry.delivery.createdAt, timestampFormat)}
+                  >
+                    {formatTime(entry.delivery.createdAt)}
+                  </time>
+                  <div
+                    className={cn(
+                      "min-w-0 max-w-[95%] rounded-2xl bg-muted/60 px-3 py-2 sm:max-w-[85%]",
+                      grouped && "rounded-tl-md",
+                    )}
+                  >
                     {entry.delivery.replyTo !== null && (
                       <ReplyReference view={view} target={entry.delivery.replyTo} onJump={jumpTo} />
                     )}
@@ -418,9 +512,11 @@ export function ChannelView({
               );
             })
           )}
+          <div className="mt-2">
+            <ChannelActivity view={view} />
+          </div>
         </div>
       </ScrollArea>
-      <ChannelActivity view={view} />
     </div>
   );
 }
