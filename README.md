@@ -1,3 +1,40 @@
+# OpenBot
+
+OpenBot is a browser app for project chats, agent threads, routines, and computer
+control. It is built on [T3 Code](https://github.com/pingdotgg/t3code), reusing its
+provider integrations, runtime, and UI components.
+
+This is an early working version. Run the server on your own machine and connect
+from a browser. Authenticate your preferred provider on that host. Executor is
+an optional MCP integration, not a requirement.
+
+## Run from source
+
+Use Node.js 24.13.1 and pnpm 11.10.0, as pinned in this repository.
+
+```sh
+git clone https://github.com/UsefulSoftwareCo/openbot.git
+cd openbot
+pnpm install
+node scripts/dev-runner.ts dev:openbot
+```
+
+Open the pairing URL printed by the server. Local development data stays in the
+checkout's ignored `.t3` directory. Install and sign in to at least one supported
+agent provider before sending messages.
+
+See [computer setup](docs/user/computer.md) for macOS and Linux support.
+Local reference material, design experiments, credentials, and runtime data do
+not belong in this repository.
+
+## Credits and license
+
+OpenBot is a fork of T3 Code, licensed under the [MIT license](LICENSE). The
+original T3 Tools copyright and license are preserved. The upstream README below
+describes T3 Code; its downloads and `npx t3` command install the upstream app.
+
+---
+
 # T3 Code
 
 T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).

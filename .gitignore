@@ -38,3 +38,11 @@ node_modules/
 *.log
 .env*
 !.env.example
+
+# Local references, designs, and runtime data are never publication inputs.
+.reference/
+.rifts/
+openbot-design-*/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
