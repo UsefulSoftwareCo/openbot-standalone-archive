@@ -132,6 +132,7 @@ export const openbotTurnInstructions = (input: {
 
 Delivery contract:
 - The ONLY way to reach the person is the \`openbot_send_message\` tool (it may appear as \`mcp__t3-code__openbot_send_message\`). Call it with the complete text of a message. Call it once for one coherent reply, or several times for separate useful updates while you work. A message shows up the moment you send it, so you can answer quickly and then keep working.
+- Keep the person informed while you work. Use \`openbot_send_message\` for a brief acknowledgement when useful, meaningful progress updates, and the result. Use your judgment about when an update helps; there is no fixed schedule or required sequence. Quick requests may need only the answer. Report what you actually know or have done, and avoid repetitive filler.
 - Each incoming message has an id in its <user_message> tag. Default to an ordinary channel message: omit \`replyToMessageId\`. Use it only to disambiguate which message you are answering, such as returning to an older question after the conversation has moved on. A direct answer, an acknowledgement, or several incoming messages do not by themselves need a reply target. If the target is clear from the conversation, leave it out.
 - If nothing needs a reply (an acknowledgement, a note to self, or a request you already answered in the same turn), call \`openbot_skip_reply\` instead of staying silent.
 - Never repeat a message you already sent in this turn. Do not restate a delivered message as plain assistant text.
@@ -2560,13 +2561,17 @@ export const turnInstructionsLayer = Layer.effect(
           const childLine =
             parent === undefined
               ? ""
-              : `\nThis is the focused child chat "${channel.name}" of "${parent.name}". Your work request arrived as a peer request whose first line carries its request id: when the work is done, reply to that request id exactly once with openbot_reply_to_thread. Use openbot_send_to_thread only for unsolicited progress notes to the parent, never to return the result a second time.\n`;
+              : `\nThis is the focused child chat "${channel.name}" of "${parent.name}". When a work request arrives as a peer request, its first line carries its request id: when the work is done, reply to that request id exactly once with openbot_reply_to_thread. Keep the person following this child chat informed through openbot_send_message as you work and deliver the result here too; reporting to the parent does not replace the visible child-chat update. Direct messages from the person are ordinary conversation, not new peer requests. Use openbot_send_to_thread only for unsolicited progress notes to the parent, never to return the result a second time.\n`;
+          const orchestrationSection =
+            owning?.mainChannelId !== channel.id
+              ? ""
+              : `\nProject coordination:\nYou are the project's main conversation. Keep this chat available for the person while focused work happens in child threads they can follow in the sidebar. When the person asks for a concrete deliverable or change that needs investigation or execution, start a focused child with openbot_start_thread instead of doing that work here. Do not wait for them to ask for a thread. Answer quick questions and discuss plans here. If an existing child owns the work, continue it with openbot_send_to_thread rather than creating a duplicate.\nGive the child a short, descriptive title and a standalone task including the person's request, source links, relevant context, constraints, and what completion means. The child does not inherit this conversation. Preserve the person's authorization boundaries. Briefly tell the person where the work is happening, then finish your turn; the child result will wake you. Relay meaningful results or blockers here, and use the child's updates for detailed progress.\n`;
           const projectSection =
             owning === undefined
               ? ""
               : `\nProject "${owning.name}" instructions:\n${owning.instructions}\n`;
           return `${contract}
-${childLine}${projectSection}${threadsSection}
+${childLine}${orchestrationSection}${projectSection}${threadsSection}
 Peer threads: ${peers
             .map((peer) => {
               const project = projectOf(peer);

@@ -506,6 +506,8 @@ it.layer(TestLayer)("OpenBot projects, child chats, and knowledge", (it) => {
         assert.include(parentPrompt ?? "", "Oven quirks");
         assert.include(parentPrompt ?? "", "It runs twenty degrees hot.");
         assert.notInclude(parentPrompt ?? "", "focused child chat");
+        assert.include(parentPrompt ?? "", "Project coordination:");
+        assert.include(parentPrompt ?? "", "openbot_start_thread");
 
         const childPrompt = yield* instructions.resolve({
           threadId: child.threadId,
@@ -518,6 +520,8 @@ it.layer(TestLayer)("OpenBot projects, child chats, and knowledge", (it) => {
         );
         assert.include(childPrompt ?? "", "openbot_send_to_thread");
         assert.include(childPrompt ?? "", "Always measure in grams.");
+        assert.notInclude(childPrompt ?? "", "Project coordination:");
+        assert.include(childPrompt ?? "", "openbot_send_message");
       }),
   );
 
