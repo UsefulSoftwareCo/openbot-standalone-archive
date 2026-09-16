@@ -10,10 +10,11 @@ import { Button } from "@t3tools/ui/button";
 import { cn } from "@t3tools/ui/cn";
 import { Input } from "@t3tools/ui/input";
 import { ScrollArea } from "@t3tools/ui/scroll-area";
-import { Bot, Plus, Settings, Trash2 } from "lucide-react";
+import { Bot, Plus, Settings } from "lucide-react";
 import { useMemo } from "react";
 
 import { buildSidebarGroups } from "../state/sidebar";
+import { ChatSidebarRow } from "./ChatSidebarRow";
 import { ProjectIcon } from "./ProjectIcon";
 import { SidebarMenuSkeleton } from "../../../web/src/components/ui/sidebar";
 
@@ -46,7 +47,7 @@ function ThreadList({
       {threads.map((thread) => {
         const selected = thread.id === activeChannelId;
         return (
-          <div key={thread.id} className="openbot-row">
+          <ChatSidebarRow key={thread.id} channel={thread} onDelete={onDelete}>
             <Link
               to={channelHref(thread.id)}
               aria-current={selected ? "page" : undefined}
@@ -59,8 +60,7 @@ function ThreadList({
             >
               <span className="truncate">{thread.name}</span>
             </Link>
-            <DeleteChatButton channel={thread} onDelete={onDelete} />
-          </div>
+          </ChatSidebarRow>
         );
       })}
     </div>
@@ -231,16 +231,15 @@ export function Sidebar({
               const selected = group.channel.id === activeChannelId;
               return (
                 <div key={group.channel.id} className="mb-1">
-                  <div className="openbot-row">
+                  <ChatSidebarRow channel={group.channel} onDelete={onDeleteChannel}>
                     <Link
                       to={channelHref(group.channel.id)}
                       aria-current={selected ? "page" : undefined}
-                      className={cn(rowClass(selected), "pr-9 pl-2")}
+                      className={cn(rowClass(selected), "pr-14 pl-2")}
                     >
                       <span className="truncate">{group.channel.name}</span>
                     </Link>
-                    <DeleteChatButton channel={group.channel} onDelete={onDeleteChannel} />
-                  </div>
+                  </ChatSidebarRow>
                   <ThreadList
                     threads={group.threads}
                     activeChannelId={activeChannelId}
@@ -265,26 +264,5 @@ export function Sidebar({
         <span className="truncate">{connectionLabel}</span>
       </div>
     </aside>
-  );
-}
-
-/** Deletion is a separate control so the chat remains a normal browser link. */
-function DeleteChatButton({
-  channel,
-  onDelete,
-}: {
-  readonly channel: OpenbotChannel;
-  readonly onDelete: (channel: OpenbotChannel) => void;
-}) {
-  return (
-    <Button
-      variant="ghost"
-      size="icon-xs"
-      className="openbot-row-settings text-muted-foreground hover:text-destructive-foreground"
-      aria-label={`Delete ${channel.name}`}
-      onClick={() => onDelete(channel)}
-    >
-      <Trash2 />
-    </Button>
   );
 }

@@ -137,6 +137,7 @@
   opacity: 0;
   pointer-events: none;
 }
+.openbot-row[data-menu-open] .openbot-row-settings,
 .openbot-row:hover .openbot-row-settings,
 .openbot-row:focus-within .openbot-row-settings {
   opacity: 1;
@@ -188,4 +189,8 @@
 .openbot-markdown[data-word-wrap="true"] pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.openbot-thread-row {
+  padding-right: 3.5rem;
 }
